@@ -109,8 +109,8 @@ test('Render maps CSS camera targets onto the 2× Source and holds the last fram
   try {
     const sourcePath = join(dir, 'source.webm'), outputPath = join(dir, 'final.mp4');
     await fs.writeFile(sourcePath, await syntheticSource(browser, 0.6));
-    const edit = editSchema.parse({ schemaVersion: 2, output: { size: 240 }, frame: false, camera: { maxZoom: 2, padding: 0, transitionDuration: 0.1, preLead: 0.1, holdPerTarget: 2, targets: [{ t: 0.2, box: { x: 240, y: 100, width: 20, height: 20 } }] } });
-    await renderFinal({ sourcePath, outputPath, timeline: { viewport: { width: 320, height: 240 }, duration: 1.5 }, edit, fps: 30 });
+    const edit = editSchema.parse({ schemaVersion: 2, output: { size: 240, fps: 30 }, frame: false, camera: { maxZoom: 2, padding: 0, transitionDuration: 0.1, preLead: 0.1, holdPerTarget: 2, targets: [{ t: 0.2, box: { x: 240, y: 100, width: 20, height: 20 } }] } });
+    await renderFinal({ sourcePath, finalPath: outputPath, timeline: { viewport: { width: 320, height: 240 }, duration: 1.5 }, edit });
     expect(await inspectFinal(outputPath)).toMatchObject({ width: 320, height: 240, fps: 30, packets: 45, decodedFrames: 45 });
     const pixel = await pixelsAt(browser, await extractFrame(outputPath, 0.5), [[180, 120], [250, 110]]);
     expect(pixel[0][0]).toBeGreaterThan(180);
@@ -125,9 +125,9 @@ test('Render draws the cursor at the pointer and a spark around each click', asy
   try {
     const sourcePath = join(dir, 'source.webm'), outputPath = join(dir, 'final.mp4');
     await fs.writeFile(sourcePath, await syntheticSource(browser, 0.6));
-    const edit = editSchema.parse({ schemaVersion: 2, output: { size: 240 }, frame: false });
+    const edit = editSchema.parse({ schemaVersion: 2, output: { size: 240, fps: 30 }, frame: false });
     const timeline = { viewport: { width: 320, height: 240 }, duration: 1, pointer: [[0, 60, 60], [1, 60, 60]], events: [{ type: 'click', t: 0.2, x: 200, y: 60 }] };
-    await renderFinal({ sourcePath, outputPath, timeline, edit, fps: 30 });
+    await renderFinal({ sourcePath, finalPath: outputPath, timeline, edit });
     // A spark ray sits ~26 px from the click along 22.5° at t=0.3; the arrow body lies just below-right of the tip.
     const ray = [Math.round(200 + 26 * Math.cos(Math.PI / 8)), Math.round(60 + 26 * Math.sin(Math.PI / 8))];
     const [arrow, spark, clear] = await pixelsAt(browser, await extractFrame(outputPath, 0.3), [[64, 72], ray, [120, 200]]);
@@ -146,8 +146,8 @@ test('Render frames the page in a browser window on the background', async () =>
     const sourcePath = join(dir, 'source.webm'), outputPath = join(dir, 'final.mp4');
     await fs.writeFile(sourcePath, await syntheticSource(browser, 0.6));
     const viewport = { width: 320, height: 240 };
-    const edit = editSchema.parse({ schemaVersion: 2, output: { size: 480 }, frame: { url: 'example.com', shadow: false } });
-    await renderFinal({ sourcePath, outputPath, timeline: { viewport, duration: 1 }, edit, fps: 30 });
+    const edit = editSchema.parse({ schemaVersion: 2, output: { size: 480, fps: 30 }, frame: { url: 'example.com', shadow: false } });
+    await renderFinal({ sourcePath, finalPath: outputPath, timeline: { viewport, duration: 1 }, edit });
     const stage = layout(edit, viewport);
     expect(await inspectFinal(outputPath)).toMatchObject({ width: stage.width, height: stage.height, decodedFrames: 30 });
     const pageCenter = [Math.round(stage.page.x + stage.page.w * 0.3), Math.round(stage.page.y + stage.page.h / 2)];

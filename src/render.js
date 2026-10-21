@@ -61,11 +61,11 @@ async function withRenderPage({ files = {}, writable = {} }, task) {
 }
 
 /** Composes the Final from a Source, Timeline and Edit. */
-export async function renderFinal({ sourcePath, outputPath, timeline, edit, fps }) {
-  const handle = await fs.open(outputPath, 'w');
+export async function renderFinal({ sourcePath, finalPath, timeline, edit }) {
+  const handle = await fs.open(finalPath, 'w');
   try {
     return await withRenderPage({ files: { source: sourcePath }, writable: { final: handle } }, page => page.evaluate(options => window.cuetakeRender(options), {
-      sourceUrl: `${ORIGIN}/files/source`, finalUrl: `${ORIGIN}/files/final`, fps, duration: timeline.duration,
+      sourceUrl: `${ORIGIN}/files/source`, finalUrl: `${ORIGIN}/files/final`, duration: timeline.duration,
       viewport: timeline.viewport, pointer: timeline.pointer ?? [], events: timeline.events ?? [], edit,
     }));
   } finally { await handle.close(); }

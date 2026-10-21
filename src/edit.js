@@ -1,22 +1,26 @@
 import { z } from 'zod';
+import { SHORT_SIDE, CHROME_HEIGHT, BACKGROUNDS } from './stage.js';
 
 /** An Edit holds every choice Render makes; a Scenario's config only seeds the first one. */
-const evenSize = z.number().int().min(240).max(7680).refine(n => n % 2 === 0, 'Must be an even pixel count');
+export const evenSize = z.number().int().min(240).max(7680).refine(n => n % 2 === 0, 'Must be an even pixel count');
 const box = z.object({ x: z.number(), y: z.number(), width: z.number().nonnegative(), height: z.number().nonnegative() });
 
+// size names the Final's short side; quality is the H.264 quantizer (lower is sharper and larger).
+const outputFields = z.object({
+  size: z.union([z.enum(Object.keys(SHORT_SIDE)), evenSize]).default('2160p'),
+  aspect: z.enum(['16:9', '1:1', '9:16']).default('16:9'),
+  quality: z.number().int().min(10).max(40).default(22),
+});
+
+/** Times are seconds except clickEffect.duration, which is milliseconds; geometry is CSS pixels. */
 export const editFields = {
   cursor: z.object({ style: z.enum(['arrow', 'dot']).default('arrow'), size: z.number().min(12).max(64).default(24), color: z.string().regex(/^#[a-fA-F0-9]{6}$/).default('#ffffff') }).default({}),
   clickEffect: z.object({ style: z.enum(['spark', 'none']).default('spark'), radius: z.number().min(8).max(80).default(32), length: z.number().min(4).max(40).default(16), count: z.number().int().min(4).max(16).default(8), duration: z.number().min(150).max(1000).default(420) }).default({}),
-  // size names the Final's short side; quality is the H.264 quantizer (lower is sharper and larger).
-  output: z.object({
-    size: z.union([z.enum(['1080p', '1440p', '2160p']), evenSize]).default('2160p'),
-    aspect: z.enum(['16:9', '1:1', '9:16']).default('16:9'),
-    quality: z.number().int().min(10).max(40).default(22),
-  }).default({}),
+  output: outputFields.default({}),
   // The page in a window on a background; `false` lets the page fill the Final. Radius is in 1080p pixels.
   frame: z.union([z.literal(false), z.object({
-    window: z.enum(['browser', 'macos', 'none']).default('browser'),
-    background: z.enum(['aurora', 'sunset', 'ocean', 'graphite', 'paper', 'auto', 'blur']).default('aurora'),
+    window: z.enum(Object.keys(CHROME_HEIGHT)).default('browser'),
+    background: z.enum([...Object.keys(BACKGROUNDS), 'auto', 'blur']).default('aurora'),
     padding: z.number().min(0).max(0.3).default(0.08),
     radius: z.number().min(0).max(48).default(12),
     shadow: z.boolean().default(true),
@@ -33,6 +37,8 @@ export const editSchema = z.object({
   schemaVersion: z.literal(2),
   ...editFields,
   camera: editFields.camera.removeDefault().extend({ targets: z.array(target).default([]) }).default({}),
+  // The Final's frame rate; a new Take takes it from the Scenario's capture rate.
+  output: outputFields.extend({ fps: z.union([z.literal(30), z.literal(60)]).default(60) }).default({}),
 });
 
 /**
@@ -55,7 +61,7 @@ export function cameraTargets(timeline, focus, wide = []) {
 export function createEdit(config, timeline, focus, wide = []) {
   return editSchema.parse({
     schemaVersion: 2,
-    cursor: config.cursor, clickEffect: config.clickEffect, output: config.output,
+    cursor: config.cursor, clickEffect: config.clickEffect, output: { ...config.output, fps: config.capture.fps },
     // The browser chrome shows the Scenario's host unless the config names something else.
     frame: config.frame && { url: new URL(config.url).host, ...config.frame },
     camera: { ...config.camera, targets: cameraTargets(timeline, focus, wide) },

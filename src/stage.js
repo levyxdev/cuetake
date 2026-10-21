@@ -6,7 +6,7 @@
  */
 
 const even = n => Math.round(n / 2) * 2;
-const SHORT_SIDE = { '1080p': 1080, '1440p': 1440, '2160p': 2160 };
+export const SHORT_SIDE = { '1080p': 1080, '1440p': 1440, '2160p': 2160 };
 /** Chrome bar heights in page CSS pixels. */
 export const CHROME_HEIGHT = { none: 0, macos: 28, browser: 44 };
 

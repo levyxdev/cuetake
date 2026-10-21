@@ -283,8 +283,8 @@ const uploadStream = url => new WritableStream({
   },
 });
 
-window.cuetakeRender = async ({ sourceUrl, finalUrl, fps, duration, viewport, pointer, events, edit }) => {
-  const { camera, cursor, clickEffect, frame } = edit, quality = edit.output.quality;
+window.cuetakeRender = async ({ sourceUrl, finalUrl, duration, viewport, pointer, events, edit }) => {
+  const { camera, cursor, clickEffect, frame } = edit, { quality, fps } = edit.output;
   const stage = layout(edit, viewport), { width, height } = stage;
   const started = performance.now();
   const input = new MB.Input({ formats: MB.ALL_FORMATS, source: new MB.UrlSource(sourceUrl) });
@@ -317,8 +317,8 @@ window.cuetakeRender = async ({ sourceUrl, finalUrl, fps, duration, viewport, po
   const at = (x, y) => [stage.page.x + x * stage.scale, stage.page.y + y * stage.scale];
   const sharpest = stage.scale * camera.maxZoom * 2;
   const geometry = cursorGeometry(cursor);
-  const arrow = cursorSprite(cursor, sharpest);
-  const arrowTexture = compositor.sprite(arrow.canvas);
+  const pointerSprite = cursorSprite(cursor, sharpest);
+  const pointerTexture = compositor.sprite(pointerSprite.canvas);
   const chromeTexture = stage.chrome ? compositor.sprite(chromeSprite(frame, viewport.width, stage.chrome / stage.scale, stage.radius / stage.scale, sharpest)) : null;
   const pressList = presses(events);
   const sparkReach = clickEffect.radius + clickEffect.length + 8;
@@ -344,11 +344,11 @@ window.cuetakeRender = async ({ sourceUrl, finalUrl, fps, duration, viewport, po
           draw(sparkTexture, [...at(spark.x - sparkReach, spark.y - sparkReach), 2 * sparkReach * stage.scale, 2 * sparkReach * stage.scale]);
         }
         const point = pointerAt(pointer, t);
-        if (point) draw(arrowTexture, [...at(point.x - geometry.hotspot.x - arrow.margin, point.y - geometry.hotspot.y - arrow.margin), arrow.width * stage.scale, arrow.height * stage.scale]);
+        if (point) draw(pointerTexture, [...at(point.x - geometry.hotspot.x - pointerSprite.margin, point.y - geometry.hotspot.y - pointerSprite.margin), pointerSprite.width * stage.scale, pointerSprite.height * stage.scale]);
       });
-      const frame = new VideoFrame(compositor.canvas, { timestamp: Math.round(i * 1e6 / fps), duration: Math.round(1e6 / fps) });
-      encoder.encode(frame, { keyFrame: i % (fps * 2) === 0, ...(quantizer ? { avc: { quantizer } } : {}) });
-      frame.close();
+      const videoFrame = new VideoFrame(compositor.canvas, { timestamp: Math.round(i * 1e6 / fps), duration: Math.round(1e6 / fps) });
+      encoder.encode(videoFrame, { keyFrame: i % (fps * 2) === 0, ...(quantizer ? { avc: { quantizer } } : {}) });
+      videoFrame.close();
       while (encoder.encodeQueueSize > 4) await new Promise(resolve => encoder.addEventListener('dequeue', resolve, { once: true }));
     }
     await encoder.flush();

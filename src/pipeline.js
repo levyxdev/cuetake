@@ -9,11 +9,10 @@ import { outputSize } from './stage.js';
 import { resolveAuthProfile } from './auth.js';
 import { createDirector } from './director.js';
 import { collectTimeline } from './probe.js';
-import { editFields, editSchema, createEdit } from './edit.js';
+import { editFields, editSchema, createEdit, evenSize } from './edit.js';
 import pkg from '../package.json' with { type: 'json' };
 
 const SCHEMA_VERSION = 2;
-const evenSize = z.number().int().min(240).max(7680).refine(n => n % 2 === 0, 'Must be an even pixel count');
 /** Scenario config: capture settings plus the defaults that seed each Take's Edit. */
 export const scenarioSchema = z.object({
   name: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
@@ -73,7 +72,7 @@ export async function recordScenario(scenarioPath, outputDir, options = {}) {
   return { directory: dir, final: join(dir, 'final.mp4'), verification };
 }
 
-/** Reads a Take's project, Timeline and Edit, refusing Takes from an older schema. */
+/** Reads a Take's project.json, Timeline and Edit, refusing Takes from an older schema. */
 async function loadTake(dir) {
   const project = await readJson(join(dir, 'project.json'));
   if (project.schemaVersion !== SCHEMA_VERSION) throw new Error(`${dir} was recorded by an older CueTake (schema ${project.schemaVersion ?? 1}); record it again`);
@@ -86,7 +85,7 @@ export async function renderTake(directory) {
   // Render to a temporary output; preserve the last complete final if encoding fails.
   const temporary = join(dir, 'final.pending.mp4');
   try {
-    const render = await renderFinal({ sourcePath: join(dir, 'source.webm'), outputPath: temporary, timeline, edit, fps: config.capture.fps });
+    const render = await renderFinal({ sourcePath: join(dir, 'source.webm'), finalPath: temporary, timeline, edit });
     await fs.rename(temporary, join(dir, 'final.mp4'));
     await writeJson(join(dir, 'render.json'), render);
     await fs.rm(join(dir, 'verification.json'), { force: true });
@@ -106,7 +105,8 @@ export async function verifyTake(directory) {
   const dir = resolve(directory);
   const { project, config, timeline, edit } = await loadTake(dir);
   const media = await inspectFinal(join(dir, 'final.mp4'));
-  const expected = { ...outputSize(edit, timeline.viewport), fps: config.capture.fps, frames: Math.round(project.duration * config.capture.fps) };
+  const { fps } = edit.output;
+  const expected = { ...outputSize(edit, timeline.viewport), fps, frames: Math.round(project.duration * fps) };
   const problems = [
     media.width !== expected.width || media.height !== expected.height ? `size ${media.width}×${media.height}, expected ${expected.width}×${expected.height}` : null,
     Math.abs(media.fps - expected.fps) > 0.01 ? `${media.fps} fps, expected ${expected.fps}` : null,

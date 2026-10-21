@@ -11,7 +11,7 @@ function profilePath(profile) {
 }
 export async function resolveAuthProfile(profile) {
   const path = profilePath(profile);
-  await fs.access(path).catch(() => { throw new Error(`Login profile '${profile}' is missing. Run: cuetake login ${profile} <login-url>`); });
+  await fs.access(path).catch(() => { throw new Error(`Auth profile '${profile}' is missing. Run: cuetake login ${profile} <login-url>`); });
   return path;
 }
 /** Accepts a browser context or an already-read storage state. */
@@ -24,7 +24,7 @@ export async function saveAuthState(source, profile) {
     await fs.writeFile(temporary, JSON.stringify(state), { mode: 0o600 });
     await fs.rename(temporary, path);
   } finally { await fs.rm(temporary, { force: true }); }
-  return { profile, saved: true, note: 'Login state saved locally. Confirm authentication against the target page before recording.' };
+  return { profile, saved: true, note: 'Auth profile saved locally. Confirm authentication against the target page before recording.' };
 }
 /** Opens a headed login window and saves its state when the user closes the window. */
 export async function login(url, profile) {
