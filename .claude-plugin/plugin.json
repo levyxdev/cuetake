@@ -10,11 +10,12 @@
   "homepage": "https://github.com/levyxdev/cuetake",
   "repository": "https://github.com/levyxdev/cuetake",
   "license": "MIT",
-  "keywords": ["demo", "screen-recording", "video", "playwright", "browser", "ffmpeg"],
-  "mcpServers": {
-    "cuetake": {
-      "command": "${CLAUDE_PLUGIN_ROOT}/bin/cuetake",
-      "args": ["mcp"]
-    }
-  }
+  "keywords": [
+    "demo",
+    "screen-recording",
+    "video",
+    "playwright",
+    "browser",
+    "ffmpeg"
+  ]
 }

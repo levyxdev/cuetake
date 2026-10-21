@@ -4,12 +4,10 @@
   "description": "Local recording runtime for AI agents: plan a browser demo, capture it, and render a finished take.",
   "type": "module",
   "bin": {
-    "cuetake": "./src/cli.js",
-    "cuetake-mcp": "./src/index.js"
+    "cuetake": "./src/cli.js"
   },
   "scripts": {
     "start": "bun src/cli.js",
-    "mcp": "bun src/index.js",
     "test": "bun test tests/pipeline.test.js",
     "doctor": "bun src/cli.js doctor"
   },
@@ -18,14 +16,12 @@
     "recording",
     "demo",
     "playwright",
-    "mcp",
     "ffmpeg",
     "cuetake"
   ],
   "author": "CueTake contributors",
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.27.1",
     "playwright": "1.63.0",
     "zod": "^3.23.0"
   },

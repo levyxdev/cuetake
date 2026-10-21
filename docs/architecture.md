@@ -4,7 +4,7 @@ CueTake is an agent-facing local recording runtime. Settled decisions live in [d
 
 ## Pipeline
 
-Agent + skill → business scenario → local MCP job / CLI → Playwright context → Chromium tab capture → VP9 source → FFmpeg camera composition → H.264 final + verification.
+Agent + skill → business scenario → CLI → Playwright context → Chromium tab capture → VP9 source → FFmpeg camera composition → H.264 final + verification.
 
 The scenario controls story and timing. All pointer/camera coordinates are CSS pixels; the source uses device pixels. Device scale does not change the page layout. Camera frames use zoompan because the inherited time-dependent crop widths were only evaluated at initialization. The final static frame is held to the measured take duration before camera evaluation.
 
@@ -17,10 +17,9 @@ The scenario controls story and timing. All pointer/camera coordinates are CSS p
 - `recorder.js` / `tab-capture.js`: supported HD capture only.
 - `overlay.js`: pointer and ClickSpark rendering.
 - `zoom.js` / `converter.js`: camera chain and FFmpeg encoding.
-- `auth.js`: isolated login preparation and local state storage.
-- `index.js`: task-oriented stdio MCP and child-process jobs.
-- `cli.js`: shared engine command interface.
+- `auth.js`: the `login` command and Auth profile storage.
+- `cli.js`: the command interface, the only entry point.
 
 Source capture is variable frame rate and does not guarantee 60 distinct frames per second. Login and full navigations may happen during preparation; after recording begins, the document must remain alive (SPA changes are supported). Current acceptance platform is macOS headed Chromium, without audio.
 
-No persistent background service, global browser profile modifications, desktop capture, or software GUI is required. The MCP client manages its local child process. Runtime publishing and clean-machine installation remain release work; see distribution.md.
+No persistent background service, global browser profile modifications, desktop capture, or software GUI is required. Publishing and clean-machine installation remain release work; see [distribution.md](distribution.md).

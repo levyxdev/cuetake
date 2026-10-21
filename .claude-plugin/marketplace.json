@@ -9,7 +9,7 @@
     {
       "name": "cuetake",
       "source": "./",
-      "description": "Skill + local MCP server for recording scripted browser demo videos.",
+      "description": "Skill for recording scripted browser demo videos with the CueTake CLI.",
       "category": "productivity",
       "keywords": ["demo", "screen-recording", "video"]
     }
