@@ -1,0 +1,11 @@
+#!/bin/sh
+# Launcher for plugin and source installs: installs locked JS dependencies on
+# first use, then runs the CLI. Install output goes to stderr because stdout is
+# the MCP channel for `cuetake mcp`. Browser and FFmpeg are never downloaded here.
+set -e
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+if [ ! -d "$ROOT/node_modules" ]; then
+  command -v bun >/dev/null 2>&1 || { echo "CueTake needs Bun: https://bun.sh" >&2; exit 1; }
+  bun install --cwd "$ROOT" --frozen-lockfile --production >&2
+fi
+exec bun "$ROOT/src/cli.js" "$@"

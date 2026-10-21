@@ -1,0 +1,17 @@
+{
+  "name": "cuetake",
+  "owner": {
+    "name": "levyxdev",
+    "url": "https://github.com/levyxdev"
+  },
+  "description": "CueTake: AI-directed browser demo recording.",
+  "plugins": [
+    {
+      "name": "cuetake",
+      "source": "./",
+      "description": "Skill + local MCP server for recording scripted browser demo videos.",
+      "category": "productivity",
+      "keywords": ["demo", "screen-recording", "video"]
+    }
+  ]
+}

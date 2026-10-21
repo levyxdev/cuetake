@@ -1,0 +1,20 @@
+{
+  "name": "cuetake",
+  "displayName": "CueTake",
+  "version": "0.1.0",
+  "description": "Record polished browser demo videos from a script: HD tab capture, smooth cursor, click effects and an auto-zoom camera, rendered to MP4.",
+  "author": {
+    "name": "levyxdev",
+    "url": "https://github.com/levyxdev"
+  },
+  "homepage": "https://github.com/levyxdev/cuetake",
+  "repository": "https://github.com/levyxdev/cuetake",
+  "license": "MIT",
+  "keywords": ["demo", "screen-recording", "video", "playwright", "browser", "ffmpeg"],
+  "mcpServers": {
+    "cuetake": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/cuetake",
+      "args": ["mcp"]
+    }
+  }
+}

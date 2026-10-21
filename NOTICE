@@ -1,0 +1,13 @@
+CueTake is derived from Pagecast by mcpware.
+Upstream: https://github.com/mcpware/pagecast
+Baseline: 6bbf3c94539c947a65ecaacb1965ffe32345c5a4
+
+The original MIT license and copyright are preserved in LICENSE.
+CueTake adds high-resolution tab capture, configurable pointer rendering,
+per-frame camera composition, a scenario CLI, artifact management, and validation.
+This project is independently maintained and is not an official Pagecast release.
+
+Development agent skills in .agents/skills/ (linked from .claude/skills/) are
+copied from Matt Pocock's skills: https://github.com/mattpocock/skills
+They are used to develop CueTake, are not part of the CueTake runtime, and
+remain under their MIT license, included in .agents/skills/LICENSE.

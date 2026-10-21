@@ -1,0 +1,63 @@
+import { test, expect } from 'bun:test';
+import { chromium } from 'playwright';
+import fs from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { injectDemoOverlay } from '../src/overlay.js';
+import { saveAuthState, resolveAuthProfile } from '../src/auth.js';
+
+test('spark is aligned to the click, outlined white, DPR sharp, and cleans up after animation', async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 640, height: 480 }, deviceScaleFactor: 2 });
+    await page.setContent('<body style="background:#e5e7eb"><button style="position:fixed;left:280px;top:200px;width:80px;height:60px">Preview</button>');
+    await page.evaluate(() => { window.clicked = 0; document.querySelector('button').onclick = () => window.clicked++; });
+    await injectDemoOverlay(page);
+    await page.mouse.click(320, 230);
+    await page.waitForTimeout(80);
+    const visible = await page.evaluate(() => {
+      const canvas = document.querySelector('#cuetake-click-sparks');
+      const pixels = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+      let white = 0, dark = 0, red = 0;
+      for (let i = 0; i < pixels.length; i += 4) if (pixels[i + 3] > 60) {
+        if (pixels[i] > 150 && pixels[i+1] > 150 && pixels[i+2] > 150) white++;
+        if (pixels[i] < 80 && pixels[i+1] < 80) dark++;
+        if (pixels[i] > 150 && pixels[i+1] < 100) red++;
+      }
+      return { ...window.__cuetakeOverlay.state, white, dark, red, width: canvas.width, clicked: window.clicked };
+    });
+    expect(visible.lastClick).toEqual({ x: 320, y: 230 });
+    expect(visible.width).toBe(1280);
+    expect(visible.clicked).toBe(1);
+    expect(visible.white).toBeGreaterThan(20);
+    expect(visible.dark).toBeGreaterThan(20);
+    expect(visible.red).toBe(0);
+    await page.waitForTimeout(500);
+    expect(await page.evaluate(() => window.__cuetakeOverlay.state.activeCount)).toBe(0);
+  } finally { await browser.close(); }
+}, 30_000);
+
+test('local auth state restores cookie and localStorage without adding it to take artifacts', async () => {
+  const directory = await fs.mkdtemp(join(tmpdir(), 'cuetake-auth-'));
+  const old = process.env.CUETAKE_AUTH_DIR;
+  process.env.CUETAKE_AUTH_DIR = directory;
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await page.route('https://cuetake.test/**', route => route.fulfill({ body: '<h1>Private demo fixture</h1>', contentType: 'text/html' }));
+    await page.goto('https://cuetake.test/');
+    await context.addCookies([{ name: 'demo_session', value: 'fixture-only', domain: 'cuetake.test', path: '/', httpOnly: true, secure: true }]);
+    await page.evaluate(() => localStorage.setItem('demo-user', 'fixture'));
+    await saveAuthState(context, 'fixture');
+    const path = await resolveAuthProfile('fixture');
+    expect((await fs.stat(path)).mode & 0o777).toBe(0o600);
+    const restored = await browser.newContext({ storageState: path });
+    expect((await restored.cookies()).some(c => c.name === 'demo_session' && c.value === 'fixture-only')).toBe(true);
+    const state = await restored.storageState();
+    expect(state.origins[0].localStorage).toContainEqual({ name: 'demo-user', value: 'fixture' });
+    expect((await saveAuthState(context, 'fixture')).note).not.toContain('fixture-only');
+    await expect(resolveAuthProfile('../escape')).rejects.toThrow();
+    await restored.close();
+  } finally { await browser.close(); if (old === undefined) delete process.env.CUETAKE_AUTH_DIR; else process.env.CUETAKE_AUTH_DIR = old; await fs.rm(directory, { recursive: true, force: true }); }
+}, 30_000);
