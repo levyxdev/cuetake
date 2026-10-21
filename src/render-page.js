@@ -3,25 +3,70 @@
  * frame → VideoEncoder (H.264) → MP4, streamed back to Node in chunks.
  *
  * Spaces: camera crops are CSS pixels of the viewport; the Source texture is sampled by UV only;
- * "stage" is output pixels with the page filling it at camera zoom 1.
+ * "stage" is the Final's pixels at camera zoom 1, laid out by stage.js.
  */
 import * as MB from '/mediabunny.js';
 import { buildChains, cropAt } from '/camera.js';
 import { pointerAt, presses, sparksAt, cursorGeometry, drawSpark, ARROW_PATH } from '/cursor.js';
+import { layout, cameraView, BACKGROUNDS, autoBackground, brandHue } from '/stage.js';
 
 const VERTEX = `#version 300 es
 in vec2 p; void main() { gl_Position = vec4(p, 0, 1); }`;
 const FRAGMENT = `#version 300 es
 precision highp float;
-uniform vec2 uRes;    // output size
-uniform vec4 uWin;    // page rectangle in stage pixels
-uniform vec3 uCam;    // stage point at the output center, and zoom
-uniform sampler2D uPage;
+uniform vec2 uRes;        // output size
+uniform vec3 uCam;        // stage point at the output center, and zoom
+uniform vec4 uPage;       // page rectangle in stage pixels
+uniform vec4 uWindow;     // window rectangle (chrome + page) in stage pixels
+uniform float uRadius;    // window corner radius, stage pixels
+uniform float uFramed;    // 0: page fills the stage
+uniform float uShadow;    // drop shadow strength
+uniform float uBlur;      // 1: background is the blurred page
+uniform vec3 uBase;       // mesh background: base color under up to four blobs
+uniform vec4 uBlobs[4];   // x, y, radius as stage fractions
+uniform vec3 uBlobColors[4];
+uniform int uBlobCount;
+uniform sampler2D uSource;
 out vec4 color;
+
+float roundedBox(vec2 p, vec4 rect, float r) {
+  vec2 q = abs(p - rect.xy - rect.zw * 0.5) - (rect.zw * 0.5 - r);
+  return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+}
+float noise(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+
 void main() {
   vec2 pixel = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y);
   vec2 stage = (pixel - uRes * 0.5) / uCam.z + uCam.xy;
-  color = vec4(texture(uPage, clamp((stage - uWin.xy) / uWin.zw, 0.0, 1.0)).rgb, 1.0);
+  vec2 pageUv = clamp((stage - uPage.xy) / uPage.zw, 0.0, 1.0);
+  if (uFramed < 0.5) { color = vec4(texture(uSource, pageUv).rgb, 1.0); return; }
+
+  vec3 c;
+  if (uBlur > 0.5) {
+    // Cover the stage with the page, then read a coarse mip level as a cheap wide blur.
+    float r = (uRes.x / uRes.y) / (uPage.z / uPage.w);
+    vec2 uv = 0.5 + (stage / uRes - 0.5) * vec2(min(1.0, r), min(1.0, 1.0 / r)) / 1.2;
+    c = textureLod(uSource, uv, 6.0).rgb * 0.8;
+  } else {
+    c = uBase;
+    for (int i = 3; i >= 0; i--) {
+      if (i >= uBlobCount) continue;
+      float d = length((stage / uRes - uBlobs[i].xy) / uBlobs[i].z);
+      c = mix(c, uBlobColors[i], 1.0 - smoothstep(0.0, 0.7, d));
+    }
+  }
+  // Grain dithers the gradients so H.264 does not band them.
+  c += (noise(pixel) - 0.5) * 0.035;
+
+  float unit = min(uRes.x, uRes.y) / 1080.0;
+  float shadow = uShadow * (1.0 - smoothstep(-60.0 * unit, 60.0 * unit, roundedBox(stage - vec2(0.0, 24.0 * unit), uWindow, uRadius)));
+  c = mix(c, vec3(0.0), shadow * 0.55);
+
+  float edge = roundedBox(stage, uWindow, uRadius) * uCam.z;   // output pixels from the window edge
+  float inside = clamp(0.5 - edge, 0.0, 1.0);
+  if (stage.y >= uPage.y) c = mix(c, texture(uSource, pageUv).rgb, inside);
+  c = mix(c, vec3(1.0), 0.18 * (1.0 - smoothstep(0.0, 1.0, abs(edge))));   // hairline rim
+  color = vec4(c, 1.0);
 }`;
 // Sprites (cursor, sparks) are premultiplied textures placed by a stage rectangle under the same camera.
 const SPRITE_VERTEX = `#version 300 es
@@ -73,7 +118,9 @@ function frameReader(track, decoderConfig) {
   };
 }
 
-function createCompositor(width, height, sourceWidth, sourceHeight) {
+/** `look` is the static part of the frame: stage layout, background and shadow. */
+function createCompositor(stage, look, sourceWidth, sourceHeight) {
+  const { width, height } = stage;
   const canvas = new OffscreenCanvas(width, height);
   const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, depth: false });
   const shader = (type, text) => {
@@ -106,7 +153,18 @@ function createCompositor(width, height, sourceWidth, sourceHeight) {
     return t;
   };
   const pageProgram = program(VERTEX, FRAGMENT);
-  gl.uniform4f(pageProgram.uniform('uWin'), 0, 0, width, height);
+  const set = (name, ...v) => gl[`uniform${v.length}f`](pageProgram.uniform(name), ...v);
+  set('uPage', stage.page.x, stage.page.y, stage.page.w, stage.page.h);
+  set('uWindow', stage.window.x, stage.window.y, stage.window.w, stage.window.h);
+  set('uRadius', stage.radius); set('uFramed', look.framed ? 1 : 0); set('uShadow', look.shadow ? 1 : 0); set('uBlur', look.background ? 0 : 1);
+  if (look.background) {
+    const rgb = hex => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255);
+    set('uBase', ...rgb(look.background.base));
+    const blobs = look.background.blobs.slice(0, 4);
+    gl.uniform1i(pageProgram.uniform('uBlobCount'), blobs.length);
+    gl.uniform4fv(pageProgram.uniform('uBlobs'), blobs.flatMap(([x, y, r]) => [x, y, r, 0]).concat(Array(16).fill(0)).slice(0, 16));
+    gl.uniform3fv(pageProgram.uniform('uBlobColors'), blobs.flatMap(b => rgb(b[3])).concat(Array(12).fill(0)).slice(0, 12));
+  }
   const spriteProgram = program(SPRITE_VERTEX, SPRITE_FRAGMENT);
   const spriteRect = spriteProgram.uniform('uRect');
   const fullScreen = quad([-1, -1, 1, -1, -1, 1, 1, 1]), unit = quad([0, 0, 1, 0, 0, 1, 1, 1]);
@@ -171,6 +229,42 @@ function cursorSprite(cursor, scale) {
   return { canvas, margin, width: canvas.width / scale, height: canvas.height / scale };
 }
 
+/** The window's chrome bar at `scale` pixels per CSS pixel: traffic lights, and for `browser` an address field. */
+function chromeSprite(frame, viewportWidth, heightCss, radiusCss, scale) {
+  const canvas = new OffscreenCanvas(Math.ceil(viewportWidth * scale), Math.ceil(heightCss * scale));
+  const ctx = canvas.getContext('2d');
+  ctx.scale(scale, scale);
+  ctx.beginPath(); ctx.roundRect(0, 0, viewportWidth, heightCss + radiusCss, [radiusCss, radiusCss, 0, 0]);
+  ctx.fillStyle = frame.window === 'browser' ? '#f3f3f5' : '#ececef'; ctx.fill();
+  ctx.fillStyle = '#d4d4d8'; ctx.fillRect(0, heightCss - 1, viewportWidth, 1);
+  ['#ff5f57', '#febc2e', '#28c840'].forEach((light, i) => {
+    ctx.beginPath(); ctx.arc(20 + i * 20, heightCss / 2, 6, 0, 2 * Math.PI);
+    ctx.fillStyle = light; ctx.fill(); ctx.strokeStyle = '#0000001f'; ctx.lineWidth = 0.5; ctx.stroke();
+  });
+  if (frame.window === 'browser') {
+    const w = 420, h = 28, x = (viewportWidth - w) / 2, y = (heightCss - h) / 2;
+    ctx.beginPath(); ctx.roundRect(x, y, w, h, h / 2);
+    ctx.fillStyle = '#ffffff'; ctx.fill(); ctx.strokeStyle = '#e4e4e7'; ctx.lineWidth = 0.8; ctx.stroke();
+    ctx.font = '13px system-ui, -apple-system, sans-serif'; ctx.textBaseline = 'middle';
+    const text = frame.url ?? '', textWidth = ctx.measureText(text).width, left = viewportWidth / 2 - (textWidth + 16) / 2;
+    ctx.fillStyle = '#71717a';   // padlock
+    ctx.beginPath(); ctx.roundRect(left, y + 13, 9, 7, 1.5); ctx.fill();
+    ctx.strokeStyle = '#71717a'; ctx.lineWidth = 1.3; ctx.beginPath(); ctx.arc(left + 4.5, y + 13, 2.8, Math.PI, 0); ctx.stroke();
+    ctx.fillStyle = '#52525b'; ctx.fillText(text, left + 16, heightCss / 2 + 0.5);
+  }
+  return canvas;
+}
+
+/** The background: a mesh preset, a mesh around the page's brand hue, or null for the blurred page. */
+function backgroundFor(frame, firstFrame) {
+  if (frame.background === 'blur') return null;
+  if (frame.background !== 'auto') return BACKGROUNDS[frame.background];
+  const ctx = new OffscreenCanvas(96, 60).getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(firstFrame, 0, 0, 96, 60);
+  const hue = brandHue(ctx.getImageData(0, 0, 96, 60).data);
+  return hue === null ? BACKGROUNDS.aurora : autoBackground(hue);
+}
+
 /** Prefers constant-quality hardware encoding; software encoders only offer a bitrate. */
 async function encoderConfig(width, height, fps, quality) {
   const base = { codec: avcCodec(width, height, fps), width, height, framerate: fps, latencyMode: 'quality', avc: { format: 'avc' } };
@@ -189,12 +283,13 @@ const uploadStream = url => new WritableStream({
   },
 });
 
-window.cuetakeRender = async ({ sourceUrl, finalUrl, width, height, fps, duration, quality, viewport, camera, pointer, events, cursor, clickEffect }) => {
+window.cuetakeRender = async ({ sourceUrl, finalUrl, fps, duration, viewport, pointer, events, edit }) => {
+  const { camera, cursor, clickEffect, frame } = edit, quality = edit.output.quality;
+  const stage = layout(edit, viewport), { width, height } = stage;
   const started = performance.now();
   const input = new MB.Input({ formats: MB.ALL_FORMATS, source: new MB.UrlSource(sourceUrl) });
   const track = await input.getPrimaryVideoTrack();
   const reader = frameReader(track, await track.getDecoderConfig());
-  const compositor = createCompositor(width, height, track.codedWidth, track.codedHeight);
   const frameCount = Math.round(duration * fps);
   const output = new MB.Output({ format: new MB.Mp4OutputFormat({ fastStart: 'reserve' }), target: new MB.StreamTarget(uploadStream(finalUrl), { chunked: true }) });
   const packets = new MB.EncodedVideoPacketSource('avc');
@@ -214,38 +309,42 @@ window.cuetakeRender = async ({ sourceUrl, finalUrl, width, height, fps, duratio
   });
   encoder.configure(config);
 
+  let current = await reader.next(), next = await reader.next(), uploaded = null;
+  if (!current) throw new Error('Source has no video frames');
+  const compositor = createCompositor(stage, { framed: Boolean(frame), shadow: frame && frame.shadow, background: frame && backgroundFor(frame, current) }, track.codedWidth, track.codedHeight);
   const chains = buildChains(camera.targets, viewport, camera);
-  const toStage = width / viewport.width; // page fills the stage at zoom 1
+  // Page CSS pixels → stage pixels; sprites are rasterized for the closest zoom and mipmapped below it.
+  const at = (x, y) => [stage.page.x + x * stage.scale, stage.page.y + y * stage.scale];
+  const sharpest = stage.scale * camera.maxZoom * 2;
   const geometry = cursorGeometry(cursor);
-  // Rasterize the cursor for the closest zoom, oversampled; mipmaps cover smaller sizes.
-  const arrow = cursorSprite(cursor, toStage * camera.maxZoom * 2);
+  const arrow = cursorSprite(cursor, sharpest);
   const arrowTexture = compositor.sprite(arrow.canvas);
+  const chromeTexture = stage.chrome ? compositor.sprite(chromeSprite(frame, viewport.width, stage.chrome / stage.scale, stage.radius / stage.scale, sharpest)) : null;
   const pressList = presses(events);
   const sparkReach = clickEffect.radius + clickEffect.length + 8;
   let sparkTexture = null;
-  let current = await reader.next(), next = await reader.next(), uploaded = null;
-  if (!current) throw new Error('Source has no video frames');
   const origin = current.timestamp;
   try {
     for (let i = 0; i < frameCount; i++) {
       if (failure) throw failure;
       // Sample and hold: show the latest Source frame at or before this output time (VFR → CFR).
-      const at = origin + Math.round(i * 1e6 / fps);
-      while (next && next.timestamp <= at) { current.close(); current = next; next = await reader.next(); }
+      const due = origin + Math.round(i * 1e6 / fps);
+      while (next && next.timestamp <= due) { current.close(); current = next; next = await reader.next(); }
       if (uploaded !== current) { compositor.upload(current); uploaded = current; }
-      const t = i / fps, crop = cropAt(chains, viewport, t), zoom = viewport.width / crop.w;
-      compositor.frame((crop.x + crop.w / 2) * toStage, (crop.y + crop.h / 2) * toStage, zoom, draw => {
+      const t = i / fps, view = cameraView(cropAt(chains, viewport, t), stage, viewport);
+      compositor.frame(view.x, view.y, view.zoom, draw => {
+        if (chromeTexture) draw(chromeTexture, [stage.window.x, stage.window.y, stage.window.w, stage.chrome]);
         for (const spark of sparksAt(pressList, clickEffect, t)) {
           // Each spark is drawn at its on-screen scale so the thin rays stay crisp.
-          const scale = toStage * zoom, size = Math.ceil(2 * sparkReach * scale);
+          const scale = stage.scale * view.zoom, size = Math.ceil(2 * sparkReach * scale);
           const ctx = new OffscreenCanvas(size, size).getContext('2d');
           ctx.scale(scale, scale);
           drawSpark(ctx, sparkReach, sparkReach, spark.progress, clickEffect, cursor.color);
           sparkTexture = compositor.sprite(ctx.canvas, sparkTexture, false);
-          draw(sparkTexture, [(spark.x - sparkReach) * toStage, (spark.y - sparkReach) * toStage, 2 * sparkReach * toStage, 2 * sparkReach * toStage]);
+          draw(sparkTexture, [...at(spark.x - sparkReach, spark.y - sparkReach), 2 * sparkReach * stage.scale, 2 * sparkReach * stage.scale]);
         }
         const point = pointerAt(pointer, t);
-        if (point) draw(arrowTexture, [(point.x - geometry.hotspot.x - arrow.margin) * toStage, (point.y - geometry.hotspot.y - arrow.margin) * toStage, arrow.width * toStage, arrow.height * toStage]);
+        if (point) draw(arrowTexture, [...at(point.x - geometry.hotspot.x - arrow.margin, point.y - geometry.hotspot.y - arrow.margin), arrow.width * stage.scale, arrow.height * stage.scale]);
       });
       const frame = new VideoFrame(compositor.canvas, { timestamp: Math.round(i * 1e6 / fps), duration: Math.round(1e6 / fps) });
       encoder.encode(frame, { keyFrame: i % (fps * 2) === 0, ...(quantizer ? { avc: { quantizer } } : {}) });
@@ -261,7 +360,7 @@ window.cuetakeRender = async ({ sourceUrl, finalUrl, width, height, fps, duratio
     if (encoder.state !== 'closed') encoder.close();
   }
   return {
-    frames: frameCount, sourceFrames: reader.stats().decoded, codec: config.codec,
+    width, height, frames: frameCount, sourceFrames: reader.stats().decoded, codec: config.codec,
     rateControl: quantizer ? `quantizer ${quantizer}` : `variable ${config.bitrate} bps`, gpu: compositor.gpu,
     seconds: +((performance.now() - started) / 1000).toFixed(2),
   };

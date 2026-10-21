@@ -17,13 +17,9 @@ const pageFiles = {
   '/render-page.js': { path: fileURLToPath(new URL('./render-page.js', import.meta.url)), type: 'text/javascript' },
   '/camera.js': { path: fileURLToPath(new URL('./camera.js', import.meta.url)), type: 'text/javascript' },
   '/cursor.js': { path: fileURLToPath(new URL('./cursor.js', import.meta.url)), type: 'text/javascript' },
+  '/stage.js': { path: fileURLToPath(new URL('./stage.js', import.meta.url)), type: 'text/javascript' },
   '/mediabunny.js': { path: mediabunnyBundle, type: 'text/javascript' },
 };
-
-/** Output pixels for an Edit: the viewport's aspect at the Edit's width, rounded to even. */
-export function outputSize(edit, viewport) {
-  return { width: edit.output.width, height: Math.round(edit.output.width * viewport.height / viewport.width / 2) * 2 };
-}
 
 async function serveRange(route, path) {
   const { size } = await fs.stat(path);
@@ -69,9 +65,8 @@ export async function renderFinal({ sourcePath, outputPath, timeline, edit, fps 
   const handle = await fs.open(outputPath, 'w');
   try {
     return await withRenderPage({ files: { source: sourcePath }, writable: { final: handle } }, page => page.evaluate(options => window.cuetakeRender(options), {
-      sourceUrl: `${ORIGIN}/files/source`, finalUrl: `${ORIGIN}/files/final`, ...outputSize(edit, timeline.viewport), fps,
-      duration: timeline.duration, quality: edit.output.quality, viewport: timeline.viewport, camera: edit.camera,
-      pointer: timeline.pointer ?? [], events: timeline.events ?? [], cursor: edit.cursor, clickEffect: edit.clickEffect,
+      sourceUrl: `${ORIGIN}/files/source`, finalUrl: `${ORIGIN}/files/final`, fps, duration: timeline.duration,
+      viewport: timeline.viewport, pointer: timeline.pointer ?? [], events: timeline.events ?? [], edit,
     }));
   } finally { await handle.close(); }
 }

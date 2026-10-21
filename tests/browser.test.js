@@ -7,6 +7,7 @@ import { saveAuthState, resolveAuthProfile } from '../src/auth.js';
 import { installProbe, collectTimeline } from '../src/probe.js';
 import { renderFinal, inspectFinal, extractFrame } from '../src/render.js';
 import { editSchema } from '../src/edit.js';
+import { layout } from '../src/stage.js';
 
 test('local auth state restores cookie and localStorage without adding it to take artifacts', async () => {
   const directory = await fs.mkdtemp(join(tmpdir(), 'cuetake-auth-'));
@@ -108,7 +109,7 @@ test('Render maps CSS camera targets onto the 2× Source and holds the last fram
   try {
     const sourcePath = join(dir, 'source.webm'), outputPath = join(dir, 'final.mp4');
     await fs.writeFile(sourcePath, await syntheticSource(browser, 0.6));
-    const edit = editSchema.parse({ schemaVersion: 2, output: { width: 320 }, camera: { maxZoom: 2, padding: 0, transitionDuration: 0.1, preLead: 0.1, holdPerTarget: 2, targets: [{ t: 0.2, box: { x: 240, y: 100, width: 20, height: 20 } }] } });
+    const edit = editSchema.parse({ schemaVersion: 2, output: { size: 240 }, frame: false, camera: { maxZoom: 2, padding: 0, transitionDuration: 0.1, preLead: 0.1, holdPerTarget: 2, targets: [{ t: 0.2, box: { x: 240, y: 100, width: 20, height: 20 } }] } });
     await renderFinal({ sourcePath, outputPath, timeline: { viewport: { width: 320, height: 240 }, duration: 1.5 }, edit, fps: 30 });
     expect(await inspectFinal(outputPath)).toMatchObject({ width: 320, height: 240, fps: 30, packets: 45, decodedFrames: 45 });
     const pixel = await pixelsAt(browser, await extractFrame(outputPath, 0.5), [[180, 120], [250, 110]]);
@@ -124,7 +125,7 @@ test('Render draws the cursor at the pointer and a spark around each click', asy
   try {
     const sourcePath = join(dir, 'source.webm'), outputPath = join(dir, 'final.mp4');
     await fs.writeFile(sourcePath, await syntheticSource(browser, 0.6));
-    const edit = editSchema.parse({ schemaVersion: 2, output: { width: 320 } });
+    const edit = editSchema.parse({ schemaVersion: 2, output: { size: 240 }, frame: false });
     const timeline = { viewport: { width: 320, height: 240 }, duration: 1, pointer: [[0, 60, 60], [1, 60, 60]], events: [{ type: 'click', t: 0.2, x: 200, y: 60 }] };
     await renderFinal({ sourcePath, outputPath, timeline, edit, fps: 30 });
     // A spark ray sits ~26 px from the click along 22.5° at t=0.3; the arrow body lies just below-right of the tip.
@@ -135,5 +136,25 @@ test('Render draws the cursor at the pointer and a spark around each click', asy
     expect(Math.max(...clear)).toBeLessThan(40);
     const [gone] = await pixelsAt(browser, await extractFrame(outputPath, 0.9), [ray]);
     expect(Math.max(...gone)).toBeLessThan(40);
+  } finally { await browser.close(); await fs.rm(dir, { recursive: true, force: true }); }
+}, 60_000);
+
+test('Render frames the page in a browser window on the background', async () => {
+  const dir = await fs.mkdtemp(join(tmpdir(), 'cuetake-frame-'));
+  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
+  try {
+    const sourcePath = join(dir, 'source.webm'), outputPath = join(dir, 'final.mp4');
+    await fs.writeFile(sourcePath, await syntheticSource(browser, 0.6));
+    const viewport = { width: 320, height: 240 };
+    const edit = editSchema.parse({ schemaVersion: 2, output: { size: 480 }, frame: { url: 'example.com', shadow: false } });
+    await renderFinal({ sourcePath, outputPath, timeline: { viewport, duration: 1 }, edit, fps: 30 });
+    const stage = layout(edit, viewport);
+    expect(await inspectFinal(outputPath)).toMatchObject({ width: stage.width, height: stage.height, decodedFrames: 30 });
+    const pageCenter = [Math.round(stage.page.x + stage.page.w * 0.3), Math.round(stage.page.y + stage.page.h / 2)];
+    const chrome = [Math.round(stage.window.x + stage.window.w * 0.8), Math.round(stage.window.y + stage.chrome / 2)];
+    const [background, page, bar] = await pixelsAt(browser, await extractFrame(outputPath, 0.5), [[4, 4], pageCenter, chrome]);
+    expect(background[2]).toBeGreaterThan(background[1]);    // aurora: blue-violet, not page or chrome
+    expect(Math.max(...page)).toBeLessThan(40);              // the black Source
+    expect(Math.min(...bar)).toBeGreaterThan(220);           // light chrome bar
   } finally { await browser.close(); await fs.rm(dir, { recursive: true, force: true }); }
 }, 60_000);

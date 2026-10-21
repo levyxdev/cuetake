@@ -7,8 +7,21 @@ const box = z.object({ x: z.number(), y: z.number(), width: z.number().nonnegati
 export const editFields = {
   cursor: z.object({ style: z.enum(['arrow', 'dot']).default('arrow'), size: z.number().min(12).max(64).default(24), color: z.string().regex(/^#[a-fA-F0-9]{6}$/).default('#ffffff') }).default({}),
   clickEffect: z.object({ style: z.enum(['spark', 'none']).default('spark'), radius: z.number().min(8).max(80).default(32), length: z.number().min(4).max(40).default(16), count: z.number().int().min(4).max(16).default(8), duration: z.number().min(150).max(1000).default(420) }).default({}),
-  // quality is the H.264 quantizer: lower is sharper and larger. Encoders without quantizer mode use a bitrate.
-  output: z.object({ width: evenSize.default(1920), quality: z.number().int().min(10).max(40).default(22) }).default({}),
+  // size names the Final's short side; quality is the H.264 quantizer (lower is sharper and larger).
+  output: z.object({
+    size: z.union([z.enum(['1080p', '1440p', '2160p']), evenSize]).default('2160p'),
+    aspect: z.enum(['16:9', '1:1', '9:16']).default('16:9'),
+    quality: z.number().int().min(10).max(40).default(22),
+  }).default({}),
+  // The page in a window on a background; `false` lets the page fill the Final. Radius is in 1080p pixels.
+  frame: z.union([z.literal(false), z.object({
+    window: z.enum(['browser', 'macos', 'none']).default('browser'),
+    background: z.enum(['aurora', 'sunset', 'ocean', 'graphite', 'paper', 'auto', 'blur']).default('aurora'),
+    padding: z.number().min(0).max(0.3).default(0.08),
+    radius: z.number().min(0).max(48).default(12),
+    shadow: z.boolean().default(true),
+    url: z.string().max(200).optional(),
+  })]).default({}),
   // Each target is framed with `padding` CSS px around it, zooming at most `maxZoom`; fits below `minZoom` stay wide.
   camera: z.object({ maxZoom: z.number().min(1).max(4).default(2), minZoom: z.number().min(1).max(4).default(1.2), padding: z.number().min(0).max(400).default(48), transitionDuration: z.number().min(0.1).max(3).default(0.48), panDuration: z.number().min(0.1).max(3).default(0.42), preLead: z.number().min(0).max(3).default(0.48), holdPerTarget: z.number().min(0.1).max(30).default(3), chainGap: z.number().min(0).max(30).default(5) }).default({}),
 };
@@ -43,6 +56,8 @@ export function createEdit(config, timeline, focus, wide = []) {
   return editSchema.parse({
     schemaVersion: 2,
     cursor: config.cursor, clickEffect: config.clickEffect, output: config.output,
+    // The browser chrome shows the Scenario's host unless the config names something else.
+    frame: config.frame && { url: new URL(config.url).host, ...config.frame },
     camera: { ...config.camera, targets: cameraTargets(timeline, focus, wide) },
   });
 }

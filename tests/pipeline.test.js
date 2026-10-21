@@ -5,11 +5,13 @@ import { scenarioSchema, summarizeFrames } from '../src/pipeline.js';
 import { cameraTargets, createEdit } from '../src/edit.js';
 import { fitZoom, cropFor, buildChains, cropAt } from '../src/camera.js';
 import { pointerAt, presses, sparksAt } from '../src/cursor.js';
+import { outputSize, layout, cameraView, brandHue } from '../src/stage.js';
 
 test('rejects unsupported capture rates and odd H.264 output dimensions', () => {
   const base = { name: 'demo', url: 'https://example.com' };
   expect(scenarioSchema.safeParse({ ...base, capture: { fps: 45 } }).success).toBe(false);
-  expect(scenarioSchema.safeParse({ ...base, output: { width: 1919 } }).success).toBe(false);
+  expect(scenarioSchema.safeParse({ ...base, output: { size: 1079 } }).success).toBe(false);
+  expect(scenarioSchema.safeParse({ ...base, output: { aspect: '4:3' } }).success).toBe(false);
   expect(scenarioSchema.parse(base).capture.fps).toBe(60);
 });
 
@@ -105,4 +107,42 @@ test('the camera changes zoom while moving between targets of different size', (
 test('the skill launcher pins the version being released', () => {
   const launcher = readFileSync(new URL('../skills/cuetake/scripts/cuetake', import.meta.url), 'utf8');
   expect(launcher).toContain(`cuetake@${pkg.version}`);
+});
+
+const pageViewport = { width: 1440, height: 900 };
+const framed = (frame = {}, output = {}) => ({ output: { size: '2160p', aspect: '16:9', ...output }, frame: { window: 'browser', padding: 0.08, radius: 12, ...frame } });
+
+test('output size names the short side; aspect applies only with a frame', () => {
+  expect(outputSize(framed(), pageViewport)).toEqual({ width: 3840, height: 2160 });
+  expect(outputSize(framed({}, { size: '1080p', aspect: '9:16' }), pageViewport)).toEqual({ width: 1080, height: 1920 });
+  expect(outputSize({ output: { size: 240 }, frame: false }, { width: 320, height: 240 })).toEqual({ width: 320, height: 240 });
+});
+
+test('the window sits centered inside the padding with its chrome above the page', () => {
+  const stage = layout(framed(), pageViewport);
+  const pad = 2160 * 0.08;
+  expect(stage.window.y).toBeGreaterThanOrEqual(pad - 0.001);
+  expect(stage.window.x + stage.window.w / 2).toBeCloseTo(1920, 6);
+  expect(stage.chrome).toBeCloseTo(44 * stage.scale, 6);
+  expect(stage.page.y).toBeCloseTo(stage.window.y + stage.chrome, 6);
+  expect(stage.page.w / stage.page.h).toBeCloseTo(1440 / 900, 6);
+  expect(stage.radius).toBe(24);
+});
+
+test('at zoom 1 the camera shows the whole stage; zoomed views stay inside it', () => {
+  const stage = layout(framed(), pageViewport);
+  expect(cameraView({ x: 0, y: 0, w: 1440, h: 900 }, stage, pageViewport)).toEqual({ x: 1920, y: 1080, zoom: 1 });
+  const corner = cameraView({ x: 0, y: 0, w: 720, h: 450 }, stage, pageViewport);
+  expect(corner.zoom).toBe(2);
+  expect(corner.x).toBeCloseTo(stage.page.x + 360 * stage.scale, 6);
+  expect(corner.y).toBeCloseTo(stage.page.y + 225 * stage.scale, 6);
+  expect(corner.x - 3840 / 4).toBeGreaterThanOrEqual(0);
+});
+
+test('auto backgrounds find the brand hue among neutral pixels', () => {
+  const pixels = [];
+  for (let i = 0; i < 90; i++) pixels.push(245, 245, 245, 255);
+  for (let i = 0; i < 10; i++) pixels.push(79, 70, 229, 255);
+  expect(brandHue(pixels)).toBeCloseTo(243, 0);
+  expect(brandHue([250, 250, 250, 255])).toBeNull();
 });

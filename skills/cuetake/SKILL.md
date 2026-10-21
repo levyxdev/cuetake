@@ -31,7 +31,7 @@ Reuse a named auth profile when the user has authorized that account for the dem
 
 ## Styling and timing
 
-Defaults: CSS viewport 1440×900, 2× capture resolution, 60 fps target, 1920×1200 output, 24 px white arrow. Clicks use an outlined white spark: 32 px radius, 16 px rays, 8 rays, 420 ms duration. Set `clickEffect.style: 'none'` to disable it; color follows the cursor.
+Defaults: CSS viewport 1440×900, 2× capture resolution, 60 fps target, a 3840×2160 Final with the page in a browser window on the `aurora` background, 24 px white arrow. Clicks use an outlined white spark: 32 px radius, 16 px rays, 8 rays, 420 ms duration. Set `clickEffect.style: 'none'` to disable it; color follows the cursor.
 
 Use `d.focus(box, seconds)` for deliberate camera targets. Boxes are CSS pixels. Nearby targets form one continuous camera chain. The camera zooms to fit each target with 48 px padding, at most 2×; enter/exit 0.48 seconds, pan 0.42 seconds. Pass `focus: false` to an action that should not move the camera. Keep the camera steady during a meaningful action and give the viewer time to read the result.
 
