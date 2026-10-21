@@ -4,10 +4,13 @@
 
 Built entirely for AI agents, CueTake turns browser interactions into sharp product demo videos with a precise cursor and continuous camera moves. Give an agent a scenario, then capture, render, and verify the result locally.
 
+![A CueTake Final: the page in a browser window on a gradient, the camera zooming to the field being typed into](docs/media/demo.gif)
+
 - Retina tab capture at 30 or 60 fps and a 2× pixel scale, headless by default.
 - An automatic camera that frames each click, field and drag, then zooms out once.
+- The page framed in a browser or macOS window on a gradient, brand-colored or blurred background, at 16:9, 1:1 or 9:16.
 - Cursor and click sparks drawn at Render time, so a Take can be restyled without recording again.
-- Rendering in Chromium with WebGL and WebCodecs: no FFmpeg, 4K60 by hardware encoder.
+- Rendering in Chromium with WebGL and WebCodecs: no FFmpeg, 4K60 by default.
 - A separate folder for every Take: Source, Timeline, Edit, Final MP4, and verification.
 
 ## For AI agents
@@ -15,10 +18,9 @@ Built entirely for AI agents, CueTake turns browser interactions into sharp prod
 If a user hands you this repository to set up CueTake:
 
 1. Install the skill with `npx skills add levyxdev/cuetake`. In Claude Code you can instead run `/plugin marketplace add levyxdev/cuetake`, then `/plugin install cuetake`.
-2. Follow the skill's [setup guide](skills/cuetake/setup.md): run `scripts/cuetake doctor`, and install Node or the browser only after the user agrees to the option they pick.
-3. Write a Scenario for the user's product with the [scenario API](skills/cuetake/scenarios.md), record it, and review the frames.
-
-The skill runs the CLI through `npx -y cuetake@<version>`. CueTake is not yet published to npm; until it is, point the skill at a source checkout with `CUETAKE_BIN="node /path/to/cuetake/src/cli.js"`.
+2. Give the skill a CueTake CLI. The skill's `scripts/cuetake` runs `npx -y cuetake@<version>`, but **CueTake is not on npm yet**, so for now clone this repository, run `npm install` in it, and export `CUETAKE_BIN="node /absolute/path/to/cuetake/src/cli.js"` before running the skill's commands.
+3. Follow the skill's [setup guide](skills/cuetake/setup.md): run `scripts/cuetake doctor`, and install Node or the browser only after the user agrees to the option they pick.
+4. Write a Scenario for the user's product with the [scenario API](skills/cuetake/scenarios.md), record it, and review the frames with `scripts/cuetake frame`.
 
 ## Run from source
 
@@ -33,7 +35,7 @@ bun src/cli.js install-browser
 bun src/cli.js record examples/basic.mjs --out ./recordings/first-take
 ```
 
-The example uses `https://example.com`. It adds a small animated demo element in that isolated browser context, so it works without a local application server. For your own product, write a scenario using the [scenario API](skills/cuetake/scenarios.md).
+The example opens `https://example.com` only for a stable HTTPS origin, then replaces the page with a small invite form, types an email and sends it, so it works without a local application server. For your own product, write a scenario using the [scenario API](skills/cuetake/scenarios.md).
 
 Playwright is a local package dependency. Browser binaries use Playwright's normal OS cache. CueTake does not install global packages or start your application server.
 
@@ -49,7 +51,7 @@ bun src/cli.js frame ./recordings/my-take 2.5
 bun src/cli.js login product-demo https://your-app.example/login
 ```
 
-`record` completes capture → render → verification and refuses an existing output folder. `render` uses the saved Source, Timeline and Edit; it replaces the final video only after encoding succeeds. Clone a take folder to keep multiple edits.
+`record` completes capture → render → verification and refuses an existing output folder. `render` uses the saved Source, Timeline and Edit; it replaces the final video only after encoding succeeds. Copy a Take folder to keep several edits.
 
 A successful command is a technical check, not an editorial approval. Watch the result before publishing.
 

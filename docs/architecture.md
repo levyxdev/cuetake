@@ -17,6 +17,8 @@ The Source holds only page pixels; `probe.js` hides the page cursor during Captu
 - `recorder.js` / `tab-capture.js`: supported HD capture only.
 - `cursor.js`: cursor position, sparks and their drawing; shared by Node and the render page.
 - `camera.js`: camera chains and the crop at any time; shared by Node and the render page.
+- `stage.js`: output size, window and page layout, camera view and background presets; shared by Node and the render page.
+- `environment.js`: `doctor` and `install-browser`.
 - `render.js` / `render-page.js`: the Render driver and the in-browser compositor, encoder and inspector.
 - `probe.js`: in-page Timeline recording.
 - `edit.js`: the Edit schema and its first version from a Scenario.
