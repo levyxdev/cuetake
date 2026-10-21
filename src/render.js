@@ -16,6 +16,7 @@ const pageFiles = {
   '/render.html': { body: '<!doctype html><meta charset="utf-8"><script type="module" src="/render-page.js"></script>', type: 'text/html' },
   '/render-page.js': { path: fileURLToPath(new URL('./render-page.js', import.meta.url)), type: 'text/javascript' },
   '/camera.js': { path: fileURLToPath(new URL('./camera.js', import.meta.url)), type: 'text/javascript' },
+  '/cursor.js': { path: fileURLToPath(new URL('./cursor.js', import.meta.url)), type: 'text/javascript' },
   '/mediabunny.js': { path: mediabunnyBundle, type: 'text/javascript' },
 };
 
@@ -70,6 +71,7 @@ export async function renderFinal({ sourcePath, outputPath, timeline, edit, fps 
     return await withRenderPage({ files: { source: sourcePath }, writable: { final: handle } }, page => page.evaluate(options => window.cuetakeRender(options), {
       sourceUrl: `${ORIGIN}/files/source`, finalUrl: `${ORIGIN}/files/final`, ...outputSize(edit, timeline.viewport), fps,
       duration: timeline.duration, quality: edit.output.quality, viewport: timeline.viewport, camera: edit.camera,
+      pointer: timeline.pointer ?? [], events: timeline.events ?? [], cursor: edit.cursor, clickEffect: edit.clickEffect,
     }));
   } finally { await handle.close(); }
 }

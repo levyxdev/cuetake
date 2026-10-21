@@ -7,6 +7,7 @@
  */
 import * as MB from '/mediabunny.js';
 import { buildChains, cropAt } from '/camera.js';
+import { pointerAt, presses, sparksAt, cursorGeometry, drawSpark, ARROW_PATH } from '/cursor.js';
 
 const VERTEX = `#version 300 es
 in vec2 p; void main() { gl_Position = vec4(p, 0, 1); }`;
@@ -22,6 +23,21 @@ void main() {
   vec2 stage = (pixel - uRes * 0.5) / uCam.z + uCam.xy;
   color = vec4(texture(uPage, clamp((stage - uWin.xy) / uWin.zw, 0.0, 1.0)).rgb, 1.0);
 }`;
+// Sprites (cursor, sparks) are premultiplied textures placed by a stage rectangle under the same camera.
+const SPRITE_VERTEX = `#version 300 es
+in vec2 p;
+uniform vec2 uRes; uniform vec3 uCam; uniform vec4 uRect;
+out vec2 uv;
+void main() {
+  vec2 pixel = (uRect.xy + p * uRect.zw - uCam.xy) * uCam.z + uRes * 0.5;
+  gl_Position = vec4(pixel.x / uRes.x * 2.0 - 1.0, 1.0 - pixel.y / uRes.y * 2.0, 0, 1);
+  uv = p;
+}`;
+const SPRITE_FRAGMENT = `#version 300 es
+precision highp float;
+uniform sampler2D uSprite;
+in vec2 uv; out vec4 color;
+void main() { color = texture(uSprite, uv); }`;
 
 /** Smallest H.264 High level whose frame-size and macroblock-rate limits fit. */
 export function avcCodec(width, height, fps) {
@@ -65,31 +81,94 @@ function createCompositor(width, height, sourceWidth, sourceHeight) {
     if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
     return s;
   };
-  const program = gl.createProgram();
-  gl.attachShader(program, shader(gl.VERTEX_SHADER, VERTEX)); gl.attachShader(program, shader(gl.FRAGMENT_SHADER, FRAGMENT));
-  gl.bindAttribLocation(program, 0, 'p');
-  gl.linkProgram(program); gl.useProgram(program);
-  gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
-  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
-  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  const program = (vertex, fragment) => {
+    const p = gl.createProgram();
+    gl.attachShader(p, shader(gl.VERTEX_SHADER, vertex)); gl.attachShader(p, shader(gl.FRAGMENT_SHADER, fragment));
+    gl.bindAttribLocation(p, 0, 'p');
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+    gl.useProgram(p);
+    gl.uniform2f(gl.getUniformLocation(p, 'uRes'), width, height);
+    return { p, camera: gl.getUniformLocation(p, 'uCam'), uniform: name => gl.getUniformLocation(p, name) };
+  };
+  const quad = corners => {
+    const vao = gl.createVertexArray(); gl.bindVertexArray(vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(corners), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    return vao;
+  };
+  const texture = (filter = gl.LINEAR_MIPMAP_LINEAR) => {
+    const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    return t;
+  };
+  const pageProgram = program(VERTEX, FRAGMENT);
+  gl.uniform4f(pageProgram.uniform('uWin'), 0, 0, width, height);
+  const spriteProgram = program(SPRITE_VERTEX, SPRITE_FRAGMENT);
+  const spriteRect = spriteProgram.uniform('uRect');
+  const fullScreen = quad([-1, -1, 1, -1, -1, 1, 1, 1]), unit = quad([0, 0, 1, 0, 0, 1, 1, 1]);
   // Mipmaps keep zoomed-out text from aliasing when the 2× Source is minified.
-  const levels = Math.floor(Math.log2(Math.max(sourceWidth, sourceHeight))) + 1;
-  gl.bindTexture(gl.TEXTURE_2D, gl.createTexture());
-  gl.texStorage2D(gl.TEXTURE_2D, levels, gl.RGBA8, sourceWidth, sourceHeight);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-  const uniform = name => gl.getUniformLocation(program, name);
-  gl.uniform2f(uniform('uRes'), width, height);
-  gl.uniform4f(uniform('uWin'), 0, 0, width, height);
+  const pageTexture = texture();
+  gl.texStorage2D(gl.TEXTURE_2D, Math.floor(Math.log2(Math.max(sourceWidth, sourceHeight))) + 1, gl.RGBA8, sourceWidth, sourceHeight);
+  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+  gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
   gl.viewport(0, 0, width, height);
-  const camera = uniform('uCam');
   const info = gl.getExtension('WEBGL_debug_renderer_info');
   return {
     canvas,
     gpu: info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : 'unknown',
-    upload(frame) { gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, frame); gl.generateMipmap(gl.TEXTURE_2D); },
-    draw(x, y, zoom) { gl.uniform3f(camera, x, y, zoom); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); },
+    upload(frame) {
+      gl.bindTexture(gl.TEXTURE_2D, pageTexture);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, frame);
+      gl.generateMipmap(gl.TEXTURE_2D);
+    },
+    /** A sprite texture from a 2D canvas; pass `into` to reuse one. */
+    sprite(image, into, mipmaps = true) {
+      const t = into ?? texture(mipmaps ? gl.LINEAR_MIPMAP_LINEAR : gl.LINEAR);
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+      if (mipmaps) gl.generateMipmap(gl.TEXTURE_2D);
+      return t;
+    },
+    /** Draws the page under the camera; `draw(texture, rect)` in `overlay` then places sprites in stage pixels. */
+    frame(x, y, zoom, overlay) {
+      gl.disable(gl.BLEND);
+      gl.useProgram(pageProgram.p); gl.uniform3f(pageProgram.camera, x, y, zoom);
+      gl.bindTexture(gl.TEXTURE_2D, pageTexture); gl.bindVertexArray(fullScreen);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      gl.enable(gl.BLEND);
+      gl.useProgram(spriteProgram.p); gl.uniform3f(spriteProgram.camera, x, y, zoom); gl.bindVertexArray(unit);
+      overlay((t, rect) => { gl.bindTexture(gl.TEXTURE_2D, t); gl.uniform4f(spriteRect, ...rect); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); });
+    },
   };
+}
+
+/** The cursor drawn once at `scale` device pixels per CSS pixel, with room for its shadow. */
+function cursorSprite(cursor, scale) {
+  const { width, height } = cursorGeometry(cursor);
+  const margin = 4;
+  const canvas = new OffscreenCanvas(Math.ceil((width + 2 * margin) * scale), Math.ceil((height + 2 * margin) * scale));
+  const ctx = canvas.getContext('2d');
+  ctx.scale(scale, scale);
+  ctx.translate(margin, margin);
+  ctx.shadowColor = '#00000055'; ctx.shadowBlur = 2 * scale; ctx.shadowOffsetY = 1 * scale;
+  if (cursor.style === 'arrow') {
+    ctx.scale(width / 28, height / 36);
+    const path = new Path2D(ARROW_PATH);
+    ctx.fillStyle = cursor.color; ctx.fill(path);
+    ctx.shadowColor = 'transparent';
+    ctx.lineJoin = 'round'; ctx.lineWidth = 1.7; ctx.strokeStyle = '#171717'; ctx.stroke(path);
+  } else {
+    ctx.beginPath(); ctx.arc(width / 2, height / 2, width / 2, 0, 2 * Math.PI);
+    ctx.fillStyle = cursor.color; ctx.fill();
+    ctx.shadowColor = 'transparent';
+    ctx.lineWidth = 1.5; ctx.strokeStyle = '#171717'; ctx.beginPath(); ctx.arc(width / 2, height / 2, width / 2 - 0.75, 0, 2 * Math.PI); ctx.stroke();
+  }
+  // Size in CSS pixels, including the shadow margin.
+  return { canvas, margin, width: canvas.width / scale, height: canvas.height / scale };
 }
 
 /** Prefers constant-quality hardware encoding; software encoders only offer a bitrate. */
@@ -110,7 +189,7 @@ const uploadStream = url => new WritableStream({
   },
 });
 
-window.cuetakeRender = async ({ sourceUrl, finalUrl, width, height, fps, duration, quality, viewport, camera }) => {
+window.cuetakeRender = async ({ sourceUrl, finalUrl, width, height, fps, duration, quality, viewport, camera, pointer, events, cursor, clickEffect }) => {
   const started = performance.now();
   const input = new MB.Input({ formats: MB.ALL_FORMATS, source: new MB.UrlSource(sourceUrl) });
   const track = await input.getPrimaryVideoTrack();
@@ -137,6 +216,13 @@ window.cuetakeRender = async ({ sourceUrl, finalUrl, width, height, fps, duratio
 
   const chains = buildChains(camera.targets, viewport, camera);
   const toStage = width / viewport.width; // page fills the stage at zoom 1
+  const geometry = cursorGeometry(cursor);
+  // Rasterize the cursor for the closest zoom, oversampled; mipmaps cover smaller sizes.
+  const arrow = cursorSprite(cursor, toStage * camera.zoomLevel * 2);
+  const arrowTexture = compositor.sprite(arrow.canvas);
+  const pressList = presses(events);
+  const sparkReach = clickEffect.radius + clickEffect.length + 8;
+  let sparkTexture = null;
   let current = await reader.next(), next = await reader.next(), uploaded = null;
   if (!current) throw new Error('Source has no video frames');
   const origin = current.timestamp;
@@ -147,8 +233,20 @@ window.cuetakeRender = async ({ sourceUrl, finalUrl, width, height, fps, duratio
       const at = origin + Math.round(i * 1e6 / fps);
       while (next && next.timestamp <= at) { current.close(); current = next; next = await reader.next(); }
       if (uploaded !== current) { compositor.upload(current); uploaded = current; }
-      const crop = cropAt(chains, viewport, i / fps);
-      compositor.draw((crop.x + crop.w / 2) * toStage, (crop.y + crop.h / 2) * toStage, viewport.width / crop.w);
+      const t = i / fps, crop = cropAt(chains, viewport, t), zoom = viewport.width / crop.w;
+      compositor.frame((crop.x + crop.w / 2) * toStage, (crop.y + crop.h / 2) * toStage, zoom, draw => {
+        for (const spark of sparksAt(pressList, clickEffect, t)) {
+          // Each spark is drawn at its on-screen scale so the thin rays stay crisp.
+          const scale = toStage * zoom, size = Math.ceil(2 * sparkReach * scale);
+          const ctx = new OffscreenCanvas(size, size).getContext('2d');
+          ctx.scale(scale, scale);
+          drawSpark(ctx, sparkReach, sparkReach, spark.progress, clickEffect, cursor.color);
+          sparkTexture = compositor.sprite(ctx.canvas, sparkTexture, false);
+          draw(sparkTexture, [(spark.x - sparkReach) * toStage, (spark.y - sparkReach) * toStage, 2 * sparkReach * toStage, 2 * sparkReach * toStage]);
+        }
+        const point = pointerAt(pointer, t);
+        if (point) draw(arrowTexture, [(point.x - geometry.hotspot.x - arrow.margin) * toStage, (point.y - geometry.hotspot.y - arrow.margin) * toStage, arrow.width * toStage, arrow.height * toStage]);
+      });
       const frame = new VideoFrame(compositor.canvas, { timestamp: Math.round(i * 1e6 / fps), duration: Math.round(1e6 / fps) });
       encoder.encode(frame, { keyFrame: i % (fps * 2) === 0, ...(quantizer ? { avc: { quantizer } } : {}) });
       frame.close();

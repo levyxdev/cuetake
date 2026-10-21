@@ -74,7 +74,7 @@ Use actual locators for clicks. Canvas drags often require coordinates; derive o
 
 A copied scenario snapshot may import helper modules from its original project. It is a record of the scenario, not a bundled runnable archive. Keep business scenarios in their application repository.
 
-To edit a completed take, change `edit.json` (camera settings, target boxes and times, output), then run `cuetake render <take>`. The Scenario config only seeds the first Edit. Input changes require recording again; changing a baked-in arrow also requires a new capture. `render` automatically runs verification; `verify` checks without rendering.
+To edit a completed take, change `edit.json` (camera settings, target boxes and times, cursor, click effect, output), then run `cuetake render <take>`. The Scenario config only seeds the first Edit. Changing what happens on the page requires recording again. `render` automatically runs verification; `verify` checks without rendering.
 
 Output width and aspect ratio are independent of device scale. For example: a 1440×900 viewport at 2× produces a 2880×1800 source. At a 1.5× camera zoom, a 1920×1200 output can use the cropped source without enlarging its pixels. `output.quality` is the H.264 quantizer (10–40, default 22): lower is sharper and larger. Encoders without a quantizer mode fall back to a bitrate, recorded in `render.json`.
 

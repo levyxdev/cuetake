@@ -48,8 +48,7 @@ export async function recordScenario(scenarioPath, outputDir, options = {}) {
   await fs.copyFile(resolve(scenarioPath), join(dir, 'scenario.mjs'));
   try {
     const session = await startRecording(config.url, {
-      ...config.viewport, outputDir: dir, deferCapture: true, storageState: authState, clickEffect: config.clickEffect,
-      ...config.capture, cursorStyle: config.cursor.style, cursorSize: config.cursor.size, cursorColor: config.cursor.color,
+      ...config.viewport, ...config.capture, outputDir: dir, deferCapture: true, storageState: authState,
     });
     const page = getRecordingPage(session.sessionId);
     if (scenario.prepare) await scenario.prepare(page);

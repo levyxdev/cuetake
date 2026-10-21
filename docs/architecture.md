@@ -8,14 +8,14 @@ Agent + skill → business scenario → CLI → Playwright context → Chromium 
 
 The scenario controls story and timing. All pointer/camera coordinates are CSS pixels; the source uses device pixels. Device scale does not change the page layout. Render samples the latest Source frame at or before each output time, turning the variable-rate Source into a constant-rate Final and holding the last frame to the measured Take duration.
 
-`overlay.js` draws the arrow and click sparks inside the tab. The full-viewport canvas uses the device pixel ratio, draws only while sparks are active, and never intercepts input. Arrow color and spark core color match; dark outlines preserve contrast. Effects are baked into source video. No React dependency is needed.
+The Source holds only page pixels; `probe.js` hides the page cursor during Capture. Render draws the cursor from the Timeline's pointer path and a spark at each press, as WebGL sprites under the same camera, so a Take can be restyled without recording again (ADR 0002).
 
 ## Modules
 
 - `pipeline.js`: scenario validation, artifact lifecycle, render and verification.
 - `director.js`: timed interactions and focus targets.
 - `recorder.js` / `tab-capture.js`: supported HD capture only.
-- `overlay.js`: pointer and ClickSpark rendering.
+- `cursor.js`: cursor position, sparks and their drawing; shared by Node and the render page.
 - `camera.js`: camera chains and the crop at any time; shared by Node and the render page.
 - `render.js` / `render-page.js`: the Render driver and the in-browser compositor, encoder and inspector.
 - `probe.js`: in-page Timeline recording.

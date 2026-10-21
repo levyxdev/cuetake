@@ -2,6 +2,7 @@ import { test, expect } from 'bun:test';
 import { scenarioSchema, summarizeFrames } from '../src/pipeline.js';
 import { cameraTargets, createEdit } from '../src/edit.js';
 import { cropFor, buildChains, cropAt } from '../src/camera.js';
+import { pointerAt, presses, sparksAt } from '../src/cursor.js';
 
 test('rejects unsupported capture rates and odd H.264 output dimensions', () => {
   const base = { name: 'demo', url: 'https://example.com' };
@@ -63,4 +64,20 @@ test('within a chain the camera pans to arrive exactly when the next target fire
 test('typing holds the camera for the whole burst', () => {
   const [chain] = buildChains([{ t: 1, box: { x: 0, y: 0, width: 10, height: 10 }, until: 4 }], viewport, camera);
   expect(chain.unzoomAt).toBe(6);
+});
+
+test('the cursor interpolates the pointer path and is hidden before the first sample', () => {
+  const pointer = [[1, 0, 0], [2, 100, 50], [3, 100, 50]];
+  expect(pointerAt(pointer, 0.5)).toBeNull();
+  expect(pointerAt(pointer, 1.5)).toEqual({ x: 50, y: 25 });
+  expect(pointerAt(pointer, 9)).toEqual({ x: 100, y: 50 });
+});
+
+test('clicks and drag starts spark for the click effect duration', () => {
+  const list = presses([{ type: 'click', t: 1, x: 5, y: 6 }, { type: 'type', t: 2, end: 3 }, { type: 'drag', t: 4, end: 5, from: { x: 7, y: 8 }, to: { x: 9, y: 9 } }]);
+  expect(list).toEqual([{ t: 1, x: 5, y: 6 }, { t: 4, x: 7, y: 8 }]);
+  const effect = { style: 'spark', duration: 400 };
+  expect(sparksAt(list, effect, 1.2)).toEqual([{ x: 5, y: 6, progress: expect.closeTo(0.5, 6) }]);
+  expect(sparksAt(list, effect, 1.5)).toEqual([]);
+  expect(sparksAt(list, { ...effect, style: 'none' }, 1.2)).toEqual([]);
 });

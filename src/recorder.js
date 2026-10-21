@@ -3,7 +3,6 @@ import { randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { startTabCapture, stopTabCapture } from './tab-capture.js';
-import { injectDemoOverlay } from './overlay.js';
 import { installProbe } from './probe.js';
 
 let browser = null;
@@ -35,8 +34,7 @@ export function getRecordingPage(sessionId) {
 export async function beginCapture(sessionId) {
   const session = sessions.get(sessionId);
   if (!session || session.capture) throw new Error('Session is missing or already recording');
-  // Preparation may navigate through login; install the overlay only at the final document.
-  await injectDemoOverlay(session.page, session.options);
+  // Preparation may navigate through login; install the probe only at the final document.
   await installProbe(session.page);
   const capture = await startTabCapture(session.page, { width: session.width * session.resolutionScale, height: session.height * session.resolutionScale, fps: session.options.fps || 60, bitrate: 40_000_000 });
   session.capture = capture;
