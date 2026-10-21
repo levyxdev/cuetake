@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { injectDemoOverlay } from '../src/overlay.js';
 import { saveAuthState, resolveAuthProfile } from '../src/auth.js';
+import { installProbe, collectTimeline } from '../src/probe.js';
 
 test('spark is aligned to the click, outlined white, DPR sharp, and cleans up after animation', async () => {
   const browser = await chromium.launch({ headless: true });
@@ -60,4 +61,32 @@ test('local auth state restores cookie and localStorage without adding it to tak
     await expect(resolveAuthProfile('../escape')).rejects.toThrow();
     await restored.close();
   } finally { await browser.close(); if (old === undefined) delete process.env.CUETAKE_AUTH_DIR; else process.env.CUETAKE_AUTH_DIR = old; await fs.rm(directory, { recursive: true, force: true }); }
+}, 30_000);
+
+test('probe records the pointer path, clicks with their target box, drags and typing bursts', async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 640, height: 480 } });
+    await page.setContent('<button style="position:fixed;left:100px;top:100px;width:80px;height:40px">Go</button><input style="position:fixed;left:300px;top:100px;width:200px;height:30px">');
+    const startedAtMs = Date.now();
+    await installProbe(page);
+    await page.mouse.move(140, 120);
+    await page.mouse.click(140, 120);
+    await page.mouse.move(10, 300);
+    await page.mouse.down();
+    await page.mouse.move(200, 400, { steps: 5 });
+    await page.mouse.up();
+    await page.mouse.click(400, 115);
+    await page.keyboard.type('abc', { delay: 50 });
+    const timeline = await collectTimeline(page, startedAtMs);
+    expect(timeline.pointer.length).toBeGreaterThan(5);
+    expect(timeline.pointer.every(([t]) => t >= 0)).toBe(true);
+    expect(timeline.events.map(e => e.type)).toEqual(['click', 'drag', 'click', 'type']);
+    const [click, drag, , typing] = timeline.events;
+    expect(click).toMatchObject({ x: 140, y: 120, box: { x: 100, y: 100, width: 80, height: 40 } });
+    expect(drag).toMatchObject({ from: { x: 10, y: 300 }, to: { x: 200, y: 400 } });
+    expect(drag.end).toBeGreaterThanOrEqual(drag.t);
+    expect(typing.box).toMatchObject({ x: 300, width: 200 });
+    expect(typing.end).toBeGreaterThan(typing.t);
+  } finally { await browser.close(); }
 }, 30_000);

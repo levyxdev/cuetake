@@ -52,7 +52,7 @@ Only `name` and `url` are required in config. Other fields use the shown default
 
 `move` starts from (0,0). If preparation positioned the cursor elsewhere, initialize it with `await d.move(x, y, 0)` at the start of `run`.
 
-With explicit `focus` targets, the camera uses those targets. Otherwise it follows recorded clicks. Focus boxes always use CSS pixels, even when the source is captured at 2× scale. Nearby targets stay in one camera chain according to `holdPerTarget` and `chainGap`.
+With explicit `focus` targets, the camera uses those targets. Otherwise it follows the clicks, typing and drags the page observed, whether they came from the director or from Playwright input directly. Focus boxes always use CSS pixels, even when the source is captured at 2× scale. Nearby targets stay in one camera chain according to `holdPerTarget` and `chainGap`.
 
 Use actual locators for clicks. Canvas drags often require coordinates; derive or validate them for the configured viewport. Keep setup outside capture, hold important states, and assert meaningful application changes. An exception marks the take failed and closes the isolated browser.
 
@@ -60,12 +60,12 @@ Use actual locators for clicks. Canvas drags often require coordinates; derive o
 
 ```text
 <output>/<scenario>/<take>/
-  project.json       Configuration, status, application evidence, duration
+  project.json       Scenario config, status, application evidence, duration
   scenario.mjs       Snapshot of the original scenario module
-  source.webm        Original high-resolution VP9 capture
+  source.webm        Source: original high-resolution VP9 capture
   capture.json       Track settings and video frame callback observations
-  timeline.json      All recorded focus/click events
-  camera.json        Selected events used by the camera renderer
+  timeline.json      Timeline: pointer path, clicks, drags, typing and focus, in seconds and CSS pixels
+  edit.json          Edit: camera targets and settings, cursor, click effect, output
   poster.png         Final page state at native capture resolution
   final.mp4          H.264 camera composition
   verification.json Output metadata, decode result, capture observations
@@ -73,7 +73,7 @@ Use actual locators for clicks. Canvas drags often require coordinates; derive o
 
 A copied scenario snapshot may import helper modules from its original project. It is a record of the scenario, not a bundled runnable archive. Keep business scenarios in their application repository.
 
-To edit a completed take, change `project.json` camera/output fields or the event boxes and timestamps in `camera.json`, then run `cuetake render <take>`. Input changes require recording again; changing a baked-in arrow also requires a new capture. `render` automatically runs verification; `verify` checks without rendering.
+To edit a completed take, change `edit.json` (camera settings, target boxes and times, output), then run `cuetake render <take>`. The Scenario config only seeds the first Edit. Input changes require recording again; changing a baked-in arrow also requires a new capture. `render` automatically runs verification; `verify` checks without rendering.
 
 Output width and aspect ratio are independent of device scale. For example: a 1440×900 viewport at 2× produces a 2880×1800 source. At a 1.5× camera zoom, a 1920×1200 output can use the cropped source without enlarging its pixels.
 

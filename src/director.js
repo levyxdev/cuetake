@@ -1,5 +1,5 @@
 /** Timed, viewport-aligned interactions shared by all scenarios. */
-export function createDirector(page, startedAt, fps, events) {
+export function createDirector(page, startedAt, fps, focusTargets) {
   let cursor = { x: 0, y: 0 };
   const wait = ms => page.waitForTimeout(Math.max(0, ms));
   const time = () => (Date.now() - startedAt) / 1000;
@@ -15,14 +15,14 @@ export function createDirector(page, startedAt, fps, events) {
     }
     cursor = { x, y };
   }
-  const focus = (box, timestamp = time()) => events.push({ type: 'hover', timestamp, boundingBox: box });
+  // Clicks, typing and drags are recorded by the in-page probe; only deliberate focus lives here.
+  const focus = (box, t = time()) => focusTargets.push({ t, box });
   async function click(locator, duration = 450) {
     const target = typeof locator === 'string' ? page.locator(locator) : locator;
     const box = await target.boundingBox();
     if (!box) throw new Error('Click target has no visible bounding box');
     await move(box.x + box.width / 2, box.y + box.height / 2, duration);
     await target.click();
-    events.push({ type: 'click', timestamp: time(), boundingBox: box });
   }
   async function type(locator, text, msPerChar = 70) {
     await click(locator);

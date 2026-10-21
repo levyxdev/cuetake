@@ -1,9 +1,10 @@
 import { chromium } from 'playwright';
 import { randomUUID } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { startTabCapture, stopTabCapture } from './tab-capture.js';
 import { injectDemoOverlay } from './overlay.js';
+import { installProbe } from './probe.js';
 
 let browser = null;
 const sessions = new Map();
@@ -33,25 +34,23 @@ export function getRecordingPage(sessionId) {
 
 export async function beginCapture(sessionId) {
   const session = sessions.get(sessionId);
-  if (!session || session.timeline) throw new Error('Session is missing or already recording');
+  if (!session || session.capture) throw new Error('Session is missing or already recording');
   // Preparation may navigate through login; install the overlay only at the final document.
   await injectDemoOverlay(session.page, session.options);
+  await installProbe(session.page);
   const capture = await startTabCapture(session.page, { width: session.width * session.resolutionScale, height: session.height * session.resolutionScale, fps: session.options.fps || 60, bitrate: 40_000_000 });
-  session.timeline = { viewport: { width: session.width, height: session.height }, startedAt: capture.startedAt, capture: capture.settings, events: [] };
+  session.capture = capture;
   return capture;
 }
 
 export async function stopRecording(sessionId) {
   const session = sessions.get(sessionId);
-  if (!session?.timeline) throw new Error('Session has not started recording');
+  if (!session?.capture) throw new Error('Session has not started recording');
   const webmPath = join(session.outputDir, `recording-${sessionId}.webm`);
   const stats = await stopTabCapture(session.page, webmPath);
-  session.timeline.duration = stats.duration;
-  const timelinePath = webmPath.replace(/\.webm$/, '-timeline.json');
-  await writeFile(timelinePath, JSON.stringify(session.timeline, null, 2));
   await session.context.close();
   sessions.delete(sessionId);
-  return { webmPath, timelinePath, durationSeconds: stats.duration };
+  return { webmPath, durationSeconds: stats.duration };
 }
 
 export async function cleanup() {

@@ -8,7 +8,7 @@ Built entirely for AI agents, CueTake turns browser interactions into sharp prod
 - A viewport-aligned arrow and matching outlined ClickSpark with configurable size and timing.
 - Camera chains that zoom in, move between points of interest, and zoom out once.
 - A reusable CLI and JavaScript scenario API.
-- A separate folder for every take: source, camera edit, finished MP4, and verification.
+- A separate folder for every take: Source, Timeline, Edit, Final MP4, and verification.
 
 CueTake is not yet published to a package registry.
 
@@ -39,7 +39,7 @@ bun src/cli.js verify ./recordings/my-take
 bun src/cli.js login product-demo https://your-app.example/login
 ```
 
-`record` completes capture → render → verification and refuses an existing output folder. `render` uses the saved source and camera edit; it replaces the final video only after encoding succeeds. Clone a take folder to keep multiple edits.
+`record` completes capture → render → verification and refuses an existing output folder. `render` uses the saved Source, Timeline and Edit; it replaces the final video only after encoding succeeds. Clone a take folder to keep multiple edits.
 
 A successful command is a technical check, not an editorial approval. Watch the result before publishing.
 

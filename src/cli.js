@@ -13,7 +13,7 @@ const help = `CueTake ${pkg.version} — browser demos directed by code
   cuetake login <profile> <login-url>
 
 record captures, renders and verifies a new take; an existing directory is never overwritten.
-render reuses source.webm and camera.json, replacing final.mp4 only on success.
+render reuses source.webm, timeline.json and edit.json, replacing final.mp4 only on success.
 login opens a separate browser; close its window after logging in to save the profile.
 Scenario files are trusted JavaScript. Recording runs locally, without audio.
 `;

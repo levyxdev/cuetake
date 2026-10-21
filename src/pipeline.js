@@ -9,19 +9,20 @@ import { startRecording, getRecordingPage, beginCapture, stopRecording, cleanup 
 import { convertWithZoomMp4 } from './converter.js';
 import { resolveAuthProfile } from './auth.js';
 import { createDirector } from './director.js';
+import { collectTimeline } from './probe.js';
+import { editFields, editSchema, createEdit } from './edit.js';
 import pkg from '../package.json' with { type: 'json' };
 
 const exec = promisify(execFile);
+const SCHEMA_VERSION = 2;
 const evenSize = z.number().int().min(240).max(7680).refine(n => n % 2 === 0, 'Must be an even pixel count');
+/** Scenario config: capture settings plus the defaults that seed each Take's Edit. */
 export const scenarioSchema = z.object({
   name: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
   url: z.string().url().refine(s => /^https?:/.test(s), 'Capture requires HTTP(S)'),
   viewport: z.object({ width: evenSize, height: evenSize }).default({ width: 1440, height: 900 }),
   capture: z.object({ fps: z.union([z.literal(30), z.literal(60)]).default(60), resolutionScale: z.union([z.literal(1), z.literal(2)]).default(2) }).default({}),
-  cursor: z.object({ style: z.enum(['arrow', 'dot']).default('arrow'), size: z.number().min(12).max(64).default(24), color: z.string().regex(/^#[a-fA-F0-9]{6}$/).default('#ffffff') }).default({}),
-  clickEffect: z.object({ style: z.enum(['spark', 'none']).default('spark'), radius: z.number().min(8).max(80).default(32), length: z.number().min(4).max(40).default(16), count: z.number().int().min(4).max(16).default(8), duration: z.number().min(150).max(1000).default(420) }).default({}),
-  output: z.object({ width: evenSize.default(1920), crf: z.number().int().min(0).max(35).default(16) }).default({}),
-  camera: z.object({ zoomLevel: z.number().min(1).max(4).default(1.5), transitionDuration: z.number().min(0.1).max(3).default(0.48), panDuration: z.number().min(0.1).max(3).default(0.42), preLead: z.number().min(0).max(3).default(0.48), holdPerTarget: z.number().min(0.1).max(30).default(3), chainGap: z.number().min(0).max(30).default(5) }).default({}),
+  ...editFields,
 });
 const writeJson = (path, data) => fs.writeFile(path, JSON.stringify(data, null, 2) + '\n');
 const readJson = async path => JSON.parse(await fs.readFile(path, 'utf8'));
@@ -50,7 +51,7 @@ export async function recordScenario(scenarioPath, outputDir, options = {}) {
   const dir = resolve(outputDir || join('recordings', config.name, new Date().toISOString().replace(/[:.]/g, '-')));
   await fs.mkdir(resolve(dir, '..'), { recursive: true });
   await fs.mkdir(dir); // EEXIST is intentional, including for empty existing folders.
-  let project = { schemaVersion: 1, tool: 'CueTake', version: pkg.version, createdAt: new Date().toISOString(), status: 'recording', authenticated: Boolean(authState), config };
+  let project = { schemaVersion: SCHEMA_VERSION, tool: 'CueTake', version: pkg.version, createdAt: new Date().toISOString(), status: 'recording', authenticated: Boolean(authState), config };
   await writeJson(join(dir, 'project.json'), project);
   await fs.copyFile(resolve(scenarioPath), join(dir, 'scenario.mjs'));
   try {
@@ -62,19 +63,21 @@ export async function recordScenario(scenarioPath, outputDir, options = {}) {
     if (scenario.prepare) await scenario.prepare(page);
     await page.evaluate(() => document.fonts.ready);
     const capture = await beginCapture(session.sessionId);
-    const events = [];
-    const director = createDirector(page, Date.parse(capture.startedAt), config.capture.fps, events);
+    const startedAtMs = Date.parse(capture.startedAt);
+    const focus = [];
+    const director = createDirector(page, startedAtMs, config.capture.fps, focus);
     const evidence = await scenario.run(director);
     await page.screenshot({ path: join(dir, 'poster.png') });
+    const observed = await collectTimeline(page, startedAtMs);
     const stopped = await stopRecording(session.sessionId);
     await fs.rename(stopped.webmPath, join(dir, 'source.webm'));
     await fs.rename(stopped.webmPath.replace(/\.webm$/, '-capture.json'), join(dir, 'capture.json'));
-    const timeline = await readJson(stopped.timelinePath);
-    timeline.events = events;
+    const timeline = {
+      schemaVersion: SCHEMA_VERSION, viewport: config.viewport, scale: config.capture.resolutionScale, duration: stopped.durationSeconds,
+      pointer: observed.pointer, events: [...observed.events, ...focus.map(f => ({ type: 'focus', ...f }))].sort((a, b) => a.t - b.t),
+    };
     await writeJson(join(dir, 'timeline.json'), timeline);
-    await fs.unlink(stopped.timelinePath);
-    const focusEvents = events.filter(e => e.type === 'hover');
-    await writeJson(join(dir, 'camera.json'), { ...timeline, events: focusEvents.length ? focusEvents : events });
+    await writeJson(join(dir, 'edit.json'), createEdit(config, timeline, focus));
     project = { ...project, status: 'captured', duration: stopped.durationSeconds, evidence: evidence ?? null };
     await writeJson(join(dir, 'project.json'), project);
   } catch (error) {
@@ -86,15 +89,21 @@ export async function recordScenario(scenarioPath, outputDir, options = {}) {
   return { directory: dir, final: join(dir, 'final.mp4'), verification };
 }
 
+/** Reads a Take's project, Timeline and Edit, refusing Takes from an older schema. */
+async function loadTake(dir) {
+  const project = await readJson(join(dir, 'project.json'));
+  if (project.schemaVersion !== SCHEMA_VERSION) throw new Error(`${dir} was recorded by an older CueTake (schema ${project.schemaVersion ?? 1}); record it again`);
+  return { project, config: scenarioSchema.parse(project.config), timeline: await readJson(join(dir, 'timeline.json')), edit: editSchema.parse(await readJson(join(dir, 'edit.json'))) };
+}
+
 export async function renderTake(directory) {
   const dir = resolve(directory);
-  const project = await readJson(join(dir, 'project.json'));
-  const config = scenarioSchema.parse(project.config);
+  const { project, config, timeline, edit } = await loadTake(dir);
   // Render to a temporary output; preserve the last complete final if encoding fails.
   const temporary = join(dir, 'final.pending.mp4');
   try {
-    await convertWithZoomMp4(join(dir, 'source.webm'), join(dir, 'camera.json'), {
-      ...config.camera, ...config.output, fps: config.capture.fps, outputPath: temporary,
+    await convertWithZoomMp4(join(dir, 'source.webm'), timeline, edit.camera.targets, {
+      ...edit.camera, ...edit.output, fps: config.capture.fps, outputPath: temporary,
     });
     await fs.rename(temporary, join(dir, 'final.mp4'));
     await fs.rm(join(dir, 'verification.json'), { force: true });
@@ -112,14 +121,13 @@ export function summarizeFrames(frames, duration) {
 
 export async function verifyTake(directory) {
   const dir = resolve(directory);
-  const project = await readJson(join(dir, 'project.json'));
-  const config = scenarioSchema.parse(project.config);
+  const { project, config, edit } = await loadTake(dir);
   const { stdout } = await run('ffprobe', ['-v', 'error', '-show_entries', 'stream=codec_name,width,height,avg_frame_rate,nb_frames', '-show_entries', 'format=duration,size', '-of', 'json', join(dir, 'final.mp4')]);
   const media = JSON.parse(stdout);
   const video = media.streams[0];
   const [numerator, denominator] = video.avg_frame_rate.split('/').map(Number);
-  if (video.width !== config.output.width || Math.abs(numerator / denominator - config.capture.fps) > 0.01) throw new Error('Rendered dimensions / FPS differ from project config');
-  const expectedHeight = Math.round(config.output.width * config.viewport.height / config.viewport.width / 2) * 2;
+  if (video.width !== edit.output.width || Math.abs(numerator / denominator - config.capture.fps) > 0.01) throw new Error('Rendered dimensions / FPS differ from project config');
+  const expectedHeight = Math.round(edit.output.width * config.viewport.height / config.viewport.width / 2) * 2;
   if (video.height !== expectedHeight || Math.abs(Number(media.format.duration) - project.duration) > 0.6) throw new Error('Rendered aspect ratio / duration differs from capture');
   const { stderr } = await run('ffmpeg', ['-v', 'error', '-i', join(dir, 'final.mp4'), '-f', 'null', '-']);
   if (stderr.trim()) throw new Error(`Decode reported errors: ${stderr}`);

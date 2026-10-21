@@ -1,18 +1,17 @@
 import { execFile } from 'node:child_process';
-import { access, stat, readFile } from 'node:fs/promises';
+import { access, stat } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { buildFFmpegZoomFilter } from './zoom.js';
 const exec = promisify(execFile);
 const run = (cmd, args) => exec(cmd, args, { timeout: 180_000, maxBuffer: 8 * 1024 * 1024 });
 const checkFfmpeg = () => run('ffmpeg', ['-version']);
-const loadTimeline = async path => JSON.parse(await readFile(path, 'utf8'));
 
-export async function convertWithZoomMp4(webmPath, timelinePath, options = {}) {
+export async function convertWithZoomMp4(webmPath, timeline, targets, options = {}) {
   await checkFfmpeg();
   await access(webmPath);
 
-  const timeline = await loadTimeline(timelinePath);
-  const zoomFilter = buildFFmpegZoomFilter(timeline, {
+  const camera = { viewport: timeline.viewport, events: targets.map(target => ({ type: 'hover', timestamp: target.t, boundingBox: target.box })) };
+  const zoomFilter = buildFFmpegZoomFilter(camera, {
     zoomLevel: options.zoomLevel || 2.5,
     transitionDuration: options.transitionDuration || 0.35,
     holdPerTarget: options.holdPerTarget || 0.8,
@@ -53,6 +52,6 @@ export async function convertWithZoomMp4(webmPath, timelinePath, options = {}) {
     mp4Path,
     sizeBytes: mp4Stat.size,
     sizeMB: (mp4Stat.size / 1024 / 1024).toFixed(2),
-    zoomEvents: timeline.events.filter(e => e.boundingBox).length,
+    zoomEvents: targets.length,
   };
 }
