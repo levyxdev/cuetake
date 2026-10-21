@@ -7,20 +7,32 @@ export async function startTabCapture(page, options) {
   let timeout;
   try {
     return await Promise.race([page.evaluate(async ({ fps, width, height, bitrate }) => {
+    // The stage names the step a stalled start is waiting on.
+    window.__cuetakeCaptureStage = 'getDisplayMedia';
     const stream = await navigator.mediaDevices.getDisplayMedia({
       video: { width: { ideal: width }, height: { ideal: height }, frameRate: { ideal: fps, max: fps } },
       audio: false,
       preferCurrentTab: true,
     });
+    // Headless Chromium paints only on change, so a settled page sends no frame and play() never
+    // resolves. A near-invisible pixel flickers until recording starts to force paints.
+    const nudge = Object.assign(document.createElement('div'), { style: 'position:fixed;left:0;top:0;width:1px;height:1px;pointer-events:none;z-index:2147483647' });
+    document.documentElement.append(nudge);
+    let flip = false;
+    const nudging = setInterval(() => { flip = !flip; nudge.style.background = flip ? 'rgba(0,0,0,0.004)' : 'rgba(0,0,0,0.002)'; }, 50);
+    const stopNudging = () => { clearInterval(nudging); nudge.remove(); };
     try {
       const track = stream.getVideoTracks()[0];
+      window.__cuetakeCaptureStage = 'applyConstraints';
       await track.applyConstraints({ width, height, frameRate: fps });
       const video = document.createElement('video');
       video.srcObject = stream;
       video.muted = true;
       // Subscribe before play: a static tab may never produce a second frame.
       const firstFrame = new Promise(resolve => video.requestVideoFrameCallback(resolve));
+      window.__cuetakeCaptureStage = 'play';
       await video.play();
+      window.__cuetakeCaptureStage = 'first frame';
       await firstFrame;
       const mimeType = 'video/webm;codecs=vp9';
       if (!MediaRecorder.isTypeSupported(mimeType)) throw new Error('VP9 tab capture unavailable');
@@ -34,17 +46,22 @@ export async function startTabCapture(page, options) {
       };
       recorder.ondataavailable = event => { if (event.data.size) state.chunks.push(event.data); };
       recorder.onerror = event => { state.error = event.error?.message || 'MediaRecorder error'; };
+      window.__cuetakeCaptureStage = 'MediaRecorder start';
       await new Promise(resolve => {
-        recorder.onstart = () => { state.startedAtMs = Date.now(); video.requestVideoFrameCallback(tick); resolve(); };
+        recorder.onstart = () => { state.startedAtMs = Date.now(); stopNudging(); video.requestVideoFrameCallback(tick); resolve(); };
         recorder.start(1000);
       });
       return { startedAt: new Date(state.startedAtMs).toISOString(), settings: state.settings };
     } catch (error) {
+      stopNudging();
       stream.getTracks().forEach(track => track.stop());
       throw error;
     }
   }, options), new Promise((_, reject) => {
-    timeout = setTimeout(() => reject(new Error('Tab capture did not start within 15 seconds')), 15_000);
+    timeout = setTimeout(async () => {
+      const stage = await page.evaluate(() => window.__cuetakeCaptureStage).catch(() => 'unknown');
+      reject(new Error(`Tab capture did not start within 15 seconds (waiting on: ${stage})`));
+    }, 15_000);
   })]);
   } finally { clearTimeout(timeout); }
 }
