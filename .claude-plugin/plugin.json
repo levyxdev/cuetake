@@ -15,7 +15,6 @@
     "screen-recording",
     "video",
     "playwright",
-    "browser",
-    "ffmpeg"
+    "browser"
   ]
 }

@@ -1,19 +1,16 @@
 import fs from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { chromium } from 'playwright';
 import { z } from 'zod';
 import { startRecording, getRecordingPage, beginCapture, stopRecording, cleanup } from './recorder.js';
-import { convertWithZoomMp4 } from './converter.js';
+import { renderFinal, inspectFinal, outputSize } from './render.js';
 import { resolveAuthProfile } from './auth.js';
 import { createDirector } from './director.js';
 import { collectTimeline } from './probe.js';
 import { editFields, editSchema, createEdit } from './edit.js';
 import pkg from '../package.json' with { type: 'json' };
 
-const exec = promisify(execFile);
 const SCHEMA_VERSION = 2;
 const evenSize = z.number().int().min(240).max(7680).refine(n => n % 2 === 0, 'Must be an even pixel count');
 /** Scenario config: capture settings plus the defaults that seed each Take's Edit. */
@@ -26,14 +23,9 @@ export const scenarioSchema = z.object({
 });
 const writeJson = (path, data) => fs.writeFile(path, JSON.stringify(data, null, 2) + '\n');
 const readJson = async path => JSON.parse(await fs.readFile(path, 'utf8'));
-const run = (command, args) => exec(command, args, { timeout: 180_000, maxBuffer: 8 * 1024 * 1024 });
 
 export async function doctor() {
   const checks = [];
-  for (const binary of ['ffmpeg', 'ffprobe']) {
-    try { const { stdout } = await run(binary, ['-version']); checks.push({ name: binary, ok: true, version: stdout.split('\n')[0] }); }
-    catch { checks.push({ name: binary, ok: false, fix: `Install ${binary === 'ffprobe' ? 'FFmpeg (includes ffprobe)' : 'FFmpeg'} using your system package manager.` }); }
-  }
   const browserPath = chromium.executablePath();
   try { await fs.access(browserPath); checks.push({ name: 'chromium', ok: true, path: browserPath }); }
   catch { checks.push({ name: 'chromium', ok: false, fix: 'PLAYWRIGHT_SKIP_BROWSER_GC=1 bunx playwright install chromium' }); }
@@ -102,10 +94,9 @@ export async function renderTake(directory) {
   // Render to a temporary output; preserve the last complete final if encoding fails.
   const temporary = join(dir, 'final.pending.mp4');
   try {
-    await convertWithZoomMp4(join(dir, 'source.webm'), timeline, edit.camera.targets, {
-      ...edit.camera, ...edit.output, fps: config.capture.fps, outputPath: temporary,
-    });
+    const render = await renderFinal({ sourcePath: join(dir, 'source.webm'), outputPath: temporary, timeline, edit, fps: config.capture.fps });
     await fs.rename(temporary, join(dir, 'final.mp4'));
+    await writeJson(join(dir, 'render.json'), render);
     await fs.rm(join(dir, 'verification.json'), { force: true });
     await writeJson(join(dir, 'project.json'), { ...project, status: 'rendered' });
   } catch (error) { await fs.rm(temporary, { force: true }); throw error; }
@@ -121,16 +112,16 @@ export function summarizeFrames(frames, duration) {
 
 export async function verifyTake(directory) {
   const dir = resolve(directory);
-  const { project, config, edit } = await loadTake(dir);
-  const { stdout } = await run('ffprobe', ['-v', 'error', '-show_entries', 'stream=codec_name,width,height,avg_frame_rate,nb_frames', '-show_entries', 'format=duration,size', '-of', 'json', join(dir, 'final.mp4')]);
-  const media = JSON.parse(stdout);
-  const video = media.streams[0];
-  const [numerator, denominator] = video.avg_frame_rate.split('/').map(Number);
-  if (video.width !== edit.output.width || Math.abs(numerator / denominator - config.capture.fps) > 0.01) throw new Error('Rendered dimensions / FPS differ from project config');
-  const expectedHeight = Math.round(edit.output.width * config.viewport.height / config.viewport.width / 2) * 2;
-  if (video.height !== expectedHeight || Math.abs(Number(media.format.duration) - project.duration) > 0.6) throw new Error('Rendered aspect ratio / duration differs from capture');
-  const { stderr } = await run('ffmpeg', ['-v', 'error', '-i', join(dir, 'final.mp4'), '-f', 'null', '-']);
-  if (stderr.trim()) throw new Error(`Decode reported errors: ${stderr}`);
+  const { project, config, timeline, edit } = await loadTake(dir);
+  const media = await inspectFinal(join(dir, 'final.mp4'));
+  const expected = { ...outputSize(edit, timeline.viewport), fps: config.capture.fps, frames: Math.round(project.duration * config.capture.fps) };
+  const problems = [
+    media.width !== expected.width || media.height !== expected.height ? `size ${media.width}×${media.height}, expected ${expected.width}×${expected.height}` : null,
+    Math.abs(media.fps - expected.fps) > 0.01 ? `${media.fps} fps, expected ${expected.fps}` : null,
+    media.packets !== expected.frames ? `${media.packets} frames, expected ${expected.frames}` : null,
+    media.decodedFrames !== media.packets ? `only ${media.decodedFrames} of ${media.packets} frames decoded` : null,
+  ].filter(Boolean);
+  if (problems.length) throw new Error(`Final failed verification: ${problems.join('; ')}`);
   const capture = await readJson(join(dir, 'capture.json'));
   const verification = { passed: true, checkedAt: new Date().toISOString(), media, source: { settings: capture.settings, ...summarizeFrames(capture.frames, capture.duration) }, fullDecode: 'passed' };
   await writeJson(join(dir, 'verification.json'), verification);

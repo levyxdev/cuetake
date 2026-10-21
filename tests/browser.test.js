@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import { injectDemoOverlay } from '../src/overlay.js';
 import { saveAuthState, resolveAuthProfile } from '../src/auth.js';
 import { installProbe, collectTimeline } from '../src/probe.js';
+import { renderFinal, inspectFinal, extractFrame } from '../src/render.js';
+import { editSchema } from '../src/edit.js';
 
 test('spark is aligned to the click, outlined white, DPR sharp, and cleans up after animation', async () => {
   const browser = await chromium.launch({ headless: true });
@@ -90,3 +92,53 @@ test('probe records the pointer path, clicks with their target box, drags and ty
     expect(typing.end).toBeGreaterThan(typing.t);
   } finally { await browser.close(); }
 }, 30_000);
+
+/** A VP9 WebM of a black 640×480 stage with a red square, recorded like a real Source. */
+async function syntheticSource(browser, seconds) {
+  const page = await browser.newPage();
+  const base64 = await page.evaluate(async ms => {
+    const canvas = Object.assign(document.createElement('canvas'), { width: 640, height: 480 });
+    const ctx = canvas.getContext('2d');
+    const paint = () => { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 640, 480); ctx.fillStyle = '#f00'; ctx.fillRect(480, 200, 40, 40); };
+    paint();
+    const recorder = new MediaRecorder(canvas.captureStream(30), { mimeType: 'video/webm;codecs=vp9' });
+    const chunks = [];
+    recorder.ondataavailable = e => chunks.push(e.data);
+    const timer = setInterval(paint, 33);
+    recorder.start();
+    await new Promise(r => setTimeout(r, ms));
+    recorder.stop();
+    await new Promise(r => { recorder.onstop = r; });
+    clearInterval(timer);
+    const bytes = new Uint8Array(await new Blob(chunks).arrayBuffer());
+    let binary = '';
+    for (const b of bytes) binary += String.fromCharCode(b);
+    return btoa(binary);
+  }, seconds * 1000);
+  await page.close();
+  return Buffer.from(base64, 'base64');
+}
+
+test('Render maps CSS camera targets onto the 2× Source and holds the last frame to the Take duration', async () => {
+  const dir = await fs.mkdtemp(join(tmpdir(), 'cuetake-render-'));
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const sourcePath = join(dir, 'source.webm'), outputPath = join(dir, 'final.mp4');
+    await fs.writeFile(sourcePath, await syntheticSource(browser, 0.6));
+    const edit = editSchema.parse({ schemaVersion: 2, output: { width: 320 }, camera: { zoomLevel: 2, transitionDuration: 0.1, preLead: 0.1, holdPerTarget: 2, targets: [{ t: 0.2, box: { x: 240, y: 100, width: 20, height: 20 } }] } });
+    await renderFinal({ sourcePath, outputPath, timeline: { viewport: { width: 320, height: 240 }, duration: 1.5 }, edit, fps: 30 });
+    expect(await inspectFinal(outputPath)).toMatchObject({ width: 320, height: 240, fps: 30, packets: 45, decodedFrames: 45 });
+    const page = await browser.newPage();
+    const pixel = await page.evaluate(async ([png, points]) => {
+      const image = new Image();
+      image.src = `data:image/png;base64,${png}`;
+      await image.decode();
+      const ctx = Object.assign(document.createElement('canvas'), { width: image.width, height: image.height }).getContext('2d');
+      ctx.drawImage(image, 0, 0);
+      return points.map(([x, y]) => [...ctx.getImageData(x, y, 1, 1).data.slice(0, 3)]);
+    }, [(await extractFrame(outputPath, 0.5)).toString('base64'), [[180, 120], [250, 110]]]);
+    expect(pixel[0][0]).toBeGreaterThan(180);
+    expect(pixel[0][1]).toBeLessThan(60);
+    expect(pixel[1][0]).toBeLessThan(40);
+  } finally { await browser.close(); await fs.rm(dir, { recursive: true, force: true }); }
+}, 60_000);

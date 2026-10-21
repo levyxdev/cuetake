@@ -10,7 +10,7 @@ export const config = {
   capture: { fps: 60, resolutionScale: 2 },
   cursor: { style: 'arrow', size: 24, color: '#ffffff' },
   clickEffect: { style: 'spark', radius: 32, length: 16, count: 8, duration: 420 },
-  output: { width: 1920, crf: 16 },
+  output: { width: 1920, quality: 22 },
   camera: {
     zoomLevel: 1.5,
     transitionDuration: 0.48,
@@ -67,7 +67,8 @@ Use actual locators for clicks. Canvas drags often require coordinates; derive o
   timeline.json      Timeline: pointer path, clicks, drags, typing and focus, in seconds and CSS pixels
   edit.json          Edit: camera targets and settings, cursor, click effect, output
   poster.png         Final page state at native capture resolution
-  final.mp4          H.264 camera composition
+  final.mp4          Final: H.264 camera composition
+  render.json        Encoder, rate control and GPU used by the last Render
   verification.json Output metadata, decode result, capture observations
 ```
 
@@ -75,6 +76,6 @@ A copied scenario snapshot may import helper modules from its original project. 
 
 To edit a completed take, change `edit.json` (camera settings, target boxes and times, output), then run `cuetake render <take>`. The Scenario config only seeds the first Edit. Input changes require recording again; changing a baked-in arrow also requires a new capture. `render` automatically runs verification; `verify` checks without rendering.
 
-Output width and aspect ratio are independent of device scale. For example: a 1440×900 viewport at 2× produces a 2880×1800 source. At a 1.5× camera zoom, a 1920×1200 output can use the cropped source without enlarging its pixels.
+Output width and aspect ratio are independent of device scale. For example: a 1440×900 viewport at 2× produces a 2880×1800 source. At a 1.5× camera zoom, a 1920×1200 output can use the cropped source without enlarging its pixels. `output.quality` is the H.264 quantizer (10–40, default 22): lower is sharper and larger. Encoders without a quantizer mode fall back to a bitrate, recorded in `render.json`.
 
 Click effects default to a white, dark-outlined spark matching the arrow. Set style to `none` to disable. Geometry is in CSS pixels and duration is milliseconds. Login is passed separately as a named runtime auth profile, never embedded in scenario config; see [authentication.md](authentication.md).

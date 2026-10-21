@@ -16,12 +16,12 @@
     "recording",
     "demo",
     "playwright",
-    "ffmpeg",
     "cuetake"
   ],
   "author": "CueTake contributors",
   "license": "MIT",
   "dependencies": {
+    "mediabunny": "1.62.0",
     "playwright": "1.63.0",
     "zod": "^3.23.0"
   },

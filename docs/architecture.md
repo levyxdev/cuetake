@@ -4,9 +4,9 @@ CueTake is an agent-facing local recording runtime. Settled decisions live in [d
 
 ## Pipeline
 
-Agent + skill → business scenario → CLI → Playwright context → Chromium tab capture → VP9 source → FFmpeg camera composition → H.264 final + verification.
+Agent + skill → business scenario → CLI → Playwright context → Chromium tab capture → VP9 Source + Timeline → Render in headless Chromium (WebCodecs decode, WebGL compose, H.264 encode) → Final + verification.
 
-The scenario controls story and timing. All pointer/camera coordinates are CSS pixels; the source uses device pixels. Device scale does not change the page layout. Camera frames use zoompan because the inherited time-dependent crop widths were only evaluated at initialization. The final static frame is held to the measured take duration before camera evaluation.
+The scenario controls story and timing. All pointer/camera coordinates are CSS pixels; the source uses device pixels. Device scale does not change the page layout. Render samples the latest Source frame at or before each output time, turning the variable-rate Source into a constant-rate Final and holding the last frame to the measured Take duration.
 
 `overlay.js` draws the arrow and click sparks inside the tab. The full-viewport canvas uses the device pixel ratio, draws only while sparks are active, and never intercepts input. Arrow color and spark core color match; dark outlines preserve contrast. Effects are baked into source video. No React dependency is needed.
 
@@ -16,7 +16,10 @@ The scenario controls story and timing. All pointer/camera coordinates are CSS p
 - `director.js`: timed interactions and focus targets.
 - `recorder.js` / `tab-capture.js`: supported HD capture only.
 - `overlay.js`: pointer and ClickSpark rendering.
-- `zoom.js` / `converter.js`: camera chain and FFmpeg encoding.
+- `camera.js`: camera chains and the crop at any time; shared by Node and the render page.
+- `render.js` / `render-page.js`: the Render driver and the in-browser compositor, encoder and inspector.
+- `probe.js`: in-page Timeline recording.
+- `edit.js`: the Edit schema and its first version from a Scenario.
 - `auth.js`: the `login` command and Auth profile storage.
 - `cli.js`: the command interface, the only entry point.
 

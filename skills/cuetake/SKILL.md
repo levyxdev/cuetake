@@ -13,7 +13,7 @@ CueTake is a local execution engine for AI agents. You direct the story; CueTake
 2. Run `doctor`. Resolve missing dependencies explicitly; this does not start the application's dev server.
 3. Write a trusted `.mjs` scenario in the business project. `prepare(page)` loads examples/assets before capture. `run(d)` performs timed interactions and returns evidence of the demonstrated changes. Never embed credentials or copied browser state in a scenario.
 4. Run `record` with the scenario path and a new output directory. It captures, renders and verifies in the foreground, then prints the verification report; a failure exits non-zero. Recording takes the scenario's duration plus rendering time, so run it in the background when your shell would time out.
-5. Read verification and application evidence. Inspect frames around clicks and camera transitions and play the final MP4. Deliver the absolute final path and relevant limitations. Technical verification is not editorial approval or authorization to publish.
+5. Read verification and application evidence. Inspect frames around clicks and camera transitions with `frame <take> <seconds>`, which saves a PNG you can view, and play the final MP4. Deliver the absolute final path and relevant limitations. Technical verification is not editorial approval or authorization to publish.
 
 Run `render` after changing a take's `edit.json`. This reuses source.webm. Cursor and spark pixels are baked into capture, so changing them requires recording again. Preserve versions by copying a take before editing it.
 
@@ -44,7 +44,8 @@ bun <cuetake-root>/src/cli.js record <scenario.mjs> --out <new-take-directory>
 bun <cuetake-root>/src/cli.js record <scenario.mjs> --out <new-take-directory> --auth-profile product-demo
 bun <cuetake-root>/src/cli.js render <take-directory>
 bun <cuetake-root>/src/cli.js verify <take-directory>
+bun <cuetake-root>/src/cli.js frame <take-directory> 2.5
 bun <cuetake-root>/src/cli.js login product-demo https://your-app.example/login
 ```
 
-The skill is portable guidance; installing only this file does not install the runtime, browser, or FFmpeg. Read `docs/distribution.md` for integration and release status.
+The skill is portable guidance; installing only this file does not install the runtime or the browser. Read `docs/distribution.md` for integration and release status.

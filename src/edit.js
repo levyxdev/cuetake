@@ -7,7 +7,8 @@ const box = z.object({ x: z.number(), y: z.number(), width: z.number().nonnegati
 export const editFields = {
   cursor: z.object({ style: z.enum(['arrow', 'dot']).default('arrow'), size: z.number().min(12).max(64).default(24), color: z.string().regex(/^#[a-fA-F0-9]{6}$/).default('#ffffff') }).default({}),
   clickEffect: z.object({ style: z.enum(['spark', 'none']).default('spark'), radius: z.number().min(8).max(80).default(32), length: z.number().min(4).max(40).default(16), count: z.number().int().min(4).max(16).default(8), duration: z.number().min(150).max(1000).default(420) }).default({}),
-  output: z.object({ width: evenSize.default(1920), crf: z.number().int().min(0).max(35).default(16) }).default({}),
+  // quality is the H.264 quantizer: lower is sharper and larger. Encoders without quantizer mode use a bitrate.
+  output: z.object({ width: evenSize.default(1920), quality: z.number().int().min(10).max(40).default(22) }).default({}),
   camera: z.object({ zoomLevel: z.number().min(1).max(4).default(1.5), transitionDuration: z.number().min(0.1).max(3).default(0.48), panDuration: z.number().min(0.1).max(3).default(0.42), preLead: z.number().min(0).max(3).default(0.48), holdPerTarget: z.number().min(0.1).max(30).default(3), chainGap: z.number().min(0).max(30).default(5) }).default({}),
 };
 

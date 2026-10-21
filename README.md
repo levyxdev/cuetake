@@ -14,7 +14,7 @@ CueTake is not yet published to a package registry.
 
 ## Run from source
 
-Requirements: Bun, FFmpeg with H.264 encoding, and Playwright Chromium. The verified capture environment is macOS with headed Chromium.
+Requirements: Bun and Playwright Chromium. The verified capture environment is macOS with headed Chromium.
 
 ```sh
 bun install --frozen-lockfile
@@ -36,6 +36,7 @@ bun src/cli.js doctor
 bun src/cli.js record ./my-scenario.mjs --out ./recordings/my-take
 bun src/cli.js render ./recordings/my-take
 bun src/cli.js verify ./recordings/my-take
+bun src/cli.js frame ./recordings/my-take 2.5
 bun src/cli.js login product-demo https://your-app.example/login
 ```
 
@@ -45,7 +46,7 @@ A successful command is a technical check, not an editorial approval. Watch the 
 
 ## How it works
 
-Playwright drives an isolated Chromium tab. Chromium captures the tab at device-pixel resolution using `getDisplayMedia`; a VP9 `MediaRecorder` saves the source. The cursor is drawn inside the page at the actual input coordinates. FFmpeg then renders the camera path into an H.264 MP4.
+Playwright drives an isolated Chromium tab. Chromium captures the tab at device-pixel resolution using `getDisplayMedia`; a VP9 `MediaRecorder` saves the source. The cursor is drawn inside the page at the actual input coordinates. Render then composes the camera path in a headless Chromium page with WebGL and encodes H.264 with WebCodecs; see [ADR 0001](docs/adr/0001-render-in-browser-with-webgl-and-webcodecs.md).
 
 Source capture is variable frame rate. Static scenes may drop to approximately one captured frame per second, and busy scenes can drop frames. A 60 fps output does not imply 60 unique source frames every second. Capture callback statistics and output metadata are retained in each take. No motion interpolation is used.
 
@@ -63,4 +64,4 @@ bun test tests/pipeline.test.js
 bun test tests/browser.test.js
 ```
 
-Tests verify configuration validation and actual FFmpeg camera geometry at a 2× capture scale. No build step is required. Do not commit recordings, browser profiles, credentials, or product-specific scenarios into this generic tool repository.
+`pipeline.test.js` covers configuration and camera math; `browser.test.js` covers the probe, sparks, Auth profiles and Render geometry at a 2× capture scale. No build step is required. Do not commit recordings, browser profiles, credentials, or product-specific scenarios into this generic tool repository.
