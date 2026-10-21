@@ -5,12 +5,12 @@ description: Plan, record, refine, and verify browser product demo videos with t
 
 # CueTake agent operating manual
 
-CueTake is a local execution engine for AI agents. You direct the story; CueTake captures the browser and renders the finished take. Read [scenarios.md](scenarios.md) when writing a scenario and [authentication.md](authentication.md) when a page needs login.
+CueTake is a local execution engine for AI agents. You direct the story; CueTake captures the browser and renders the finished take. Run every command through `scripts/cuetake` in this skill's folder; it launches the pinned CueTake version with `npx`. Read [scenarios.md](scenarios.md) when writing a scenario, [authentication.md](authentication.md) when a page needs login, and [setup.md](setup.md) when Node or `npx` is missing or `doctor` reports a failed check.
 
 ## Workflow
 
 1. Infer the audience, demonstrated outcome, duration and framing from the request. Inspect the actual application with the available browser tool; use real locators and measured canvas coordinates.
-2. Run `doctor`. For a missing browser, ask the user before running `install-browser` (about 150 MB). This does not start the application's dev server.
+2. Run `doctor`. If it fails, follow [setup.md](setup.md): nothing installs without the user's agreement. This does not start the application's dev server.
 3. Write a trusted `.mjs` scenario in the business project. `prepare(page)` loads examples/assets before capture. `run(d)` performs timed interactions and returns evidence of the demonstrated changes. Never embed credentials or copied browser state in a scenario.
 4. Run `record` with the scenario path and a new output directory. It captures, renders and verifies in the foreground, then prints the verification report; a failure exits non-zero. Recording takes the scenario's duration plus rendering time, so run it in the background when your shell would time out.
 5. Read verification and application evidence. Inspect frames around clicks and camera transitions with `frame <take> <seconds>`, which saves a PNG you can view, and play the final MP4. Deliver the absolute final path and relevant limitations. Technical verification is not editorial approval or authorization to publish.
@@ -39,13 +39,14 @@ Capture is variable frame rate: static scenes reduce cadence and moving scenes c
 
 ## Commands
 
-```sh
-bun <cuetake-root>/src/cli.js record <scenario.mjs> --out <new-take-directory>
-bun <cuetake-root>/src/cli.js record <scenario.mjs> --out <new-take-directory> --auth-profile product-demo
-bun <cuetake-root>/src/cli.js render <take-directory>
-bun <cuetake-root>/src/cli.js verify <take-directory>
-bun <cuetake-root>/src/cli.js frame <take-directory> 2.5
-bun <cuetake-root>/src/cli.js login product-demo https://your-app.example/login
-```
+`<skill>` is this skill's folder.
 
-The skill is portable guidance; installing only this file does not install the runtime or the browser. Read `docs/distribution.md` for integration and release status.
+```sh
+<skill>/scripts/cuetake doctor
+<skill>/scripts/cuetake install-browser
+<skill>/scripts/cuetake record <scenario.mjs> --out <new-take-directory> [--auth-profile product-demo] [--headed]
+<skill>/scripts/cuetake render <take-directory>
+<skill>/scripts/cuetake verify <take-directory>
+<skill>/scripts/cuetake frame <take-directory> 2.5
+<skill>/scripts/cuetake login product-demo https://your-app.example/login
+```

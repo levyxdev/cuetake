@@ -4,13 +4,21 @@
 
 Built entirely for AI agents, CueTake turns browser interactions into sharp product demo videos with a precise cursor and continuous camera moves. Give an agent a scenario, then capture, render, and verify the result locally.
 
-- Retina tab capture with configurable 30 / 60 fps and a 2× pixel scale.
-- A viewport-aligned arrow and matching outlined ClickSpark with configurable size and timing.
-- Camera chains that zoom in, move between points of interest, and zoom out once.
-- A reusable CLI and JavaScript scenario API.
-- A separate folder for every take: Source, Timeline, Edit, Final MP4, and verification.
+- Retina tab capture at 30 or 60 fps and a 2× pixel scale, headless by default.
+- An automatic camera that frames each click, field and drag, then zooms out once.
+- Cursor and click sparks drawn at Render time, so a Take can be restyled without recording again.
+- Rendering in Chromium with WebGL and WebCodecs: no FFmpeg, 4K60 by hardware encoder.
+- A separate folder for every Take: Source, Timeline, Edit, Final MP4, and verification.
 
-CueTake is not yet published to a package registry.
+## For AI agents
+
+If a user hands you this repository to set up CueTake:
+
+1. Install the skill with `npx skills add levyxdev/cuetake`. In Claude Code you can instead run `/plugin marketplace add levyxdev/cuetake`, then `/plugin install cuetake`.
+2. Follow the skill's [setup guide](skills/cuetake/setup.md): run `scripts/cuetake doctor`, and install Node or the browser only after the user agrees to the option they pick.
+3. Write a Scenario for the user's product with the [scenario API](skills/cuetake/scenarios.md), record it, and review the frames.
+
+The skill runs the CLI through `npx -y cuetake@<version>`. CueTake is not yet published to npm; until it is, point the skill at a source checkout with `CUETAKE_BIN="node /path/to/cuetake/src/cli.js"`.
 
 ## Run from source
 
@@ -65,4 +73,4 @@ bun test tests/pipeline.test.js
 bun test tests/browser.test.js
 ```
 
-`pipeline.test.js` covers configuration and camera math; `browser.test.js` covers the probe, sparks, Auth profiles and Render geometry at a 2× capture scale. No build step is required. Do not commit recordings, browser profiles, credentials, or product-specific scenarios into this generic tool repository.
+`pipeline.test.js` covers configuration and camera math; `browser.test.js` covers the probe, Auth profiles, and Render geometry, cursor and sparks at a 2× capture scale. No build step is required. Do not commit recordings, browser profiles, credentials, or product-specific scenarios into this generic tool repository.

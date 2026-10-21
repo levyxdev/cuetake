@@ -1,4 +1,6 @@
 import { test, expect } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import pkg from '../package.json' with { type: 'json' };
 import { scenarioSchema, summarizeFrames } from '../src/pipeline.js';
 import { cameraTargets, createEdit } from '../src/edit.js';
 import { fitZoom, cropFor, buildChains, cropAt } from '../src/camera.js';
@@ -98,4 +100,9 @@ test('the camera changes zoom while moving between targets of different size', (
   expect(cropAt(chains, viewport, 0.7).w).toBe(160);
   expect(cropAt(chains, viewport, 1).w).toBe(200);
   expect(cropAt(chains, viewport, 2.5).w).toBe(200);
+});
+
+test('the skill launcher pins the version being released', () => {
+  const launcher = readFileSync(new URL('../skills/cuetake/scripts/cuetake', import.meta.url), 'utf8');
+  expect(launcher).toContain(`cuetake@${pkg.version}`);
 });

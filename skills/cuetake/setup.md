@@ -1,0 +1,28 @@
+# Setting up CueTake on the user's machine
+
+CueTake needs Node 20.10 or newer and the Chromium build its Playwright drives. Nothing installs without the user's agreement. Offer the choices below, say what each one changes and roughly how large it is, and act only after the user picks one. With the user's agreement you may run the installers yourself, including a graphical installer through computer use. The user may also prefer to install it themselves.
+
+## Node
+
+Check what already exists before offering anything: `node --version`, then the version managers `fnm`, `nvm`, `volta`, then `brew`. If one exists, use it:
+
+| Found | Install Node with |
+| --- | --- |
+| fnm | `fnm install --lts && fnm use lts-latest` |
+| nvm | `nvm install --lts` |
+| volta | `volta install node` |
+| Homebrew only | `brew install node` |
+
+With none of them, offer:
+
+- **fnm**, for developers who want to switch Node versions: `brew install fnm`, or the installer at https://github.com/Schniz/fnm.
+- **Homebrew**: `brew install node`, if the user wants Homebrew anyway.
+- **The official installer** from https://nodejs.org (LTS). It asks for the administrator password, which only the user can type.
+
+## Browser
+
+Run `cuetake install-browser` (about 150 MB into Playwright's cache in the user's Library). It downloads the exact build this CueTake version drives, so do not substitute `npx playwright install`, which may fetch a different build. The user's own Chrome is never used or modified.
+
+## Check
+
+Run `cuetake doctor` again. Every check must report `ok`; a `platform` note means that platform is not yet verified.
