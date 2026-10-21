@@ -40,7 +40,7 @@ export async function run(d) {
   await d.type(d.page.getByLabel('Email'), 'ada@example.com');
   await d.wait(400);
   await d.click(d.page.getByRole('button', { name: 'Send invite' }));
-  await d.wait(2500);
+  await d.wait(3000);
   const status = await d.page.getByRole('status').textContent();
   if (status !== 'Invite sent to ada@example.com') throw new Error(`Unexpected status: ${status}`);
   return { status };

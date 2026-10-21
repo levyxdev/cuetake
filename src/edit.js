@@ -26,8 +26,14 @@ export const editFields = {
     shadow: z.boolean().default(true),
     url: z.string().max(200).optional(),
   })]).default({}),
-  // Each target is framed with `padding` CSS px around it, zooming at most `maxZoom`; fits below `minZoom` stay wide.
-  camera: z.object({ maxZoom: z.number().min(1).max(4).default(2), minZoom: z.number().min(1).max(4).default(1.2), padding: z.number().min(0).max(400).default(48), transitionDuration: z.number().min(0.1).max(3).default(0.48), panDuration: z.number().min(0.1).max(3).default(0.42), preLead: z.number().min(0).max(3).default(0.48), holdPerTarget: z.number().min(0.1).max(30).default(3), chainGap: z.number().min(0).max(30).default(5) }).default({}),
+  // See camera.js. Each target is framed with `padding` CSS px around it, zooming at most `maxZoom`;
+  // fits below `minZoom` stay wide. The camera arrives `lead` before an action, holds `hold` after the
+  // last one in a segment, settles in about `response`, and returns wide `endWide` before the end.
+  camera: z.object({
+    maxZoom: z.number().min(1).max(4).default(2), minZoom: z.number().min(1).max(4).default(1.2), padding: z.number().min(0).max(400).default(48),
+    lead: z.number().min(0).max(3).default(0.6), hold: z.number().min(0).max(30).default(1.5), chainGap: z.number().min(0).max(30).default(2),
+    response: z.number().min(0.1).max(3).default(0.6), follow: z.boolean().default(true), endWide: z.number().min(0).max(10).default(1.5),
+  }).default({}),
 };
 
 /** A camera target is a CSS-pixel box the camera reaches at `t` seconds and holds at least until `until`, optionally at a fixed `zoom`. */
@@ -42,12 +48,14 @@ export const editSchema = z.object({
 });
 
 /**
- * Explicit focus targets win; otherwise the camera follows observed clicks, typing and drags,
- * except those inside a `wide` window ({ start, end } seconds) from an action with `focus: false`.
+ * Camera targets: observed clicks, typing and drags, except those inside a `wide` window ({ start, end }
+ * seconds) from an action with `focus: false`. Like a manual zoom in Screen Studio, an explicit focus
+ * target replaces only the automatic targets inside its own span (from `lead` before it to `hold` after).
  */
-export function cameraTargets(timeline, focus, wide = []) {
-  if (focus.length) return focus;
-  return timeline.events.filter(event => !wide.some(w => event.t >= w.start && event.t <= w.end)).flatMap(event => {
+export function cameraTargets(timeline, focus, wide = [], { lead, hold } = editFields.camera.parse({})) {
+  const spans = focus.map(f => ({ start: f.t - lead, end: (f.until ?? f.t) + hold }));
+  const inside = (t, windows) => windows.some(w => t >= w.start && t <= w.end);
+  const automatic = timeline.events.filter(event => !inside(event.t, wide) && !inside(event.t, spans)).flatMap(event => {
     if (event.type === 'click' && event.box) return [{ t: event.t, box: event.box }];
     if (event.type === 'type' && event.box) return [{ t: event.t, box: event.box, until: event.end }];
     if (event.type === 'drag') {
@@ -56,6 +64,7 @@ export function cameraTargets(timeline, focus, wide = []) {
     }
     return [];
   });
+  return [...automatic, ...focus].sort((a, b) => a.t - b.t);
 }
 
 export function createEdit(config, timeline, focus, wide = []) {
@@ -64,6 +73,6 @@ export function createEdit(config, timeline, focus, wide = []) {
     cursor: config.cursor, clickEffect: config.clickEffect, output: { ...config.output, fps: config.capture.fps },
     // The browser chrome shows the Scenario's host unless the config names something else.
     frame: config.frame && { url: new URL(config.url).host, ...config.frame },
-    camera: { ...config.camera, targets: cameraTargets(timeline, focus, wide) },
+    camera: { ...config.camera, targets: cameraTargets(timeline, focus, wide, config.camera) },
   });
 }

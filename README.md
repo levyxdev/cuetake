@@ -7,7 +7,7 @@ Built entirely for AI agents, CueTake turns browser interactions into sharp prod
 ![A CueTake Final: the page in a browser window on a gradient, the camera zooming to the field being typed into](docs/media/demo.gif)
 
 - Retina tab capture at 30 or 60 fps and a 2× pixel scale, headless by default.
-- An automatic camera that frames each click, field and drag, then zooms out once.
+- An automatic camera in the style of Screen Studio: it arrives just before each click, field and drag, follows the cursor on a spring, and ends on the wide shot.
 - The page framed in a browser or macOS window on a gradient, brand-colored or blurred background, at 16:9, 1:1 or 9:16.
 - Cursor and click sparks drawn at Render time, so a Take can be restyled without recording again.
 - Rendering in Chromium with WebGL and WebCodecs: no FFmpeg, 4K60 by default.

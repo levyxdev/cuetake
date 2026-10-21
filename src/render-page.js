@@ -6,7 +6,7 @@
  * "stage" is the Final's pixels at camera zoom 1, laid out by stage.js.
  */
 import * as MB from '/mediabunny.js';
-import { buildChains, cropAt } from '/camera.js';
+import { cameraTrack } from '/camera.js';
 import { pointerAt, presses, sparksAt, cursorGeometry, drawSpark, ARROW_PATH } from '/cursor.js';
 import { layout, cameraView, BACKGROUNDS, autoBackground, brandHue } from '/stage.js';
 
@@ -312,7 +312,7 @@ window.cuetakeRender = async ({ sourceUrl, finalUrl, duration, viewport, pointer
   let current = await reader.next(), next = await reader.next(), uploaded = null;
   if (!current) throw new Error('Source has no video frames');
   const compositor = createCompositor(stage, { framed: Boolean(frame), shadow: frame && frame.shadow, background: frame && backgroundFor(frame, current) }, track.codedWidth, track.codedHeight);
-  const chains = buildChains(camera.targets, viewport, camera);
+  const cameraPath = cameraTrack({ targets: camera.targets, viewport, camera, duration, fps, pointerAt: t => pointerAt(pointer, t) });
   // Page CSS pixels → stage pixels; sprites are rasterized for the closest zoom and mipmapped below it.
   const at = (x, y) => [stage.page.x + x * stage.scale, stage.page.y + y * stage.scale];
   const sharpest = stage.scale * camera.maxZoom * 2;
@@ -331,7 +331,7 @@ window.cuetakeRender = async ({ sourceUrl, finalUrl, duration, viewport, pointer
       const due = origin + Math.round(i * 1e6 / fps);
       while (next && next.timestamp <= due) { current.close(); current = next; next = await reader.next(); }
       if (uploaded !== current) { compositor.upload(current); uploaded = current; }
-      const t = i / fps, view = cameraView(cropAt(chains, viewport, t), stage, viewport);
+      const t = i / fps, view = cameraView(cameraPath[i], stage, viewport);
       compositor.frame(view.x, view.y, view.zoom, draw => {
         if (chromeTexture) draw(chromeTexture, [stage.window.x, stage.window.y, stage.window.w, stage.chrome]);
         for (const spark of sparksAt(pressList, clickEffect, t)) {

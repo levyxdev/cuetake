@@ -109,7 +109,7 @@ test('Render maps CSS camera targets onto the 2× Source and holds the last fram
   try {
     const sourcePath = join(dir, 'source.webm'), outputPath = join(dir, 'final.mp4');
     await fs.writeFile(sourcePath, await syntheticSource(browser, 0.6));
-    const edit = editSchema.parse({ schemaVersion: 2, output: { size: 240, fps: 30 }, frame: false, camera: { maxZoom: 2, padding: 0, transitionDuration: 0.1, preLead: 0.1, holdPerTarget: 2, targets: [{ t: 0.2, box: { x: 240, y: 100, width: 20, height: 20 } }] } });
+    const edit = editSchema.parse({ schemaVersion: 2, output: { size: 240, fps: 30 }, frame: false, camera: { maxZoom: 2, padding: 0, lead: 0.1, response: 0.1, hold: 2, endWide: 0, follow: false, targets: [{ t: 0.2, box: { x: 240, y: 100, width: 20, height: 20 } }] } });
     await renderFinal({ sourcePath, finalPath: outputPath, timeline: { viewport: { width: 320, height: 240 }, duration: 1.5 }, edit });
     expect(await inspectFinal(outputPath)).toMatchObject({ width: 320, height: 240, fps: 30, packets: 45, decodedFrames: 45 });
     const pixel = await pixelsAt(browser, await extractFrame(outputPath, 0.5), [[180, 120], [250, 110]]);

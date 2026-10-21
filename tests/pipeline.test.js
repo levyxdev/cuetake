@@ -2,8 +2,8 @@ import { test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import pkg from '../package.json' with { type: 'json' };
 import { scenarioSchema, summarizeFrames } from '../src/pipeline.js';
-import { cameraTargets, createEdit } from '../src/edit.js';
-import { fitZoom, cropFor, buildChains, cropAt } from '../src/camera.js';
+import { fitZoom, cropAround, zoomSegments, cameraTrack } from '../src/camera.js';
+import { cameraTargets, createEdit, editFields } from '../src/edit.js';
 import { pointerAt, presses, sparksAt } from '../src/cursor.js';
 import { outputSize, layout, cameraView, brandHue } from '../src/stage.js';
 
@@ -21,8 +21,14 @@ test('reports sparse static capture honestly rather than labeling it 60 unique f
   expect(stats.perSecond.map(s => s.callbacks)).toEqual([3, 1]);
 });
 
-test('camera follows explicit focus, otherwise observed clicks, typing and drags', () => {
-  const box = { x: 1, y: 2, width: 3, height: 4 };
+const viewport = { width: 320, height: 240 };
+const box = { x: 1, y: 2, width: 3, height: 4 };
+const small = (x, y) => ({ x, y, width: 20, height: 20 });
+const camera = editFields.camera.parse({ padding: 0 });
+const zoomAt = (track, t, fps = 60) => viewport.width / track[Math.round(t * fps)].w;
+const centerAt = (track, t, fps = 60) => { const c = track[Math.round(t * fps)]; return { x: c.x + c.w / 2, y: c.y + c.h / 2 }; };
+
+test('the camera follows observed clicks, typing and drags, except during focus: false actions', () => {
   const timeline = { events: [
     { type: 'click', t: 1, x: 2, y: 3, box },
     { type: 'type', t: 2, end: 3, box },
@@ -31,44 +37,65 @@ test('camera follows explicit focus, otherwise observed clicks, typing and drags
   expect(cameraTargets(timeline, [])).toEqual([
     { t: 1, box }, { t: 2, box, until: 3 }, { t: 4, box: { x: 10, y: 10, width: 40, height: 30 }, until: 5 },
   ]);
-  expect(cameraTargets(timeline, [{ t: 9, box }])).toEqual([{ t: 9, box }]);
+  expect(cameraTargets(timeline, [], [{ start: 1.5, end: 4.5 }]).map(target => target.t)).toEqual([1]);
   const edit = createEdit(scenarioSchema.parse({ name: 'demo', url: 'https://example.com' }), timeline, []);
   expect(edit.schemaVersion).toBe(2);
-  expect(edit.camera).toMatchObject({ maxZoom: 2, targets: expect.any(Array) });
-  expect(cameraTargets(timeline, [], [{ start: 1.5, end: 4.5 }]).map(target => target.t)).toEqual([1]);
+  expect(edit.camera).toMatchObject({ maxZoom: 2, follow: true, targets: expect.any(Array) });
 });
 
-const viewport = { width: 320, height: 240 };
-const camera = { maxZoom: 2, minZoom: 1.2, padding: 0, transitionDuration: 0.1, panDuration: 0.2, preLead: 0.1, holdPerTarget: 2, chainGap: 1 };
-
-test('a crop centers its CSS box at the zoom level and stays inside the viewport', () => {
-  expect(cropFor({ x: 240, y: 100, width: 20, height: 20 }, viewport, 2)).toEqual({ x: 160, y: 50, w: 160, h: 120 });
-  expect(cropFor({ x: 0, y: 0, width: 10, height: 10 }, viewport, 2)).toEqual({ x: 0, y: 0, w: 160, h: 120 });
+test('an explicit focus replaces only the automatic targets inside its own span', () => {
+  const timeline = { events: [{ type: 'click', t: 1, x: 0, y: 0, box }, { type: 'click', t: 8, x: 0, y: 0, box }] };
+  const focus = [{ t: 1.2, box: small(100, 100) }];
+  expect(cameraTargets(timeline, focus, [], camera)).toEqual([focus[0], { t: 8, box }]);
 });
 
-test('the camera zooms in before a target, holds it, then zooms out once', () => {
-  const chains = buildChains([{ t: 0.2, box: { x: 240, y: 100, width: 20, height: 20 } }], viewport, camera);
-  const full = { x: 0, y: 0, w: 320, h: 240 };
-  expect(cropAt(chains, viewport, 0)).toEqual(full);
-  const halfway = cropAt(chains, viewport, 0.15);
-  for (const [key, value] of Object.entries({ x: 80, y: 25, w: 240, h: 180 })) expect(halfway[key]).toBeCloseTo(value, 6);
-  expect(cropAt(chains, viewport, 1)).toEqual({ x: 160, y: 50, w: 160, h: 120 });
-  expect(cropAt(chains, viewport, 3)).toEqual(full);
+test('each target zooms to fit its box with padding, capped, and boxes that would barely zoom stay wide', () => {
+  const fit = { maxZoom: 2, padding: 10 };
+  expect(fitZoom(small(0, 0), viewport, fit)).toBe(2);
+  expect(fitZoom({ x: 0, y: 0, width: 180, height: 50 }, viewport, fit)).toBe(1.6);
+  expect(fitZoom({ x: 0, y: 0, width: 400, height: 300 }, viewport, fit)).toBe(1);
+  expect(zoomSegments([{ t: 1, box: { x: 0, y: 0, width: 300, height: 220 } }], viewport, camera, 10)).toEqual([]);
+  expect(zoomSegments([{ t: 1, box: { x: 0, y: 0, width: 300, height: 220 }, zoom: 1.5 }], viewport, camera, 10)).toHaveLength(1);
+  expect(cropAround(0, 0, 2, viewport)).toEqual({ x: 0, y: 0, w: 160, h: 120 });
 });
 
-test('within a chain the camera pans to arrive exactly when the next target fires', () => {
-  const left = { x: 0, y: 100, width: 20, height: 20 }, right = { x: 300, y: 100, width: 20, height: 20 };
-  const chains = buildChains([{ t: 0.2, box: left }, { t: 1, box: right }], viewport, camera);
-  expect(chains).toHaveLength(1);
-  expect(cropAt(chains, viewport, 0.7).x).toBe(0);
-  expect(cropAt(chains, viewport, 0.9).x).toBe(80);
-  expect(cropAt(chains, viewport, 1).x).toBe(160);
-  expect(buildChains([{ t: 0.2, box: left }, { t: 5, box: right }], viewport, camera)).toHaveLength(2);
+test('the camera arrives as the action happens, holds, and returns wide', () => {
+  const track = cameraTrack({ targets: [{ t: 2, box: small(240, 100) }], viewport, camera, duration: 8, fps: 60 });
+  expect(zoomAt(track, 0)).toBe(1);
+  expect(zoomAt(track, 1.3)).toBeLessThan(1.05);           // still wide before the lead
+  expect(zoomAt(track, 2)).toBeGreaterThan(1.85);           // nearly arrived at the click
+  expect(zoomAt(track, 3.4)).toBeCloseTo(2, 2);             // holding
+  expect(zoomAt(track, 5)).toBeLessThan(1.02);              // back to wide after the hold
+  for (const crop of track) expect(crop.w).toBeLessThanOrEqual(viewport.width + 1e-9);
 });
 
-test('typing holds the camera for the whole burst', () => {
-  const [chain] = buildChains([{ t: 1, box: { x: 0, y: 0, width: 10, height: 10 }, until: 4 }], viewport, camera);
-  expect(chain.unzoomAt).toBe(6);
+test('actions close together share one zoom; far apart ones zoom out between', () => {
+  const near = cameraTrack({ targets: [{ t: 1, box: small(0, 100) }, { t: 3, box: small(300, 100) }], viewport, camera, duration: 8, fps: 60 });
+  expect(zoomAt(near, 2.4)).toBeGreaterThan(1.9);
+  expect(centerAt(near, 3).x).toBeGreaterThan(220);
+  const far = cameraTrack({ targets: [{ t: 1, box: small(0, 100) }, { t: 7, box: small(300, 100) }], viewport, camera, duration: 12, fps: 60 });
+  expect(zoomAt(far, 4.5)).toBeLessThan(1.05);
+});
+
+test('typing keeps the zoom for the whole burst', () => {
+  const [segment] = zoomSegments([{ t: 1, box: small(0, 0), until: 4 }], viewport, camera, 10);
+  expect(segment.end).toBe(5.5);
+});
+
+test('every Final ends wide, even when the last action is near the end', () => {
+  const track = cameraTrack({ targets: [{ t: 4.2, box: small(240, 100) }], viewport, camera, duration: 5, fps: 60 });
+  expect(Math.max(...track.map(c => viewport.width / c.w))).toBeLessThan(1.05);
+  const late = cameraTrack({ targets: [{ t: 2, box: small(240, 100) }], viewport, camera, duration: 4, fps: 60 });
+  expect(zoomAt(late, 3.9)).toBeLessThan(1.05);
+});
+
+test('while zoomed the camera follows the cursor to keep it in view', () => {
+  const pointerAt = t => ({ x: t < 2.5 ? 30 : 300, y: 120 });
+  const track = cameraTrack({ targets: [{ t: 2, box: small(20, 110), until: 4 }], viewport, camera, duration: 8, fps: 60, pointerAt });
+  expect(centerAt(track, 2).x).toBeLessThan(100);
+  expect(centerAt(track, 4).x).toBeGreaterThan(200);
+  const still = cameraTrack({ targets: [{ t: 2, box: small(20, 110), until: 4 }], viewport, camera: { ...camera, follow: false }, duration: 8, fps: 60, pointerAt });
+  expect(centerAt(still, 4).x).toBeLessThan(100);
 });
 
 test('the cursor interpolates the pointer path and is hidden before the first sample', () => {
@@ -85,23 +112,6 @@ test('clicks and drag starts spark for the click effect duration', () => {
   expect(sparksAt(list, effect, 1.2)).toEqual([{ x: 5, y: 6, progress: expect.closeTo(0.5, 6) }]);
   expect(sparksAt(list, effect, 1.5)).toEqual([]);
   expect(sparksAt(list, { ...effect, style: 'none' }, 1.2)).toEqual([]);
-});
-
-test('each target zooms to fit its box with padding, capped, and large boxes stay wide', () => {
-  const fit = { maxZoom: 2, padding: 10 };
-  expect(fitZoom({ x: 0, y: 0, width: 20, height: 20 }, viewport, fit)).toBe(2);
-  expect(fitZoom({ x: 0, y: 0, width: 180, height: 50 }, viewport, fit)).toBe(1.6);
-  expect(fitZoom({ x: 0, y: 0, width: 400, height: 300 }, viewport, fit)).toBe(1);
-  expect(buildChains([{ t: 1, box: { x: 0, y: 0, width: 300, height: 220 } }], viewport, camera)).toEqual([]);
-  expect(buildChains([{ t: 1, box: { x: 0, y: 0, width: 300, height: 220 }, zoom: 1.5 }], viewport, camera)).toHaveLength(1);
-});
-
-test('the camera changes zoom while moving between targets of different size', () => {
-  const small = { x: 0, y: 100, width: 20, height: 20 }, medium = { x: 100, y: 50, width: 200, height: 150 };
-  const chains = buildChains([{ t: 0.2, box: small }, { t: 1, box: medium }], viewport, camera);
-  expect(cropAt(chains, viewport, 0.7).w).toBe(160);
-  expect(cropAt(chains, viewport, 1).w).toBe(200);
-  expect(cropAt(chains, viewport, 2.5).w).toBe(200);
 });
 
 test('the skill launcher pins the version being released', () => {
