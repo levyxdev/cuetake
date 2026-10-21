@@ -55,8 +55,8 @@ export async function recordScenario(scenarioPath, outputDir, options = {}) {
     await page.evaluate(() => document.fonts.ready);
     const capture = await beginCapture(session.sessionId);
     const startedAtMs = Date.parse(capture.startedAt);
-    const focus = [];
-    const director = createDirector(page, startedAtMs, config.capture.fps, focus);
+    const focus = [], wide = [];
+    const director = createDirector(page, startedAtMs, config.capture.fps, focus, wide);
     const evidence = await scenario.run(director);
     await page.screenshot({ path: join(dir, 'poster.png') });
     const observed = await collectTimeline(page, startedAtMs);
@@ -68,7 +68,7 @@ export async function recordScenario(scenarioPath, outputDir, options = {}) {
       pointer: observed.pointer, events: [...observed.events, ...focus.map(f => ({ type: 'focus', ...f }))].sort((a, b) => a.t - b.t),
     };
     await writeJson(join(dir, 'timeline.json'), timeline);
-    await writeJson(join(dir, 'edit.json'), createEdit(config, timeline, focus));
+    await writeJson(join(dir, 'edit.json'), createEdit(config, timeline, focus, wide));
     project = { ...project, status: 'captured', duration: stopped.durationSeconds, evidence: evidence ?? null };
     await writeJson(join(dir, 'project.json'), project);
   } catch (error) {

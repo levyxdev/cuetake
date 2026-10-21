@@ -1,7 +1,7 @@
 import { test, expect } from 'bun:test';
 import { scenarioSchema, summarizeFrames } from '../src/pipeline.js';
 import { cameraTargets, createEdit } from '../src/edit.js';
-import { cropFor, buildChains, cropAt } from '../src/camera.js';
+import { fitZoom, cropFor, buildChains, cropAt } from '../src/camera.js';
 import { pointerAt, presses, sparksAt } from '../src/cursor.js';
 
 test('rejects unsupported capture rates and odd H.264 output dimensions', () => {
@@ -30,11 +30,12 @@ test('camera follows explicit focus, otherwise observed clicks, typing and drags
   expect(cameraTargets(timeline, [{ t: 9, box }])).toEqual([{ t: 9, box }]);
   const edit = createEdit(scenarioSchema.parse({ name: 'demo', url: 'https://example.com' }), timeline, []);
   expect(edit.schemaVersion).toBe(2);
-  expect(edit.camera).toMatchObject({ zoomLevel: 1.5, targets: expect.any(Array) });
+  expect(edit.camera).toMatchObject({ maxZoom: 2, targets: expect.any(Array) });
+  expect(cameraTargets(timeline, [], [{ start: 1.5, end: 4.5 }]).map(target => target.t)).toEqual([1]);
 });
 
 const viewport = { width: 320, height: 240 };
-const camera = { zoomLevel: 2, transitionDuration: 0.1, panDuration: 0.2, preLead: 0.1, holdPerTarget: 2, chainGap: 1 };
+const camera = { maxZoom: 2, minZoom: 1.2, padding: 0, transitionDuration: 0.1, panDuration: 0.2, preLead: 0.1, holdPerTarget: 2, chainGap: 1 };
 
 test('a crop centers its CSS box at the zoom level and stays inside the viewport', () => {
   expect(cropFor({ x: 240, y: 100, width: 20, height: 20 }, viewport, 2)).toEqual({ x: 160, y: 50, w: 160, h: 120 });
@@ -80,4 +81,21 @@ test('clicks and drag starts spark for the click effect duration', () => {
   expect(sparksAt(list, effect, 1.2)).toEqual([{ x: 5, y: 6, progress: expect.closeTo(0.5, 6) }]);
   expect(sparksAt(list, effect, 1.5)).toEqual([]);
   expect(sparksAt(list, { ...effect, style: 'none' }, 1.2)).toEqual([]);
+});
+
+test('each target zooms to fit its box with padding, capped, and large boxes stay wide', () => {
+  const fit = { maxZoom: 2, padding: 10 };
+  expect(fitZoom({ x: 0, y: 0, width: 20, height: 20 }, viewport, fit)).toBe(2);
+  expect(fitZoom({ x: 0, y: 0, width: 180, height: 50 }, viewport, fit)).toBe(1.6);
+  expect(fitZoom({ x: 0, y: 0, width: 400, height: 300 }, viewport, fit)).toBe(1);
+  expect(buildChains([{ t: 1, box: { x: 0, y: 0, width: 300, height: 220 } }], viewport, camera)).toEqual([]);
+  expect(buildChains([{ t: 1, box: { x: 0, y: 0, width: 300, height: 220 }, zoom: 1.5 }], viewport, camera)).toHaveLength(1);
+});
+
+test('the camera changes zoom while moving between targets of different size', () => {
+  const small = { x: 0, y: 100, width: 20, height: 20 }, medium = { x: 100, y: 50, width: 200, height: 150 };
+  const chains = buildChains([{ t: 0.2, box: small }, { t: 1, box: medium }], viewport, camera);
+  expect(cropAt(chains, viewport, 0.7).w).toBe(160);
+  expect(cropAt(chains, viewport, 1).w).toBe(200);
+  expect(cropAt(chains, viewport, 2.5).w).toBe(200);
 });

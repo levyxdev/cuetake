@@ -13,22 +13,33 @@ const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const smoothstep = p => p * p * (3 - 2 * p);
 const mix = (from, to, start, end, t) => end <= start ? to : from + (to - from) * smoothstep(clamp((t - start) / (end - start), 0, 1));
 
-/** The viewport crop that centers `box` at `zoomLevel`, kept inside the viewport. */
-export function cropFor(box, viewport, zoomLevel) {
-  const w = Math.round(viewport.width / zoomLevel), h = Math.round(viewport.height / zoomLevel);
+/** The zoom that frames `box` with `padding` on every side, between 1 and `maxZoom`. */
+export function fitZoom(box, viewport, { maxZoom, padding }) {
+  return clamp(Math.min(viewport.width / (box.width + 2 * padding), viewport.height / (box.height + 2 * padding)), 1, maxZoom);
+}
+
+/** The viewport crop that centers `box` at `zoom`, kept inside the viewport. */
+export function cropFor(box, viewport, zoom) {
+  const w = Math.round(viewport.width / zoom), h = Math.round(viewport.height / zoom);
   const x = Math.round(clamp(box.x + box.width / 2 - w / 2, 0, viewport.width - w));
   const y = Math.round(clamp(box.y + box.height / 2 - h / 2, 0, viewport.height - h));
   return { x, y, w, h };
 }
 
-/** Groups Edit camera targets into timed chains. */
+/**
+ * Groups Edit camera targets into timed chains. Each target is framed at its own zoom (an
+ * explicit `zoom`, or the fit for its box); targets too large to gain from zooming stay wide.
+ */
 export function buildChains(targets, viewport, camera) {
-  const { zoomLevel, transitionDuration, panDuration, holdPerTarget, preLead, chainGap } = camera;
-  const shots = targets.toSorted((a, b) => a.t - b.t).map(target => ({
-    time: target.t,
-    holdUntil: target.t + holdPerTarget + Math.max(0, (target.until ?? target.t) - target.t),
-    crop: cropFor(target.box, viewport, zoomLevel),
-  }));
+  const { transitionDuration, panDuration, holdPerTarget, preLead, chainGap, minZoom } = camera;
+  const shots = targets.toSorted((a, b) => a.t - b.t)
+    .map(target => ({ target, zoom: target.zoom ?? fitZoom(target.box, viewport, camera) }))
+    .filter(({ zoom }) => zoom >= minZoom)
+    .map(({ target, zoom }) => ({
+      time: target.t,
+      holdUntil: target.t + holdPerTarget + Math.max(0, (target.until ?? target.t) - target.t),
+      crop: cropFor(target.box, viewport, zoom),
+    }));
   const groups = [];
   for (const shot of shots) {
     const group = groups.at(-1);
@@ -42,7 +53,7 @@ export function buildChains(targets, viewport, camera) {
   });
 }
 
-/** Position inside a chain's zoomed phase: hold each target, then pan to arrive exactly when the next fires. */
+/** One crop edge inside a chain's zoomed phase: hold each target, then move to arrive exactly when the next fires. */
 function panWithin(chain, axis, t) {
   const { targets } = chain;
   for (let i = 0; i < targets.length - 1; i++) {
@@ -64,10 +75,10 @@ export function cropAt(chains, viewport, t) {
       x: mix(0, first.x, chain.startZoom, chain.zoomedAt, t), y: mix(0, first.y, chain.startZoom, chain.zoomedAt, t),
       w: mix(viewport.width, first.w, chain.startZoom, chain.zoomedAt, t), h: mix(viewport.height, first.h, chain.startZoom, chain.zoomedAt, t),
     };
-    if (t <= chain.unzoomAt) return { x: panWithin(chain, 'x', t), y: panWithin(chain, 'y', t), w: first.w, h: first.h };
+    if (t <= chain.unzoomAt) return { x: panWithin(chain, 'x', t), y: panWithin(chain, 'y', t), w: panWithin(chain, 'w', t), h: panWithin(chain, 'h', t) };
     return {
       x: mix(last.x, 0, chain.unzoomAt, chain.endZoom, t), y: mix(last.y, 0, chain.unzoomAt, chain.endZoom, t),
-      w: mix(first.w, viewport.width, chain.unzoomAt, chain.endZoom, t), h: mix(first.h, viewport.height, chain.unzoomAt, chain.endZoom, t),
+      w: mix(last.w, viewport.width, chain.unzoomAt, chain.endZoom, t), h: mix(last.h, viewport.height, chain.unzoomAt, chain.endZoom, t),
     };
   }
   return { x: 0, y: 0, w: viewport.width, h: viewport.height };

@@ -9,11 +9,12 @@ export const editFields = {
   clickEffect: z.object({ style: z.enum(['spark', 'none']).default('spark'), radius: z.number().min(8).max(80).default(32), length: z.number().min(4).max(40).default(16), count: z.number().int().min(4).max(16).default(8), duration: z.number().min(150).max(1000).default(420) }).default({}),
   // quality is the H.264 quantizer: lower is sharper and larger. Encoders without quantizer mode use a bitrate.
   output: z.object({ width: evenSize.default(1920), quality: z.number().int().min(10).max(40).default(22) }).default({}),
-  camera: z.object({ zoomLevel: z.number().min(1).max(4).default(1.5), transitionDuration: z.number().min(0.1).max(3).default(0.48), panDuration: z.number().min(0.1).max(3).default(0.42), preLead: z.number().min(0).max(3).default(0.48), holdPerTarget: z.number().min(0.1).max(30).default(3), chainGap: z.number().min(0).max(30).default(5) }).default({}),
+  // Each target is framed with `padding` CSS px around it, zooming at most `maxZoom`; fits below `minZoom` stay wide.
+  camera: z.object({ maxZoom: z.number().min(1).max(4).default(2), minZoom: z.number().min(1).max(4).default(1.2), padding: z.number().min(0).max(400).default(48), transitionDuration: z.number().min(0.1).max(3).default(0.48), panDuration: z.number().min(0.1).max(3).default(0.42), preLead: z.number().min(0).max(3).default(0.48), holdPerTarget: z.number().min(0.1).max(30).default(3), chainGap: z.number().min(0).max(30).default(5) }).default({}),
 };
 
-/** A camera target is a CSS-pixel box the camera reaches at `t` seconds and holds at least until `until`. */
-const target = z.object({ t: z.number().nonnegative(), box, until: z.number().nonnegative().optional() });
+/** A camera target is a CSS-pixel box the camera reaches at `t` seconds and holds at least until `until`, optionally at a fixed `zoom`. */
+const target = z.object({ t: z.number().nonnegative(), box, until: z.number().nonnegative().optional(), zoom: z.number().min(1).max(4).optional() });
 
 export const editSchema = z.object({
   schemaVersion: z.literal(2),
@@ -21,10 +22,13 @@ export const editSchema = z.object({
   camera: editFields.camera.removeDefault().extend({ targets: z.array(target).default([]) }).default({}),
 });
 
-/** Explicit focus targets win; otherwise the camera follows observed clicks, typing and drags. */
-export function cameraTargets(timeline, focus) {
+/**
+ * Explicit focus targets win; otherwise the camera follows observed clicks, typing and drags,
+ * except those inside a `wide` window ({ start, end } seconds) from an action with `focus: false`.
+ */
+export function cameraTargets(timeline, focus, wide = []) {
   if (focus.length) return focus;
-  return timeline.events.flatMap(event => {
+  return timeline.events.filter(event => !wide.some(w => event.t >= w.start && event.t <= w.end)).flatMap(event => {
     if (event.type === 'click' && event.box) return [{ t: event.t, box: event.box }];
     if (event.type === 'type' && event.box) return [{ t: event.t, box: event.box, until: event.end }];
     if (event.type === 'drag') {
@@ -35,10 +39,10 @@ export function cameraTargets(timeline, focus) {
   });
 }
 
-export function createEdit(config, timeline, focus) {
+export function createEdit(config, timeline, focus, wide = []) {
   return editSchema.parse({
     schemaVersion: 2,
     cursor: config.cursor, clickEffect: config.clickEffect, output: config.output,
-    camera: { ...config.camera, targets: cameraTargets(timeline, focus) },
+    camera: { ...config.camera, targets: cameraTargets(timeline, focus, wide) },
   });
 }

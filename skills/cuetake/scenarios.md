@@ -12,7 +12,9 @@ export const config = {
   clickEffect: { style: 'spark', radius: 32, length: 16, count: 8, duration: 420 },
   output: { width: 1920, quality: 22 },
   camera: {
-    zoomLevel: 1.5,
+    maxZoom: 2,
+    minZoom: 1.2,
+    padding: 48,
     transitionDuration: 0.48,
     panDuration: 0.42,
     preLead: 0.48,
@@ -44,15 +46,15 @@ Only `name` and `url` are required in config. Other fields use the shown default
 | `at(seconds)` | Wait until a time relative to the capture start. Past times return immediately. |
 | `wait(ms)` | Hold the current state. |
 | `move(x, y, durationMs=500)` | Move along a smooth path using viewport CSS coordinates. |
-| `click(locator, durationMs=450)` | Move to a visible locator, click, and save a focusable event. A CSS selector also works. |
-| `type(locator, text, msPerChar=70)` | Click a field, then type with a visible per-character delay. |
-| `drag({x,y}, {x,y}, durationMs=1200)` | Move to the start, press, move, then release. |
+| `click(locator, { duration=450, focus })` | Move to a visible locator and click. A CSS selector also works. |
+| `type(locator, text, { msPerChar=70, focus })` | Click a field, then type with a visible per-character delay. |
+| `drag({x,y}, {x,y}, { duration=1200, focus })` | Move to the start, press, move, then release. |
 | `focus({x,y,width,height}, seconds?)` | Add a camera target; defaults to the current time. |
 | `time()` | Seconds elapsed since capture started. |
 
 `move` starts from (0,0). If preparation positioned the cursor elsewhere, initialize it with `await d.move(x, y, 0)` at the start of `run`.
 
-With explicit `focus` targets, the camera uses those targets. Otherwise it follows the clicks, typing and drags the page observed, whether they came from the director or from Playwright input directly. Focus boxes always use CSS pixels, even when the source is captured at 2× scale. Nearby targets stay in one camera chain according to `holdPerTarget` and `chainGap`.
+With explicit `focus` targets, the camera uses only those targets. Otherwise it follows the clicks, typing and drags the page observed, whether they came from the director or from Playwright input directly; pass `focus: false` to an action to keep the camera wide for it. A bare number still works as the action's timing. Each target is framed with `padding` CSS px around its box, zooming at most `maxZoom`; boxes too large to reach `minZoom` stay wide. Set `zoom` on a target in `edit.json` to fix it. Focus boxes always use CSS pixels, even when the source is captured at 2× scale. Nearby targets stay in one camera chain according to `holdPerTarget` and `chainGap`, and the camera changes zoom as it moves between them.
 
 Use actual locators for clicks. Canvas drags often require coordinates; derive or validate them for the configured viewport. Keep setup outside capture, hold important states, and assert meaningful application changes. An exception marks the take failed and closes the isolated browser.
 

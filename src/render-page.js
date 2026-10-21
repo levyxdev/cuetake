@@ -218,7 +218,7 @@ window.cuetakeRender = async ({ sourceUrl, finalUrl, width, height, fps, duratio
   const toStage = width / viewport.width; // page fills the stage at zoom 1
   const geometry = cursorGeometry(cursor);
   // Rasterize the cursor for the closest zoom, oversampled; mipmaps cover smaller sizes.
-  const arrow = cursorSprite(cursor, toStage * camera.zoomLevel * 2);
+  const arrow = cursorSprite(cursor, toStage * camera.maxZoom * 2);
   const arrowTexture = compositor.sprite(arrow.canvas);
   const pressList = presses(events);
   const sparkReach = clickEffect.radius + clickEffect.length + 8;

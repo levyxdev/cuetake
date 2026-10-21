@@ -33,7 +33,7 @@ Reuse a named auth profile when the user has authorized that account for the dem
 
 Defaults: CSS viewport 1440×900, 2× capture resolution, 60 fps target, 1920×1200 output, 24 px white arrow. Clicks use an outlined white spark: 32 px radius, 16 px rays, 8 rays, 420 ms duration. Set `clickEffect.style: 'none'` to disable it; color follows the cursor.
 
-Use `d.focus(box, seconds)` for deliberate camera targets. Boxes are CSS pixels. Nearby targets form one continuous camera chain. Default zoom 1.5×, enter/exit 0.48 seconds, pan 0.42 seconds. Keep the camera steady during a meaningful action and give the viewer time to read the result.
+Use `d.focus(box, seconds)` for deliberate camera targets. Boxes are CSS pixels. Nearby targets form one continuous camera chain. The camera zooms to fit each target with 48 px padding, at most 2×; enter/exit 0.48 seconds, pan 0.42 seconds. Pass `focus: false` to an action that should not move the camera. Keep the camera steady during a meaningful action and give the viewer time to read the result.
 
 Capture is variable frame rate: static scenes reduce cadence and moving scenes can drop frames. Report observed stats, not a promise of 60 independent page frames each second. Current acceptance coverage is headed Chromium on macOS, same-document/SPA operations, no audio. Full document navigation during capture requires separate takes; login and other navigation may happen before capture.
 
