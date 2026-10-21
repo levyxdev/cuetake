@@ -1,6 +1,6 @@
 # Architecture
 
-CueTake is an agent-facing local recording runtime. It descends from Pagecast commit `6bbf3c94539c947a65ecaacb1965ffe32345c5a4`; attribution is retained in NOTICE and LICENSE. Active runtime names and interfaces are CueTake's. The original legacy recorder, tooltip/GIF branches, optional Remotion renderer, and old MCP interface have been removed.
+CueTake is an agent-facing local recording runtime. Settled decisions live in [docs/adr](adr/).
 
 ## Pipeline
 

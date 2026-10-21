@@ -5,7 +5,7 @@ description: Direct an AI agent to plan, record, refine, and verify browser prod
 
 # CueTake agent operating manual
 
-CueTake is a local execution engine for AI agents. You direct the story; CueTake captures the browser and renders the finished take. Read `docs/scenarios.md` in the CueTake installation when writing a scenario. Read `docs/authentication.md` when a page needs login.
+CueTake is a local execution engine for AI agents. You direct the story; CueTake captures the browser and renders the finished take. Read [scenarios.md](scenarios.md) when writing a scenario and [authentication.md](authentication.md) when a page needs login.
 
 ## Workflow
 

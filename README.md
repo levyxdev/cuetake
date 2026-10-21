@@ -10,7 +10,7 @@ Built entirely for AI agents, CueTake turns browser interactions into sharp prod
 - A reusable CLI, JavaScript scenario API, and an optional stdio MCP server.
 - A separate folder for every take: source, camera edit, finished MP4, and verification.
 
-CueTake is an independently maintained derivative of [Pagecast](https://github.com/mcpware/pagecast). Upstream MIT attribution is preserved in [LICENSE](LICENSE) and [NOTICE](NOTICE). This repository is prepared locally for an initial public release; it is not yet published to a package registry.
+CueTake is not yet published to a package registry.
 
 ## Run from source
 
@@ -25,7 +25,7 @@ PLAYWRIGHT_SKIP_BROWSER_GC=1 bunx playwright install chromium
 bun src/cli.js record examples/basic.mjs --out ./recordings/first-take
 ```
 
-The example uses `https://example.com`. It adds a small animated demo element in that isolated browser context, so it works without a local application server. For your own product, write a scenario using the [scenario API](docs/scenarios.md).
+The example uses `https://example.com`. It adds a small animated demo element in that isolated browser context, so it works without a local application server. For your own product, write a scenario using the [scenario API](skills/cuetake/scenarios.md).
 
 Playwright is a local package dependency. Browser binaries use Playwright's normal OS cache. CueTake does not install global packages, start your application server, or configure a global MCP server.
 
@@ -53,7 +53,7 @@ Source capture is variable frame rate. Static scenes may drop to approximately o
 
 The supported workflow is a short, same-document browser demo, including SPA interactions. A full page navigation or reload destroys the in-page recorder; record those as separate takes. Audio and desktop/window capture are outside this workflow. Browser automation and captured data stay local; the visited website still receives normal browser requests.
 
-The MCP interface accepts recording jobs and returns progress, verified artifacts, and login preparation sessions. The bundled [agent skill](skills/cuetake/SKILL.md) teaches planning and operation; site-specific scenarios stay in your application project. See [distribution](docs/distribution.md) and [login](docs/authentication.md).
+The MCP interface accepts recording jobs and returns progress, verified artifacts, and login preparation sessions. The bundled [agent skill](skills/cuetake/SKILL.md) teaches planning and operation; site-specific scenarios stay in your application project. See [distribution](docs/distribution.md) and [login](skills/cuetake/authentication.md).
 
 ## Development
 

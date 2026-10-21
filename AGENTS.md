@@ -1,13 +1,13 @@
 # CueTake development
 
-CueTake is a standalone browser demo recorder derived from Pagecast. Read README.md and docs/scenarios.md before changing the recording API.
+CueTake records browser product demos for AI agents. Use the vocabulary in `GLOSSARY.md`, respect the decisions in `docs/adr/`, and read `skills/cuetake/scenarios.md` before changing the Scenario API.
 
-- Use Bun and keep bun.lock in sync. No automatic browser downloads in install scripts.
-- Check git status first. Keep product-specific scenarios and private recordings outside this repository.
-- The supported release path is the scenario CLI with HD tab capture and FFmpeg camera MP4. MCP and CLI share this engine; do not reintroduce separate legacy recording paths.
-- Keep timing and coordinate spaces explicit: scenario boxes are CSS pixels; source video uses device pixels; output dimensions are independent.
-- Retain original source attribution and the MIT license. History starts fresh in this repository; Pagecast attribution lives in LICENSE and NOTICE. `origin` is the public repository, `levyxdev/cuetake`.
-- Run `bun test tests/pipeline.test.js` for pipeline/camera changes. For capture changes, also record a short real scenario and inspect output frame metadata and cursor position.
+- Use Bun for development and keep `bun.lock` in sync. Users run the CLI on Node, so runtime code uses Node APIs only (`node:*` modules, no `Bun.*`).
+- The CLI is the only interface; the skill drives it. Capture produces the Source and Timeline; Render reads only Source, Timeline and Edit (ADR 0002).
+- Install scripts download nothing. Browsers are installed only by an explicit command the user agreed to.
+- Keep timing and coordinate spaces explicit: Scenario boxes and the Timeline use CSS pixels; the Source uses device pixels; output dimensions are independent.
+- Check git status first. Keep product-specific Scenarios, Takes and Auth profiles outside this repository. `origin` is the public repository, `levyxdev/cuetake`.
+- Run `bun test tests/pipeline.test.js` for pipeline and Render changes. For Capture or Render changes, also record a short real Scenario and inspect the Final's frame metadata and cursor position.
 - Do not publish packages, push code, create releases, or start a website server unless requested.
 
 ## Agent skills
