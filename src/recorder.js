@@ -9,9 +9,14 @@ let browser = null;
 const sessions = new Map();
 
 export async function startRecording(url, options = {}) {
-  browser ||= await chromium.launch({ headless: false, args: ['--auto-accept-this-tab-capture', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding'] });
   const width = options.width || 1440, height = options.height || 900;
   const resolutionScale = options.resolutionScale || 2;
+  // Headless by default. Chromium's new headless mode (channel 'chromium') supports tab capture,
+  // but only captures at device scale when the scale is also forced on the browser.
+  browser ||= await chromium.launch({
+    headless: !options.headed, channel: 'chromium',
+    args: ['--auto-accept-this-tab-capture', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', ...(options.headed ? [] : [`--force-device-scale-factor=${resolutionScale}`])],
+  });
   const outputDir = options.outputDir || './recordings';
   await mkdir(outputDir, { recursive: true });
   const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: resolutionScale, ...(options.storageState ? { storageState: options.storageState } : {}) });

@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { chromium } from 'playwright';
+import { doctor } from './environment.js';
 import { z } from 'zod';
 import { startRecording, getRecordingPage, beginCapture, stopRecording, cleanup } from './recorder.js';
 import { renderFinal, inspectFinal, outputSize } from './render.js';
@@ -24,14 +24,6 @@ export const scenarioSchema = z.object({
 const writeJson = (path, data) => fs.writeFile(path, JSON.stringify(data, null, 2) + '\n');
 const readJson = async path => JSON.parse(await fs.readFile(path, 'utf8'));
 
-export async function doctor() {
-  const checks = [];
-  const browserPath = chromium.executablePath();
-  try { await fs.access(browserPath); checks.push({ name: 'chromium', ok: true, path: browserPath }); }
-  catch { checks.push({ name: 'chromium', ok: false, fix: 'PLAYWRIGHT_SKIP_BROWSER_GC=1 bunx playwright install chromium' }); }
-  return { ok: checks.every(c => c.ok), platform: process.platform, checks };
-}
-
 /** New take directories are exclusive: reruns never overwrite a previous take. */
 export async function recordScenario(scenarioPath, outputDir, options = {}) {
   const scenario = await import(pathToFileURL(resolve(scenarioPath)).href);
@@ -48,7 +40,7 @@ export async function recordScenario(scenarioPath, outputDir, options = {}) {
   await fs.copyFile(resolve(scenarioPath), join(dir, 'scenario.mjs'));
   try {
     const session = await startRecording(config.url, {
-      ...config.viewport, ...config.capture, outputDir: dir, deferCapture: true, storageState: authState,
+      ...config.viewport, ...config.capture, outputDir: dir, deferCapture: true, storageState: authState, headed: options.headed,
     });
     const page = getRecordingPage(session.sessionId);
     if (scenario.prepare) await scenario.prepare(page);

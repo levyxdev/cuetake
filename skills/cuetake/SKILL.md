@@ -10,7 +10,7 @@ CueTake is a local execution engine for AI agents. You direct the story; CueTake
 ## Workflow
 
 1. Infer the audience, demonstrated outcome, duration and framing from the request. Inspect the actual application with the available browser tool; use real locators and measured canvas coordinates.
-2. Run `doctor`. Resolve missing dependencies explicitly; this does not start the application's dev server.
+2. Run `doctor`. For a missing browser, ask the user before running `install-browser` (about 150 MB). This does not start the application's dev server.
 3. Write a trusted `.mjs` scenario in the business project. `prepare(page)` loads examples/assets before capture. `run(d)` performs timed interactions and returns evidence of the demonstrated changes. Never embed credentials or copied browser state in a scenario.
 4. Run `record` with the scenario path and a new output directory. It captures, renders and verifies in the foreground, then prints the verification report; a failure exits non-zero. Recording takes the scenario's duration plus rendering time, so run it in the background when your shell would time out.
 5. Read verification and application evidence. Inspect frames around clicks and camera transitions with `frame <take> <seconds>`, which saves a PNG you can view, and play the final MP4. Deliver the absolute final path and relevant limitations. Technical verification is not editorial approval or authorization to publish.
@@ -35,7 +35,7 @@ Defaults: CSS viewport 1440×900, 2× capture resolution, 60 fps target, 1920×1
 
 Use `d.focus(box, seconds)` for deliberate camera targets. Boxes are CSS pixels. Nearby targets form one continuous camera chain. The camera zooms to fit each target with 48 px padding, at most 2×; enter/exit 0.48 seconds, pan 0.42 seconds. Pass `focus: false` to an action that should not move the camera. Keep the camera steady during a meaningful action and give the viewer time to read the result.
 
-Capture is variable frame rate: static scenes reduce cadence and moving scenes can drop frames. Report observed stats, not a promise of 60 independent page frames each second. Current acceptance coverage is headed Chromium on macOS, same-document/SPA operations, no audio. Full document navigation during capture requires separate takes; login and other navigation may happen before capture.
+Capture is variable frame rate: static scenes reduce cadence and moving scenes can drop frames. Report observed stats, not a promise of 60 independent page frames each second. Capture runs headless by default; pass `--headed` to watch it. Coverage is macOS, same-document/SPA operations, no audio. Known limitation: headless Chromium renders the generic `monospace` family as Courier rather than Menlo; record with `--headed` when a page relies on it. Full document navigation during capture requires separate takes; login and other navigation may happen before capture.
 
 ## Commands
 

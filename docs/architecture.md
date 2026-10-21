@@ -23,6 +23,6 @@ The Source holds only page pixels; `probe.js` hides the page cursor during Captu
 - `auth.js`: the `login` command and Auth profile storage.
 - `cli.js`: the command interface, the only entry point.
 
-Source capture is variable frame rate and does not guarantee 60 distinct frames per second. Login and full navigations may happen during preparation; after recording begins, the document must remain alive (SPA changes are supported). Current acceptance platform is macOS headed Chromium, without audio.
+Source capture is variable frame rate and does not guarantee 60 distinct frames per second. Login and full navigations may happen during preparation; after recording begins, the document must remain alive (SPA changes are supported). Capture runs in Chromium's new headless mode by default (`--headed` shows the window); both are verified on macOS, without audio. Login always uses a headed window.
 
 No persistent background service, global browser profile modifications, desktop capture, or software GUI is required. Publishing and clean-machine installation remain release work; see [distribution.md](distribution.md).

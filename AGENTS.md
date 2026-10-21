@@ -4,7 +4,7 @@ CueTake records browser product demos for AI agents. Use the vocabulary in `GLOS
 
 - Use Bun for development and keep `bun.lock` in sync. Users run the CLI on Node, so runtime code uses Node APIs only (`node:*` modules, no `Bun.*`).
 - The CLI is the only interface; the skill drives it. Capture produces the Source and Timeline; Render reads only Source, Timeline and Edit (ADR 0002).
-- Install scripts download nothing. Browsers are installed only by an explicit command the user agreed to.
+- Install scripts download nothing. The browser is installed only by `cuetake install-browser`, after the user agrees.
 - Keep timing and coordinate spaces explicit: Scenario boxes and the Timeline use CSS pixels; the Source uses device pixels; output dimensions are independent.
 - Check git status first. Keep product-specific Scenarios, Takes and Auth profiles outside this repository. `origin` is the public repository, `levyxdev/cuetake`.
 - Run `bun test tests/pipeline.test.js` for pipeline and Render changes. For Capture or Render changes, also record a short real Scenario and inspect the Final's frame metadata and cursor position.

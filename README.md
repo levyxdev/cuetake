@@ -14,13 +14,13 @@ CueTake is not yet published to a package registry.
 
 ## Run from source
 
-Requirements: Bun and Playwright Chromium. The verified capture environment is macOS with headed Chromium.
+Requirements: Bun for development (users run the CLI on Node 20.10+) and the Chromium build CueTake's Playwright drives. Verified on macOS, headless and headed.
 
 ```sh
 bun install --frozen-lockfile
 bun run doctor
-# Only if doctor reports Chromium missing:
-PLAYWRIGHT_SKIP_BROWSER_GC=1 bunx playwright install chromium
+# Only if doctor reports Chromium missing (about 150 MB):
+bun src/cli.js install-browser
 
 bun src/cli.js record examples/basic.mjs --out ./recordings/first-take
 ```
@@ -33,7 +33,8 @@ Playwright is a local package dependency. Browser binaries use Playwright's norm
 
 ```sh
 bun src/cli.js doctor
-bun src/cli.js record ./my-scenario.mjs --out ./recordings/my-take
+bun src/cli.js install-browser
+bun src/cli.js record ./my-scenario.mjs --out ./recordings/my-take [--headed]
 bun src/cli.js render ./recordings/my-take
 bun src/cli.js verify ./recordings/my-take
 bun src/cli.js frame ./recordings/my-take 2.5

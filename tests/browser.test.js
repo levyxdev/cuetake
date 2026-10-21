@@ -12,7 +12,7 @@ test('local auth state restores cookie and localStorage without adding it to tak
   const directory = await fs.mkdtemp(join(tmpdir(), 'cuetake-auth-'));
   const old = process.env.CUETAKE_AUTH_DIR;
   process.env.CUETAKE_AUTH_DIR = directory;
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
   try {
     const context = await browser.newContext();
     const page = await context.newPage();
@@ -34,7 +34,7 @@ test('local auth state restores cookie and localStorage without adding it to tak
 }, 30_000);
 
 test('probe records the pointer path, clicks with their target box, drags and typing bursts', async () => {
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
   try {
     const page = await browser.newPage({ viewport: { width: 640, height: 480 } });
     await page.setContent('<button style="position:fixed;left:100px;top:100px;width:80px;height:40px">Go</button><input style="position:fixed;left:300px;top:100px;width:200px;height:30px">');
@@ -104,7 +104,7 @@ async function pixelsAt(browser, png, points) {
 
 test('Render maps CSS camera targets onto the 2× Source and holds the last frame to the Take duration', async () => {
   const dir = await fs.mkdtemp(join(tmpdir(), 'cuetake-render-'));
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
   try {
     const sourcePath = join(dir, 'source.webm'), outputPath = join(dir, 'final.mp4');
     await fs.writeFile(sourcePath, await syntheticSource(browser, 0.6));
@@ -120,7 +120,7 @@ test('Render maps CSS camera targets onto the 2× Source and holds the last fram
 
 test('Render draws the cursor at the pointer and a spark around each click', async () => {
   const dir = await fs.mkdtemp(join(tmpdir(), 'cuetake-cursor-'));
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
   try {
     const sourcePath = join(dir, 'source.webm'), outputPath = join(dir, 'final.mp4');
     await fs.writeFile(sourcePath, await syntheticSource(browser, 0.6));
