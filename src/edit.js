@@ -6,10 +6,20 @@ export const evenSize = z.number().int().min(240).max(7680).refine(n => n % 2 ==
 const box = z.object({ x: z.number(), y: z.number(), width: z.number().nonnegative(), height: z.number().nonnegative() });
 
 // size names the Final's short side; quality is the H.264 quantizer (lower is sharper and larger).
-const outputFields = z.object({
+export const outputFields = z.object({
   size: z.union([z.enum(Object.keys(SHORT_SIDE)), evenSize]).default('2160p'),
   aspect: z.enum(['16:9', '1:1', '9:16']).default('16:9'),
   quality: z.number().int().min(10).max(40).default(22),
+});
+
+// The page in a window on a background. Radius is in 1080p pixels.
+export const frameFields = z.object({
+  window: z.enum(Object.keys(CHROME_HEIGHT)).default('browser'),
+  background: z.enum([...Object.keys(BACKGROUNDS), 'auto', 'blur']).default('aurora'),
+  padding: z.number().min(0).max(0.3).default(0.08),
+  radius: z.number().min(0).max(48).default(12),
+  shadow: z.boolean().default(true),
+  url: z.string().max(200).optional(),
 });
 
 /** Times are seconds except clickEffect.duration, which is milliseconds; geometry is CSS pixels. */
@@ -17,15 +27,8 @@ export const editFields = {
   cursor: z.object({ style: z.enum(['arrow', 'dot']).default('arrow'), size: z.number().min(12).max(64).default(24), color: z.string().regex(/^#[a-fA-F0-9]{6}$/).default('#ffffff') }).default({}),
   clickEffect: z.object({ style: z.enum(['spark', 'none']).default('spark'), radius: z.number().min(8).max(80).default(32), length: z.number().min(4).max(40).default(16), count: z.number().int().min(4).max(16).default(8), duration: z.number().min(150).max(1000).default(420) }).default({}),
   output: outputFields.default({}),
-  // The page in a window on a background; `false` lets the page fill the Final. Radius is in 1080p pixels.
-  frame: z.union([z.literal(false), z.object({
-    window: z.enum(Object.keys(CHROME_HEIGHT)).default('browser'),
-    background: z.enum([...Object.keys(BACKGROUNDS), 'auto', 'blur']).default('aurora'),
-    padding: z.number().min(0).max(0.3).default(0.08),
-    radius: z.number().min(0).max(48).default(12),
-    shadow: z.boolean().default(true),
-    url: z.string().max(200).optional(),
-  })]).default({}),
+  // `false` lets the page fill the Final.
+  frame: z.union([z.literal(false), frameFields]).default({}),
   // See camera.js. Each target is framed with `padding` CSS px around it, zooming at most `maxZoom`;
   // fits below `minZoom` stay wide. The camera arrives `lead` before an action, holds `hold` after the
   // last one in a segment, settles in about `response`, and returns wide `endWide` before the end.

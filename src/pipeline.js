@@ -4,12 +4,13 @@ import { pathToFileURL } from 'node:url';
 import { doctor } from './environment.js';
 import { z } from 'zod';
 import { startRecording, getRecordingPage, beginCapture, stopRecording, cleanup } from './recorder.js';
-import { renderFinal, inspectFinal } from './render.js';
+import { renderFinal, inspectFinal, composePreview } from './render.js';
 import { outputSize } from './stage.js';
 import { resolveAuthProfile } from './auth.js';
 import { createDirector } from './director.js';
 import { collectTimeline } from './probe.js';
 import { editFields, editSchema, createEdit, evenSize } from './edit.js';
+import { loadLook, mergeLook, applyLook, lookFromEdit, saveLook, summarize } from './look.js';
 import pkg from '../package.json' with { type: 'json' };
 
 const SCHEMA_VERSION = 2;
@@ -27,7 +28,9 @@ const readJson = async path => JSON.parse(await fs.readFile(path, 'utf8'));
 /** New take directories are exclusive: reruns never overwrite a previous take. */
 export async function recordScenario(scenarioPath, outputDir, options = {}) {
   const scenario = await import(pathToFileURL(resolve(scenarioPath)).href);
-  const config = scenarioSchema.parse(scenario.config);
+  // A Look sits under the Scenario: every field the config names wins over it.
+  const look = options.look ? await loadLook(options.look) : null;
+  const config = scenarioSchema.parse(look ? mergeLook(look.look, scenario.config) : scenario.config);
   if (typeof scenario.run !== 'function') throw new Error('Scenario must export run(director)');
   const authState = options.authProfile ? await resolveAuthProfile(options.authProfile) : undefined;
   const ready = await doctor();
@@ -35,7 +38,7 @@ export async function recordScenario(scenarioPath, outputDir, options = {}) {
   const dir = resolve(outputDir || join('recordings', config.name, new Date().toISOString().replace(/[:.]/g, '-')));
   await fs.mkdir(resolve(dir, '..'), { recursive: true });
   await fs.mkdir(dir); // EEXIST is intentional, including for empty existing folders.
-  let project = { schemaVersion: SCHEMA_VERSION, tool: 'CueTake', version: pkg.version, createdAt: new Date().toISOString(), status: 'recording', authenticated: Boolean(authState), config };
+  let project = { schemaVersion: SCHEMA_VERSION, tool: 'CueTake', version: pkg.version, createdAt: new Date().toISOString(), status: 'recording', authenticated: Boolean(authState), ...(look && { look: look.name }), config };
   await writeJson(join(dir, 'project.json'), project);
   await fs.copyFile(resolve(scenarioPath), join(dir, 'scenario.mjs'));
   try {
@@ -77,6 +80,40 @@ async function loadTake(dir) {
   const project = await readJson(join(dir, 'project.json'));
   if (project.schemaVersion !== SCHEMA_VERSION) throw new Error(`${dir} was recorded by an older CueTake (schema ${project.schemaVersion ?? 1}); record it again`);
   return { project, config: scenarioSchema.parse(project.config), timeline: await readJson(join(dir, 'timeline.json')), edit: editSchema.parse(await readJson(join(dir, 'edit.json'))) };
+}
+
+/**
+ * Writes preview.png: the Take's current Edit beside each Look (names or JSON files), composed at 1080p,
+ * whose proportions match every output size. Without `at` it shows the last moment with the camera wide.
+ */
+export async function previewTake(directory, refs = [], { at } = {}) {
+  const dir = resolve(directory);
+  const { config, timeline, edit } = await loadTake(dir);
+  if (refs.length > 5) throw new Error('Compare at most five Looks with the current Edit');
+  if (at !== undefined && !(at >= 0 && at <= timeline.duration)) throw new Error(`--at must be between 0 and ${timeline.duration} seconds`);
+  const host = new URL(config.url).host;
+  const looks = await Promise.all(refs.map(ref => loadLook(ref)));
+  const tiles = [{ name: 'current', edit }, ...looks.map(({ name, look }) => ({ name, edit: applyLook(edit, look, host) }))];
+  const png = await composePreview({ sourcePath: join(dir, 'source.webm'), timeline, at, tiles: tiles.map(({ name, edit }) => ({ name, edit: { ...edit, output: { ...edit.output, size: '1080p' } } })) });
+  const preview = join(dir, 'preview.png');
+  await fs.writeFile(preview, png);
+  return { preview, at: at ?? 'end, camera wide', tiles: tiles.map(({ name, edit }) => ({ name, summary: summarize(lookFromEdit(edit)) })) };
+}
+
+/** Adopts a Look into the Take's edit.json; the Final changes only after the next Render. */
+export async function applyLookToTake(ref, directory) {
+  const dir = resolve(directory);
+  const { config, edit } = await loadTake(dir);
+  const { name, look } = await loadLook(ref);
+  const next = applyLook(edit, look, new URL(config.url).host);
+  await writeJson(join(dir, 'edit.json'), next);
+  return { look: name, edit: join(dir, 'edit.json'), summary: summarize(lookFromEdit(next)), next: `cuetake render ${dir}` };
+}
+
+/** Saves the Take's styling as a Look, locally unless `global`. */
+export async function saveLookFromTake(name, directory, options) {
+  const { edit } = await loadTake(resolve(directory));
+  return saveLook(name, lookFromEdit(edit), options);
 }
 
 export async function renderTake(directory) {

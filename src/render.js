@@ -71,6 +71,15 @@ export async function renderFinal({ sourcePath, finalPath, timeline, edit }) {
   } finally { await handle.close(); }
 }
 
+/** A Preview PNG of `tiles` ([{ name, edit }]) at `at` seconds, or at the end with the camera wide. No Final is touched. */
+export async function composePreview({ sourcePath, timeline, tiles, at }) {
+  const png = await withRenderPage({ files: { source: sourcePath } }, page => page.evaluate(options => window.cuetakePreview(options), {
+    sourceUrl: `${ORIGIN}/files/source`, duration: timeline.duration, viewport: timeline.viewport,
+    pointer: timeline.pointer ?? [], events: timeline.events ?? [], tiles, at: at ?? null,
+  }));
+  return Buffer.from(png, 'base64');
+}
+
 /** Container metadata of a Final plus a full decode. */
 export function inspectFinal(path) {
   return withRenderPage({ files: { final: path } }, page => page.evaluate(url => window.cuetakeInspect(url), `${ORIGIN}/files/final`));

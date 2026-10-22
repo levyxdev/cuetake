@@ -1,6 +1,6 @@
 ---
 name: cuetake
-description: Plan, record, refine, and verify browser product demo videos with the CueTake CLI, including login preparation and camera/cursor styling.
+description: Plan, record, refine, and verify browser product demo videos with the CueTake CLI, including login preparation, previewing and saving styling (Looks), and camera/cursor styling.
 ---
 
 # CueTake agent operating manual
@@ -16,6 +16,18 @@ CueTake is a local execution engine for AI agents. You direct the story; CueTake
 5. Read verification and application evidence. Inspect frames around clicks and camera transitions with `frame <take> <seconds>`, which saves a PNG you can view, and play the final MP4. Deliver the absolute final path and relevant limitations. Technical verification is not editorial approval or authorization to publish.
 
 Run `render` after changing a take's `edit.json`. This reuses source.webm. Cursor, click effect, camera and output all live in the Edit, so restyling never requires recording again. Preserve versions by copying a take before editing it.
+
+## Styling with the user
+
+The user never edits files or runs these commands; they say what they want and you translate it.
+
+1. Turn their words ("calmer", "match our brand", "vertical for social") into two to four candidate Looks. Write each as a small JSON file outside the take, holding only the fields it changes plus a `name` label, for example `{ "name": "ocean", "frame": { "background": "ocean", "padding": 0.05 } }`. A saved Look name works too.
+2. Run `preview <take> --look <file-or-name>...` and show the user `preview.png`. It puts the current Edit, labeled `current`, beside each candidate, composed by the same compositor as the Final, in seconds. By default it shows the last moment with the camera wide, so the frame is visible; add `--at <seconds>` to see the real Final moment with camera, cursor and click effect.
+3. Ask them to pick or comment, then adjust and preview again. Do not render between iterations.
+4. When they are happy, run `look apply <file-or-name> <take>` (or edit `edit.json`), then `render`.
+5. Ask once whether to save the styling as a Look and what to call it, then run `look save <name> <take>`. It saves locally, in `.cuetake/looks` of the directory you run in, which can be committed with the business project; add `--global` only when they want it in every project. If the name exists, ask before passing `--replace`. Tell them how to reuse it: next time they can just ask for a recording "with <name>", and you pass `--look <name>` to `record`.
+
+When the user asks what styles they have, run `look list`: it shows each Look's scope and a one-line summary, and marks a global Look hidden by a local one with the same name. A Look holds frame, cursor, click effect, output size, aspect and quality, and camera settings; never camera targets, the address bar's url or the frame rate, which belong to one take. With `record --look`, fields the Scenario config names still win.
 
 ## Division of responsibility
 
@@ -44,9 +56,14 @@ Capture is variable frame rate: static scenes reduce cadence and moving scenes c
 ```sh
 <skill>/scripts/cuetake doctor
 <skill>/scripts/cuetake install-browser
-<skill>/scripts/cuetake record <scenario.mjs> --out <new-take-directory> [--auth-profile product-demo] [--headed]
+<skill>/scripts/cuetake record <scenario.mjs> --out <new-take-directory> [--auth-profile product-demo] [--look brand] [--headed]
+<skill>/scripts/cuetake preview <take-directory> [--look brand --look ./ocean.json] [--at 2.5]
 <skill>/scripts/cuetake render <take-directory>
 <skill>/scripts/cuetake verify <take-directory>
 <skill>/scripts/cuetake frame <take-directory> 2.5
 <skill>/scripts/cuetake login product-demo https://your-app.example/login
+<skill>/scripts/cuetake look list
+<skill>/scripts/cuetake look save brand <take-directory> [--global] [--replace]
+<skill>/scripts/cuetake look apply brand <take-directory>
+<skill>/scripts/cuetake look rm brand [--global]
 ```

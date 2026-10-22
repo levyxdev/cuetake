@@ -92,3 +92,23 @@ export function brandHue(rgba) {
   const hue = max === r ? 60 * (((g - b) / d) % 6) : max === g ? 60 * ((b - r) / d + 2) : 60 * ((r - g) / d + 4);
   return (hue + 360) % 360;
 }
+
+/**
+ * Where Preview tiles sit on one sheet, in sheet pixels. A single tile is the sheet; several are shown
+ * at half size in a grid of up to three columns, each with its label above it. Each row is as tall as
+ * its tallest tile, so a portrait tile does not stretch the other rows.
+ */
+export function previewSheet(sizes) {
+  if (sizes.length === 1) return { width: sizes[0].width, height: sizes[0].height, tiles: [{ x: 0, y: 0, w: sizes[0].width, h: sizes[0].height, label: null }] };
+  const scale = 0.5, gap = 32, label = 44;
+  const columns = sizes.length <= 4 ? 2 : 3, cellWidth = Math.max(...sizes.map(s => s.width)) * scale;
+  const rows = Array.from({ length: Math.ceil(sizes.length / columns) }, (_, row) => Math.max(...sizes.slice(row * columns, (row + 1) * columns).map(s => s.height)) * scale);
+  const rowTop = rows.map((_, row) => gap + rows.slice(0, row).reduce((sum, h) => sum + label + h + gap, 0));
+  return {
+    width: gap + columns * (cellWidth + gap), height: rowTop.at(-1) + label + rows.at(-1) + gap,
+    tiles: sizes.map(({ width, height }, i) => {
+      const x = gap + (i % columns) * (cellWidth + gap) + (cellWidth - width * scale) / 2, y = rowTop[Math.floor(i / columns)];
+      return { x, y: y + label, w: width * scale, h: height * scale, label: { x, y: y + label / 2 } };
+    }),
+  };
+}

@@ -5,9 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { saveAuthState, resolveAuthProfile } from '../src/auth.js';
 import { installProbe, collectTimeline } from '../src/probe.js';
-import { renderFinal, inspectFinal, extractFrame } from '../src/render.js';
+import { renderFinal, inspectFinal, extractFrame, composePreview } from '../src/render.js';
 import { editSchema } from '../src/edit.js';
-import { layout } from '../src/stage.js';
+import { layout, previewSheet } from '../src/stage.js';
 
 test('local auth state restores cookie and localStorage without adding it to take artifacts', async () => {
   const directory = await fs.mkdtemp(join(tmpdir(), 'cuetake-auth-'));
@@ -156,5 +156,31 @@ test('Render frames the page in a browser window on the background', async () =>
     expect(background[2]).toBeGreaterThan(background[1]);    // aurora: blue-violet, not page or chrome
     expect(Math.max(...page)).toBeLessThan(40);              // the black Source
     expect(Math.min(...bar)).toBeGreaterThan(220);           // light chrome bar
+  } finally { await browser.close(); await fs.rm(dir, { recursive: true, force: true }); }
+}, 60_000);
+
+test('a Preview composes each Look over the Source exactly where Render would place it', async () => {
+  const dir = await fs.mkdtemp(join(tmpdir(), 'cuetake-preview-'));
+  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
+  try {
+    const sourcePath = join(dir, 'source.webm');
+    await fs.writeFile(sourcePath, await syntheticSource(browser, 0.6));
+    const viewport = { width: 320, height: 240 }, timeline = { viewport, duration: 1, pointer: [], events: [] };
+    const bare = editSchema.parse({ schemaVersion: 2, output: { size: '1080p' }, frame: false });
+    const [red] = await pixelsAt(browser, await composePreview({ sourcePath, timeline, tiles: [{ name: 'current', edit: bare }] }), [[250 * 4.5, 110 * 4.5]]);
+    expect(red[0]).toBeGreaterThan(180);
+    expect(red[1]).toBeLessThan(60);
+
+    const framed = background => editSchema.parse({ schemaVersion: 2, output: { size: '1080p' }, frame: { background, shadow: false } });
+    const tiles = [{ name: 'current', edit: framed('paper') }, { name: 'dark', edit: framed('graphite') }];
+    const png = await composePreview({ sourcePath, timeline, tiles, at: 0.5 });
+    const sheet = previewSheet(tiles.map(({ edit }) => layout(edit, viewport)));
+    const stage = layout(tiles[0].edit, viewport);
+    const corner = tile => [Math.round(tile.x + 6), Math.round(tile.y + 6)];
+    const page = tile => [Math.round(tile.x + (stage.page.x + stage.page.w * 0.3) / 2), Math.round(tile.y + (stage.page.y + stage.page.h / 2) / 2)];
+    const [paper, graphite, paperPage, graphitePage] = await pixelsAt(browser, png, [corner(sheet.tiles[0]), corner(sheet.tiles[1]), page(sheet.tiles[0]), page(sheet.tiles[1])]);
+    expect(Math.min(...paper)).toBeGreaterThan(200);
+    expect(Math.max(...graphite)).toBeLessThan(80);
+    expect(Math.max(...paperPage, ...graphitePage)).toBeLessThan(40);   // the black Source in both windows
   } finally { await browser.close(); await fs.rm(dir, { recursive: true, force: true }); }
 }, 60_000);

@@ -5,7 +5,11 @@ import { scenarioSchema, summarizeFrames } from '../src/pipeline.js';
 import { fitZoom, cropAround, zoomSegments, cameraTrack } from '../src/camera.js';
 import { cameraTargets, createEdit, editFields } from '../src/edit.js';
 import { pointerAt, presses, sparksAt } from '../src/cursor.js';
-import { outputSize, layout, cameraView, brandHue } from '../src/stage.js';
+import { outputSize, layout, cameraView, brandHue, previewSheet } from '../src/stage.js';
+import { lookSchema, lookFromEdit, applyLook, mergeLook, summarize, saveLook, loadLook, listLooks, removeLook } from '../src/look.js';
+import fs from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 test('rejects unsupported capture rates and odd H.264 output dimensions', () => {
   const base = { name: 'demo', url: 'https://example.com' };
@@ -155,4 +159,82 @@ test('auto backgrounds find the brand hue among neutral pixels', () => {
   for (let i = 0; i < 10; i++) pixels.push(79, 70, 229, 255);
   expect(brandHue(pixels)).toBeCloseTo(243, 0);
   expect(brandHue([250, 250, 250, 255])).toBeNull();
+});
+
+const takeEdit = () => createEdit(scenarioSchema.parse({ name: 'demo', url: 'https://app.example.com/editor', capture: { fps: 30 } }), { events: [{ type: 'click', t: 1, x: 0, y: 0, box }] }, []);
+
+test('a Look keeps only the choices that do not depend on one Take', () => {
+  const look = lookFromEdit(takeEdit());
+  expect(look.frame).not.toHaveProperty('url');
+  expect(look.camera).not.toHaveProperty('targets');
+  expect(look.output).not.toHaveProperty('fps');
+  expect(look.frame).toMatchObject({ window: 'browser', background: 'aurora' });
+  for (const bad of [{ frame: { url: 'x.com' } }, { output: { fps: 30 } }, { camera: { targets: [] } }, { frame: { backgroud: 'ocean' } }, { name: 'brand' }]) {
+    expect(lookSchema.safeParse(bad).success).toBe(false);
+  }
+  expect(lookSchema.parse({ frame: { background: 'ocean' } })).toEqual({ frame: { background: 'ocean' } });
+});
+
+test('adopting a Look keeps camera targets, the frame rate and the address bar', () => {
+  const edit = takeEdit();
+  const next = applyLook(edit, { frame: { background: 'ocean', padding: 0.04 }, output: { aspect: '9:16' } }, 'app.example.com');
+  expect(next.frame).toMatchObject({ window: 'browser', background: 'ocean', padding: 0.04, url: 'app.example.com' });
+  expect(next.output).toMatchObject({ aspect: '9:16', fps: 30, size: '2160p' });
+  expect(next.camera.targets).toEqual(edit.camera.targets);
+  expect(applyLook(edit, { frame: false }).frame).toBe(false);
+  // A framed Look on an unframed Edit fills in defaults and shows the Scenario's host.
+  expect(applyLook({ ...edit, frame: false }, { frame: { background: 'paper' } }, 'app.example.com').frame).toMatchObject({ window: 'browser', background: 'paper', url: 'app.example.com' });
+});
+
+test('fields the Scenario config names win over a Look', () => {
+  const merged = mergeLook({ frame: { background: 'ocean', radius: 20 }, cursor: { size: 32 } }, { name: 'demo', url: 'https://example.com', frame: { radius: 4 } });
+  const config = scenarioSchema.parse(merged);
+  expect(config.frame).toMatchObject({ background: 'ocean', radius: 4 });
+  expect(config.cursor.size).toBe(32);
+  expect(scenarioSchema.parse(mergeLook({ frame: { background: 'ocean' } }, { name: 'demo', url: 'https://example.com', frame: false })).frame).toBe(false);
+});
+
+test('summaries name the window, background, aspect and size', () => {
+  expect(summarize(lookFromEdit(takeEdit()))).toBe('browser · aurora · 16:9 · 2160p');
+  expect(summarize({ frame: false, output: { size: '1080p' } })).toBe('no frame · 1080p');
+  expect(summarize({ cursor: { size: 30 } })).toBe('cursor');
+});
+
+test('local Looks hide global ones with the same name; saving never overwrites unless asked', async () => {
+  const cwd = await fs.mkdtemp(join(tmpdir(), 'cuetake-look-')), global = await fs.mkdtemp(join(tmpdir(), 'cuetake-look-global-'));
+  const old = process.env.CUETAKE_LOOK_DIR;
+  process.env.CUETAKE_LOOK_DIR = global;
+  try {
+    await saveLook('brand', { frame: { background: 'sunset' } }, { global: true, cwd });
+    await saveLook('minimal', { frame: false }, { global: true, cwd });
+    expect((await loadLook('brand', cwd)).look.frame.background).toBe('sunset');
+    await saveLook('brand', { frame: { background: 'ocean' } }, { cwd });
+    expect(await loadLook('brand', cwd)).toMatchObject({ scope: 'local', look: { frame: { background: 'ocean' } } });
+    await expect(saveLook('brand', { frame: { background: 'paper' } }, { cwd })).rejects.toThrow('--replace');
+    await saveLook('brand', { frame: { background: 'paper' } }, { cwd, replace: true });
+    const listed = await listLooks(cwd);
+    expect(listed.map(({ name, scope, shadowed }) => [name, scope, shadowed])).toEqual([['brand', 'local', false], ['brand', 'global', true], ['minimal', 'global', false]]);
+    expect(listed[0].summary).toBe('paper');
+    await fs.writeFile(join(cwd, 'try.json'), JSON.stringify({ name: 'try-ocean', output: { aspect: '1:1' } }));
+    expect(await loadLook('try.json', cwd)).toEqual({ name: 'try-ocean', look: { output: { aspect: '1:1' } } });
+    await expect(loadLook('missing', cwd)).rejects.toThrow(global);
+    await expect(saveLook('../escape', {}, { cwd })).rejects.toThrow();
+    await removeLook('brand', { cwd });
+    expect((await loadLook('brand', cwd)).scope).toBe('global');
+  } finally {
+    if (old === undefined) delete process.env.CUETAKE_LOOK_DIR; else process.env.CUETAKE_LOOK_DIR = old;
+    await fs.rm(cwd, { recursive: true, force: true }); await fs.rm(global, { recursive: true, force: true });
+  }
+});
+
+test('a Preview shows one tile as is and several at half size, labeled, in up to three columns', () => {
+  expect(previewSheet([{ width: 1920, height: 1080 }])).toMatchObject({ width: 1920, height: 1080, tiles: [{ x: 0, y: 0, w: 1920, h: 1080, label: null }] });
+  const sheet = previewSheet([{ width: 1920, height: 1080 }, { width: 1080, height: 1920 }, { width: 1920, height: 1080 }]);
+  expect(sheet.width).toBe(32 + 2 * (960 + 32));
+  expect(sheet.tiles[1]).toMatchObject({ w: 540, h: 960, x: 32 + 992 + 210 });
+  expect(sheet.tiles[2].y).toBeGreaterThan(sheet.tiles[1].y + 960);
+  const landscapeFirst = previewSheet([{ width: 1920, height: 1080 }, { width: 1920, height: 1080 }, { width: 1080, height: 1920 }]);
+  expect(landscapeFirst.tiles[2].y).toBe(32 + 44 + 540 + 32 + 44);   // the landscape row stays 540 tall
+  expect(landscapeFirst.height).toBe(landscapeFirst.tiles[2].y + 960 + 32);
+  expect(previewSheet(Array(5).fill({ width: 1920, height: 1080 })).tiles[2].y).toBe(sheet.tiles[0].y);
 });

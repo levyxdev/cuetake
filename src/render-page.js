@@ -8,7 +8,7 @@
 import * as MB from '/mediabunny.js';
 import { cameraTrack } from '/camera.js';
 import { pointerAt, presses, sparksAt, cursorGeometry, drawSpark, ARROW_PATH } from '/cursor.js';
-import { layout, cameraView, BACKGROUNDS, autoBackground, brandHue } from '/stage.js';
+import { layout, cameraView, previewSheet, BACKGROUNDS, autoBackground, brandHue } from '/stage.js';
 
 const VERTEX = `#version 300 es
 in vec2 p; void main() { gl_Position = vec4(p, 0, 1); }`;
@@ -118,8 +118,8 @@ function frameReader(track, decoderConfig) {
   };
 }
 
-/** `look` is the static part of the frame: stage layout, background and shadow. */
-function createCompositor(stage, look, sourceWidth, sourceHeight) {
+/** `backdrop` is the static part of the frame: whether there is one, its background and shadow. */
+function createCompositor(stage, backdrop, sourceWidth, sourceHeight) {
   const { width, height } = stage;
   const canvas = new OffscreenCanvas(width, height);
   const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, depth: false });
@@ -156,11 +156,11 @@ function createCompositor(stage, look, sourceWidth, sourceHeight) {
   const set = (name, ...v) => gl[`uniform${v.length}f`](pageProgram.uniform(name), ...v);
   set('uPage', stage.page.x, stage.page.y, stage.page.w, stage.page.h);
   set('uWindow', stage.window.x, stage.window.y, stage.window.w, stage.window.h);
-  set('uRadius', stage.radius); set('uFramed', look.framed ? 1 : 0); set('uShadow', look.shadow ? 1 : 0); set('uBlur', look.background ? 0 : 1);
-  if (look.background) {
+  set('uRadius', stage.radius); set('uFramed', backdrop.framed ? 1 : 0); set('uShadow', backdrop.shadow ? 1 : 0); set('uBlur', backdrop.background ? 0 : 1);
+  if (backdrop.background) {
     const rgb = hex => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255);
-    set('uBase', ...rgb(look.background.base));
-    const blobs = look.background.blobs.slice(0, 4);
+    set('uBase', ...rgb(backdrop.background.base));
+    const blobs = backdrop.background.blobs.slice(0, 4);
     gl.uniform1i(pageProgram.uniform('uBlobCount'), blobs.length);
     gl.uniform4fv(pageProgram.uniform('uBlobs'), blobs.flatMap(([x, y, r]) => [x, y, r, 0]).concat(Array(16).fill(0)).slice(0, 16));
     gl.uniform3fv(pageProgram.uniform('uBlobColors'), blobs.flatMap(b => rgb(b[3])).concat(Array(12).fill(0)).slice(0, 12));
@@ -178,6 +178,8 @@ function createCompositor(stage, look, sourceWidth, sourceHeight) {
   return {
     canvas,
     gpu: info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : 'unknown',
+    /** Frees the GPU context; a Preview makes one compositor per tile. */
+    dispose() { gl.getExtension('WEBGL_lose_context')?.loseContext(); },
     upload(frame) {
       gl.bindTexture(gl.TEXTURE_2D, pageTexture);
       gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, frame);
@@ -275,6 +277,47 @@ async function encoderConfig(width, height, fps, quality) {
   throw new Error(`No H.264 encoder supports ${width}×${height} at ${fps} fps`);
 }
 
+/**
+ * Everything Render draws for one Edit: the stage under the camera, then the chrome, click sparks and
+ * cursor. `firstFrame` is the Source's first frame, which picks the `auto` background.
+ */
+function createScene(edit, viewport, { pointer, events }, firstFrame, sourceWidth, sourceHeight) {
+  const { camera, cursor, clickEffect, frame } = edit;
+  const stage = layout(edit, viewport);
+  const compositor = createCompositor(stage, { framed: Boolean(frame), shadow: frame && frame.shadow, background: frame && backgroundFor(frame, firstFrame) }, sourceWidth, sourceHeight);
+  // Page CSS pixels → stage pixels; sprites are rasterized for the closest zoom and mipmapped below it.
+  const at = (x, y) => [stage.page.x + x * stage.scale, stage.page.y + y * stage.scale];
+  const sharpest = stage.scale * camera.maxZoom * 2;
+  const geometry = cursorGeometry(cursor);
+  const pointerSprite = cursorSprite(cursor, sharpest);
+  const pointerTexture = compositor.sprite(pointerSprite.canvas);
+  const chromeTexture = stage.chrome ? compositor.sprite(chromeSprite(frame, viewport.width, stage.chrome / stage.scale, stage.radius / stage.scale, sharpest)) : null;
+  const pressList = presses(events);
+  const sparkReach = clickEffect.radius + clickEffect.length + 8;
+  let sparkTexture = null;
+  return {
+    stage, compositor,
+    /** Draws output time `t` with the camera showing `crop`, a viewport rectangle in CSS pixels. */
+    draw(t, crop) {
+      const view = cameraView(crop, stage, viewport);
+      compositor.frame(view.x, view.y, view.zoom, draw => {
+        if (chromeTexture) draw(chromeTexture, [stage.window.x, stage.window.y, stage.window.w, stage.chrome]);
+        for (const spark of sparksAt(pressList, clickEffect, t)) {
+          // Each spark is drawn at its on-screen scale so the thin rays stay crisp.
+          const scale = stage.scale * view.zoom, size = Math.ceil(2 * sparkReach * scale);
+          const ctx = new OffscreenCanvas(size, size).getContext('2d');
+          ctx.scale(scale, scale);
+          drawSpark(ctx, sparkReach, sparkReach, spark.progress, clickEffect, cursor.color);
+          sparkTexture = compositor.sprite(ctx.canvas, sparkTexture, false);
+          draw(sparkTexture, [...at(spark.x - sparkReach, spark.y - sparkReach), 2 * sparkReach * stage.scale, 2 * sparkReach * stage.scale]);
+        }
+        const point = pointerAt(pointer, t);
+        if (point) draw(pointerTexture, [...at(point.x - geometry.hotspot.x - pointerSprite.margin, point.y - geometry.hotspot.y - pointerSprite.margin), pointerSprite.width * stage.scale, pointerSprite.height * stage.scale]);
+      });
+    },
+  };
+}
+
 /** A WritableStream that posts each positioned chunk to Node, which writes it into the Final. */
 const uploadStream = url => new WritableStream({
   async write(chunk) {
@@ -284,8 +327,8 @@ const uploadStream = url => new WritableStream({
 });
 
 window.cuetakeRender = async ({ sourceUrl, finalUrl, duration, viewport, pointer, events, edit }) => {
-  const { camera, cursor, clickEffect, frame } = edit, { quality, fps } = edit.output;
-  const stage = layout(edit, viewport), { width, height } = stage;
+  const { camera } = edit, { quality, fps } = edit.output;
+  const { width, height } = layout(edit, viewport);
   const started = performance.now();
   const input = new MB.Input({ formats: MB.ALL_FORMATS, source: new MB.UrlSource(sourceUrl) });
   const track = await input.getPrimaryVideoTrack();
@@ -311,18 +354,8 @@ window.cuetakeRender = async ({ sourceUrl, finalUrl, duration, viewport, pointer
 
   let current = await reader.next(), next = await reader.next(), uploaded = null;
   if (!current) throw new Error('Source has no video frames');
-  const compositor = createCompositor(stage, { framed: Boolean(frame), shadow: frame && frame.shadow, background: frame && backgroundFor(frame, current) }, track.codedWidth, track.codedHeight);
+  const scene = createScene(edit, viewport, { pointer, events }, current, track.codedWidth, track.codedHeight), { compositor } = scene;
   const cameraPath = cameraTrack({ targets: camera.targets, viewport, camera, duration, fps, pointerAt: t => pointerAt(pointer, t) });
-  // Page CSS pixels → stage pixels; sprites are rasterized for the closest zoom and mipmapped below it.
-  const at = (x, y) => [stage.page.x + x * stage.scale, stage.page.y + y * stage.scale];
-  const sharpest = stage.scale * camera.maxZoom * 2;
-  const geometry = cursorGeometry(cursor);
-  const pointerSprite = cursorSprite(cursor, sharpest);
-  const pointerTexture = compositor.sprite(pointerSprite.canvas);
-  const chromeTexture = stage.chrome ? compositor.sprite(chromeSprite(frame, viewport.width, stage.chrome / stage.scale, stage.radius / stage.scale, sharpest)) : null;
-  const pressList = presses(events);
-  const sparkReach = clickEffect.radius + clickEffect.length + 8;
-  let sparkTexture = null;
   const origin = current.timestamp;
   try {
     for (let i = 0; i < frameCount; i++) {
@@ -331,21 +364,7 @@ window.cuetakeRender = async ({ sourceUrl, finalUrl, duration, viewport, pointer
       const due = origin + Math.round(i * 1e6 / fps);
       while (next && next.timestamp <= due) { current.close(); current = next; next = await reader.next(); }
       if (uploaded !== current) { compositor.upload(current); uploaded = current; }
-      const t = i / fps, view = cameraView(cameraPath[i], stage, viewport);
-      compositor.frame(view.x, view.y, view.zoom, draw => {
-        if (chromeTexture) draw(chromeTexture, [stage.window.x, stage.window.y, stage.window.w, stage.chrome]);
-        for (const spark of sparksAt(pressList, clickEffect, t)) {
-          // Each spark is drawn at its on-screen scale so the thin rays stay crisp.
-          const scale = stage.scale * view.zoom, size = Math.ceil(2 * sparkReach * scale);
-          const ctx = new OffscreenCanvas(size, size).getContext('2d');
-          ctx.scale(scale, scale);
-          drawSpark(ctx, sparkReach, sparkReach, spark.progress, clickEffect, cursor.color);
-          sparkTexture = compositor.sprite(ctx.canvas, sparkTexture, false);
-          draw(sparkTexture, [...at(spark.x - sparkReach, spark.y - sparkReach), 2 * sparkReach * stage.scale, 2 * sparkReach * stage.scale]);
-        }
-        const point = pointerAt(pointer, t);
-        if (point) draw(pointerTexture, [...at(point.x - geometry.hotspot.x - pointerSprite.margin, point.y - geometry.hotspot.y - pointerSprite.margin), pointerSprite.width * stage.scale, pointerSprite.height * stage.scale]);
-      });
+      scene.draw(i / fps, cameraPath[i]);
       const videoFrame = new VideoFrame(compositor.canvas, { timestamp: Math.round(i * 1e6 / fps), duration: Math.round(1e6 / fps) });
       encoder.encode(videoFrame, { keyFrame: i % (fps * 2) === 0, ...(quantizer ? { avc: { quantizer } } : {}) });
       videoFrame.close();
@@ -381,15 +400,55 @@ window.cuetakeInspect = async url => {
   };
 };
 
-/** One Final frame at `seconds`, as a base64 PNG. */
-window.cuetakeFrame = async (url, seconds) => {
-  const input = new MB.Input({ formats: MB.ALL_FORMATS, source: new MB.UrlSource(url) });
-  const wrapped = await new MB.CanvasSink(await input.getPrimaryVideoTrack()).getCanvas(seconds);
-  if (!wrapped) throw new Error(`No frame at ${seconds} s`);
-  const { canvas } = wrapped;
+/**
+ * A Preview as a base64 PNG: each tile's Edit composed by the same scene as Render, over the Source at
+ * `at` seconds with the Final's camera, or (`at` null) over the last moment with the camera wide.
+ */
+window.cuetakePreview = async ({ sourceUrl, duration, viewport, pointer, events, tiles, at }) => {
+  const input = new MB.Input({ formats: MB.ALL_FORMATS, source: new MB.UrlSource(sourceUrl) });
+  const track = await input.getPrimaryVideoTrack();
+  const sink = new MB.VideoSampleSink(track), origin = await track.getFirstTimestamp();
+  const t = at ?? duration;
+  const firstSample = await sink.getSample(origin), sample = await sink.getSample(origin + t);
+  if (!firstSample || !sample) throw new Error('Source has no video frames');
+  const firstFrame = firstSample.toVideoFrame(), frame = sample.toVideoFrame();
+  try {
+    const sheet = previewSheet(tiles.map(({ edit }) => layout(edit, viewport)));
+    const ctx = new OffscreenCanvas(sheet.width, sheet.height).getContext('2d');
+    ctx.fillStyle = '#111114'; ctx.fillRect(0, 0, sheet.width, sheet.height);
+    ctx.imageSmoothingQuality = 'high';
+    ctx.font = '600 22px system-ui, -apple-system, sans-serif'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#e5e7eb';
+    tiles.forEach(({ name, edit }, i) => {
+      const scene = createScene(edit, viewport, { pointer, events }, firstFrame, track.codedWidth, track.codedHeight);
+      let crop = { x: 0, y: 0, w: viewport.width, h: viewport.height };
+      if (at !== null) {
+        const { fps } = edit.output, path = cameraTrack({ targets: edit.camera.targets, viewport, camera: edit.camera, duration, fps, pointerAt: s => pointerAt(pointer, s) });
+        crop = path[Math.min(Math.round(at * fps), path.length - 1)] ?? crop;
+      }
+      scene.compositor.upload(frame);
+      scene.draw(t, crop);
+      // Copy before yielding: the WebGL canvas does not keep its drawing buffer.
+      const tile = sheet.tiles[i];
+      ctx.drawImage(scene.compositor.canvas, tile.x, tile.y, tile.w, tile.h);
+      if (tile.label) ctx.fillText(name, tile.label.x, tile.label.y);
+      scene.compositor.dispose();
+    });
+    return await pngBase64(ctx.canvas);
+  } finally { firstFrame.close(); frame.close(); firstSample.close(); sample.close(); }
+};
+
+async function pngBase64(canvas) {
   const blob = canvas.convertToBlob ? await canvas.convertToBlob({ type: 'image/png' }) : await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
   const bytes = new Uint8Array(await blob.arrayBuffer());
   let binary = '';
   for (let i = 0; i < bytes.length; i += 32768) binary += String.fromCharCode(...bytes.subarray(i, i + 32768));
   return btoa(binary);
+}
+
+/** One Final frame at `seconds`, as a base64 PNG. */
+window.cuetakeFrame = async (url, seconds) => {
+  const input = new MB.Input({ formats: MB.ALL_FORMATS, source: new MB.UrlSource(url) });
+  const wrapped = await new MB.CanvasSink(await input.getPrimaryVideoTrack()).getCanvas(seconds);
+  if (!wrapped) throw new Error(`No frame at ${seconds} s`);
+  return pngBase64(wrapped.canvas);
 };
