@@ -1,6 +1,6 @@
 {
   "name": "cuetake",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Local recording runtime for AI agents: plan a browser demo, capture it, and render a finished take.",
   "type": "module",
   "bin": {
@@ -8,7 +8,6 @@
   },
   "files": [
     "src",
-    "skills",
     "examples",
     "README.md",
     "LICENSE"

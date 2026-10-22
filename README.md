@@ -1,5 +1,7 @@
 # CueTake
 
+[![skills.sh](https://skills.sh/b/levyxdev/cuetake)](https://skills.sh/levyxdev/cuetake) [![npm](https://img.shields.io/npm/v/cuetake)](https://www.npmjs.com/package/cuetake)
+
 **Script the flow. Keep the take.**
 
 Built entirely for AI agents, CueTake turns browser interactions into sharp product demo videos with a precise cursor and continuous camera moves. Give an agent a scenario, then capture, render, and verify the result locally.
@@ -10,6 +12,7 @@ Built entirely for AI agents, CueTake turns browser interactions into sharp prod
 - An automatic camera in the style of Screen Studio: it arrives just before each click, field and drag, follows the cursor on a spring, and ends on the wide shot.
 - The page framed in a browser or macOS window on a gradient, brand-colored or blurred background, at 16:9, 1:1 or 9:16.
 - Cursor and click sparks drawn at Render time, so a Take can be restyled without recording again.
+- Styling chosen in conversation: the agent shows Previews of candidate Looks side by side in about a second, and the Look you pick is saved for later Takes.
 - Rendering in Chromium with WebGL and WebCodecs: no FFmpeg, 4K60 by default.
 - A separate folder for every Take: Source, Timeline, Edit, Final MP4, and verification.
 

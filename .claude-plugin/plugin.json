@@ -1,7 +1,7 @@
 {
   "name": "cuetake",
   "displayName": "CueTake",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Record polished browser demo videos from a script: HD tab capture, smooth cursor, click effects and an auto-zoom camera, rendered to MP4.",
   "author": {
     "name": "levyxdev",
