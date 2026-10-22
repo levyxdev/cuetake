@@ -6,8 +6,14 @@ import { join } from 'node:path';
 import { saveAuthState, resolveAuthProfile } from '../src/auth.js';
 import { installProbe, collectTimeline } from '../src/probe.js';
 import { renderFinal, inspectFinal, extractFrame, composePreview } from '../src/render.js';
-import { editSchema } from '../src/edit.js';
-import { layout, previewSheet } from '../src/stage.js';
+import { merge, withDefaults } from '../src/edit.js';
+import { layout, previewSheet, outputSize } from '../src/stage.js';
+import { forRender } from '../src/styles.js';
+
+/** Preview tiles as composePreview takes them: Edits with their files served from `dir`. */
+const previewOf = (dir, tiles) => { const files = {}; return { files, tiles: tiles.map(([name, edit]) => ({ name, edit: forRender(edit, dir, files).edit })) }; };
+/** An Edit for a 320×240 viewport, with the page filling the output unless `over` adds a frame. */
+const bare = (over = {}) => withDefaults(merge({ output: { width: 320, height: 240, fps: 30 }, frame: { padding: 0, radius: 0, chrome: false, background: [], effects: [] } }, over));
 
 test('local auth state restores cookie and localStorage without adding it to take artifacts', async () => {
   const directory = await fs.mkdtemp(join(tmpdir(), 'cuetake-auth-'));
@@ -109,8 +115,8 @@ test('Render maps CSS camera targets onto the 2× Source and holds the last fram
   try {
     const sourcePath = join(dir, 'source.webm'), outputPath = join(dir, 'final.mp4');
     await fs.writeFile(sourcePath, await syntheticSource(browser, 0.6));
-    const edit = editSchema.parse({ schemaVersion: 2, output: { size: 240, fps: 30 }, frame: false, camera: { maxZoom: 2, padding: 0, lead: 0.1, response: 0.1, hold: 2, endWide: 0, follow: false, targets: [{ t: 0.2, box: { x: 240, y: 100, width: 20, height: 20 } }] } });
-    await renderFinal({ sourcePath, finalPath: outputPath, timeline: { viewport: { width: 320, height: 240 }, duration: 1.5 }, edit });
+    const edit = bare({ camera: { maxZoom: 2, padding: 0, lead: 0.1, response: 0.1, hold: 2, endWide: 0, follow: false, targets: [{ t: 0.2, box: { x: 240, y: 100, width: 20, height: 20 } }] } });
+    await renderFinal({ sourcePath, finalPath: outputPath, timeline: { viewport: { width: 320, height: 240 }, duration: 1.5 }, ...forRender(edit, dir) });
     expect(await inspectFinal(outputPath)).toMatchObject({ width: 320, height: 240, fps: 30, packets: 45, decodedFrames: 45 });
     const pixel = await pixelsAt(browser, await extractFrame(outputPath, 0.5), [[180, 120], [250, 110]]);
     expect(pixel[0][0]).toBeGreaterThan(180);
@@ -119,15 +125,14 @@ test('Render maps CSS camera targets onto the 2× Source and holds the last fram
   } finally { await browser.close(); await fs.rm(dir, { recursive: true, force: true }); }
 }, 60_000);
 
-test('Render draws the cursor at the pointer and a spark around each click', async () => {
+test('Render draws the built-in cursor at the pointer and a spark around each click', async () => {
   const dir = await fs.mkdtemp(join(tmpdir(), 'cuetake-cursor-'));
   const browser = await chromium.launch({ headless: true, channel: 'chromium' });
   try {
     const sourcePath = join(dir, 'source.webm'), outputPath = join(dir, 'final.mp4');
     await fs.writeFile(sourcePath, await syntheticSource(browser, 0.6));
-    const edit = editSchema.parse({ schemaVersion: 2, output: { size: 240, fps: 30 }, frame: false });
     const timeline = { viewport: { width: 320, height: 240 }, duration: 1, pointer: [[0, 60, 60], [1, 60, 60]], events: [{ type: 'click', t: 0.2, x: 200, y: 60 }] };
-    await renderFinal({ sourcePath, finalPath: outputPath, timeline, edit });
+    await renderFinal({ sourcePath, finalPath: outputPath, timeline, ...forRender(bare(), dir) });
     // A spark ray sits ~26 px from the click along 22.5° at t=0.3; the arrow body lies just below-right of the tip.
     const ray = [Math.round(200 + 26 * Math.cos(Math.PI / 8)), Math.round(60 + 26 * Math.sin(Math.PI / 8))];
     const [arrow, spark, clear] = await pixelsAt(browser, await extractFrame(outputPath, 0.3), [[64, 72], ray, [120, 200]]);
@@ -139,21 +144,22 @@ test('Render draws the cursor at the pointer and a spark around each click', asy
   } finally { await browser.close(); await fs.rm(dir, { recursive: true, force: true }); }
 }, 60_000);
 
-test('Render frames the page in a browser window on the background', async () => {
+test('Render frames the page in the built-in chrome over an agent shader Background, with its parameters', async () => {
   const dir = await fs.mkdtemp(join(tmpdir(), 'cuetake-frame-'));
   const browser = await chromium.launch({ headless: true, channel: 'chromium' });
   try {
     const sourcePath = join(dir, 'source.webm'), outputPath = join(dir, 'final.mp4');
     await fs.writeFile(sourcePath, await syntheticSource(browser, 0.6));
+    await fs.writeFile(join(dir, 'solid.glsl'), 'void main() { color = vec4(tint, 1.0); }');
     const viewport = { width: 320, height: 240 };
-    const edit = editSchema.parse({ schemaVersion: 2, output: { size: 480, fps: 30 }, frame: { url: 'example.com', shadow: false } });
-    await renderFinal({ sourcePath, finalPath: outputPath, timeline: { viewport, duration: 1 }, edit });
-    const stage = layout(edit, viewport);
-    expect(await inspectFinal(outputPath)).toMatchObject({ width: stage.width, height: stage.height, decodedFrames: 30 });
+    const edit = bare({ output: { width: 854, height: 480 }, frame: { padding: 0.08, radius: 12, url: 'example.com', chrome: { draw: 'browser' }, background: [{ shader: 'solid.glsl', tint: '#2050e0' }] } });
+    await renderFinal({ sourcePath, finalPath: outputPath, timeline: { viewport, duration: 1 }, ...forRender(edit, dir) });
+    const stage = layout(edit, viewport, 44);
+    expect(await inspectFinal(outputPath)).toMatchObject({ width: 854, height: 480, decodedFrames: 30 });
     const pageCenter = [Math.round(stage.page.x + stage.page.w * 0.3), Math.round(stage.page.y + stage.page.h / 2)];
     const chrome = [Math.round(stage.window.x + stage.window.w * 0.8), Math.round(stage.window.y + stage.chrome / 2)];
     const [background, page, bar] = await pixelsAt(browser, await extractFrame(outputPath, 0.5), [[4, 4], pageCenter, chrome]);
-    expect(background[2]).toBeGreaterThan(background[1]);    // aurora: blue-violet, not page or chrome
+    expect(background[0]).toBeLessThan(60); expect(background[2]).toBeGreaterThan(190);
     expect(Math.max(...page)).toBeLessThan(40);              // the black Source
     expect(Math.min(...bar)).toBeGreaterThan(220);           // light chrome bar
   } finally { await browser.close(); await fs.rm(dir, { recursive: true, force: true }); }
@@ -166,21 +172,39 @@ test('a Preview composes each Look over the Source exactly where Render would pl
     const sourcePath = join(dir, 'source.webm');
     await fs.writeFile(sourcePath, await syntheticSource(browser, 0.6));
     const viewport = { width: 320, height: 240 }, timeline = { viewport, duration: 1, pointer: [], events: [] };
-    const bare = editSchema.parse({ schemaVersion: 2, output: { size: '1080p' }, frame: false });
-    const [red] = await pixelsAt(browser, await composePreview({ sourcePath, timeline, tiles: [{ name: 'current', edit: bare }] }), [[250 * 4.5, 110 * 4.5]]);
+    const filled = bare({ output: { width: 1440, height: 1080 } });
+    const [red] = await pixelsAt(browser, await composePreview({ sourcePath, timeline, ...previewOf(dir, [['current', filled]]) }), [[250 * 4.5, 110 * 4.5]]);
     expect(red[0]).toBeGreaterThan(180);
     expect(red[1]).toBeLessThan(60);
 
-    const framed = background => editSchema.parse({ schemaVersion: 2, output: { size: '1080p' }, frame: { background, shadow: false } });
-    const tiles = [{ name: 'current', edit: framed('paper') }, { name: 'dark', edit: framed('graphite') }];
-    const png = await composePreview({ sourcePath, timeline, tiles, at: 0.5 });
-    const sheet = previewSheet(tiles.map(({ edit }) => layout(edit, viewport)));
-    const stage = layout(tiles[0].edit, viewport);
+    // An SVG image layer, and the default fluted glass with its soft shadow.
+    await fs.writeFile(join(dir, 'paper.svg'), '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="9"><rect width="16" height="9" fill="#f4f4f5"/></svg>');
+    const framed = background => withDefaults({ output: { width: 1920, height: 1080 }, frame: { url: 'example.com', ...(background && { background }) } });
+    const edits = [framed([{ image: 'paper.svg' }]), framed()];
+    const png = await composePreview({ sourcePath, timeline, at: 0.5, ...previewOf(dir, edits.map((edit, i) => [`tile ${i}`, edit])) });
+    const sheet = previewSheet(edits.map(outputSize));
+    const stage = layout(edits[0], viewport, 44);
     const corner = tile => [Math.round(tile.x + 6), Math.round(tile.y + 6)];
+    const glow = tile => [Math.round(tile.x + 20), Math.round(tile.y + tile.h - 20)];   // where the brand light sits
     const page = tile => [Math.round(tile.x + (stage.page.x + stage.page.w * 0.3) / 2), Math.round(tile.y + (stage.page.y + stage.page.h / 2) / 2)];
-    const [paper, graphite, paperPage, graphitePage] = await pixelsAt(browser, png, [corner(sheet.tiles[0]), corner(sheet.tiles[1]), page(sheet.tiles[0]), page(sheet.tiles[1])]);
+    const [paper, fluted, paperPage, flutedPage] = await pixelsAt(browser, png, [corner(sheet.tiles[0]), glow(sheet.tiles[1]), page(sheet.tiles[0]), page(sheet.tiles[1])]);
     expect(Math.min(...paper)).toBeGreaterThan(200);
-    expect(Math.max(...graphite)).toBeLessThan(80);
-    expect(Math.max(...paperPage, ...graphitePage)).toBeLessThan(40);   // the black Source in both windows
+    expect(fluted[0]).toBeGreaterThan(fluted[1] + 30);   // lit by the red square's brand color
+    expect(Math.max(...paperPage, ...flutedPage)).toBeLessThan(40);   // the black Source in both windows
+  } finally { await browser.close(); await fs.rm(dir, { recursive: true, force: true }); }
+}, 60_000);
+
+test('styling code errors name their file and line, and the render page refuses the network', async () => {
+  const dir = await fs.mkdtemp(join(tmpdir(), 'cuetake-errors-'));
+  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
+  try {
+    const sourcePath = join(dir, 'source.webm');
+    await fs.writeFile(sourcePath, await syntheticSource(browser, 0.6));
+    const timeline = { viewport: { width: 320, height: 240 }, duration: 1, pointer: [], events: [] };
+    const preview = edit => composePreview({ sourcePath, timeline, ...previewOf(dir, [['current', edit]]) });
+    await fs.writeFile(join(dir, 'bad.glsl'), 'void main() {\n  color = vec4(missing);\n}');
+    await expect(preview(bare({ frame: { background: [{ shader: 'bad.glsl' }] } }))).rejects.toThrow(/bad\.glsl: .*0:2/);
+    await fs.writeFile(join(dir, 'remote.js'), "export const height = 30;\nawait fetch('https://example.com/font.woff2');\nexport function draw() {}");
+    await expect(preview(bare({ frame: { chrome: { draw: 'remote.js' } } }))).rejects.toThrow('no network and refused https://example.com/font.woff2');
   } finally { await browser.close(); await fs.rm(dir, { recursive: true, force: true }); }
 }, 60_000);

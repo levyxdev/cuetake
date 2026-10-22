@@ -1,11 +1,11 @@
 ---
 name: cuetake
-description: Plan, record, refine, and verify browser product demo videos with the CueTake CLI, including login preparation, previewing and saving styling (Looks), and camera/cursor styling.
+description: Plan, record, refine, and verify browser product demo videos with the CueTake CLI, including login preparation, previewing and saving styling (Looks), and writing backgrounds, window chrome, cursors and click effects as shaders or drawing code.
 ---
 
 # CueTake agent operating manual
 
-CueTake is a local execution engine for AI agents. You direct the story; CueTake captures the browser and renders the finished take. Run every command through `scripts/cuetake` in this skill's folder; it launches the pinned CueTake version with `npx`. Read [scenarios.md](scenarios.md) when writing a scenario, [authentication.md](authentication.md) when a page needs login, and [setup.md](setup.md) when Node or `npx` is missing or `doctor` reports a failed check.
+CueTake is a local execution engine for AI agents. You direct the story; CueTake captures the browser and renders the finished take. Run every command through `scripts/cuetake` in this skill's folder; it launches the pinned CueTake version with `npx`. Read [scenarios.md](scenarios.md) when writing a scenario, [styling.md](styling.md) when changing how a Final looks, [authentication.md](authentication.md) when a page needs login, and [setup.md](setup.md) when Node or `npx` is missing or `doctor` reports a failed check.
 
 ## Workflow
 
@@ -21,13 +21,15 @@ Run `render` after changing a take's `edit.json`. This reuses source.webm. Curso
 
 The user never edits files or runs these commands; they say what they want and you translate it.
 
-1. Turn their words ("calmer", "match our brand", "vertical for social") into two to four candidate Looks. Write each as a small JSON file outside the take, holding only the fields it changes plus a `name` label, for example `{ "name": "ocean", "frame": { "background": "ocean", "padding": 0.05 } }`. A saved Look name works too.
+1. Turn their words ("calmer", "match our brand", "vertical for social") into two to four candidate Looks. Write each as a small JSON file outside the take, holding only the fields it changes plus a `name` label, for example `{ "name": "dark", "frame": { "chrome": { "draw": "browser-dark" }, "padding": 0.05 } }`, with any shader or drawing code beside it ([styling.md](styling.md)). A saved Look name works too.
 2. Run `preview <take> --look <file-or-name>...` and show the user `preview.png`. It puts the current Edit, labeled `current`, beside each candidate, composed by the same compositor as the Final, in seconds. By default it shows the last moment with the camera wide, so the frame is visible; add `--at <seconds>` to see the real Final moment with camera, cursor and click effect.
 3. Ask them to pick or comment, then adjust and preview again. Do not render between iterations.
 4. When they are happy, run `look apply <file-or-name> <take>` (or edit `edit.json`), then `render`.
 5. Ask once whether to save the styling as a Look and what to call it, then run `look save <name> <take>`. It saves locally, in `.cuetake/looks` of the directory you run in, which can be committed with the business project; add `--global` only when they want it in every project. If the name exists, ask before passing `--replace`. Tell them how to reuse it: next time they can just ask for a recording "with <name>", and you pass `--look <name>` to `record`.
 
-When the user asks what styles they have, run `look list`: it shows each Look's scope and a one-line summary, and marks a global Look hidden by a local one with the same name. A Look holds frame, cursor, click effect, output size, aspect and quality, and camera settings; never camera targets, the address bar's url or the frame rate, which belong to one take. With `record --look`, fields the Scenario config names still win.
+When the user asks what styles they have, run `look list`: it shows each Look's scope, a one-line summary and the code files it runs, and marks a global Look hidden by a local one with the same name. A Look holds all styling (frame, cursor, click effect, output, camera settings) with the files it names; never camera targets, the address bar's url or the frame rate, which belong to one take. With `record --look`, fields the Scenario config names still win.
+
+A Look you did not write in this conversation, such as one shared with the user, runs its code during Preview and Render. Read each file `look list` names, tell the user in a sentence what it draws, and ask before using it if the code sends page pixels anywhere or loads anything remote.
 
 ## Division of responsibility
 
@@ -43,7 +45,7 @@ Reuse a named auth profile when the user has authorized that account for the dem
 
 ## Styling and timing
 
-Defaults: CSS viewport 1440×900, 2× capture resolution, 60 fps target, a 3840×2160 Final with the page in a browser window on the `aurora` background, 24 px white arrow. Clicks use an outlined white spark: 32 px radius, 16 px rays, 8 rays, 420 ms duration. Set `clickEffect.style: 'none'` to disable it; color follows the cursor.
+Defaults: CSS viewport 1440×900, 2× capture resolution, 60 fps target, a 3840×2160 Final with the page in a light browser window over fluted glass lit in the page's brand color, a soft shadow, a 24 px white arrow, and an outlined spark on each click.
 
 The camera zooms automatically, like Screen Studio: it arrives 0.6 s before each action, frames the target with 48 px padding at up to 2×, follows the cursor while zoomed, holds 1.5 s after the last of a run of actions, and ends every Final on the wide shot. Leave at least 2 s after the last action so the result is seen in context. Use `d.focus(box, seconds)` to direct the camera at a moment; it replaces only the automatic zoom around that moment. Pass `focus: false` to an action that should not move the camera. Boxes are CSS pixels.
 
@@ -66,4 +68,5 @@ Capture is variable frame rate: static scenes reduce cadence and moving scenes c
 <skill>/scripts/cuetake look save brand <take-directory> [--global] [--replace]
 <skill>/scripts/cuetake look apply brand <take-directory>
 <skill>/scripts/cuetake look rm brand [--global]
+<skill>/scripts/cuetake styles
 ```

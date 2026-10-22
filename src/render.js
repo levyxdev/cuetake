@@ -3,11 +3,13 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { contentType } from './styles.js';
 
 /**
  * Render runs in a headless Chromium page (ADR 0001). Files reach the page through intercepted
  * requests on a private origin, so no port is opened: the Source is served with byte ranges and
- * the Final arrives as positioned chunks written straight to disk.
+ * the Final arrives as positioned chunks written straight to disk. The page has no network: it runs
+ * agent-written code (ADR 0005), and anything that code tries to fetch from elsewhere is refused.
  */
 const ORIGIN = 'https://render.cuetake.invalid';
 // The bundled build is a single file the page can import; the package's own entry is many modules.
@@ -30,19 +32,23 @@ async function serveRange(route, path) {
   try {
     const body = Buffer.alloc(end - start + 1);
     await handle.read(body, 0, body.length, start);
-    await route.fulfill({ status: match ? 206 : 200, body, headers: { 'content-type': 'application/octet-stream', 'accept-ranges': 'bytes', 'content-range': `bytes ${start}-${end}/${size}` } });
+    await route.fulfill({ status: match ? 206 : 200, body, headers: { 'content-type': contentType(path), 'accept-ranges': 'bytes', 'content-range': `bytes ${start}-${end}/${size}` } });
   } finally { await handle.close(); }
 }
 
 /** Opens the render page with `files` ({ name: path }) readable and `writable` ({ name: handle }) writable. */
 async function withRenderPage({ files = {}, writable = {} }, task) {
-  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
+  // An unreachable proxy stops what request interception does not see, such as WebSockets.
+  const browser = await chromium.launch({ headless: true, channel: 'chromium', proxy: { server: 'http://127.0.0.1:9' }, args: ['--force-webrtc-ip-handling-policy=disable_non_proxied_udp'] });
+  const blocked = [];
   try {
     const page = await browser.newPage();
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
-    await page.route(`${ORIGIN}/**`, async route => {
-      const { pathname, searchParams } = new URL(route.request().url());
+    await page.route('**/*', async route => {
+      const url = new URL(route.request().url());
+      if (url.origin !== ORIGIN) { blocked.push(url.href); return route.abort('blockedbyclient'); }
+      const { pathname, searchParams } = url;
       const name = pathname.slice('/files/'.length);
       if (route.request().method() === 'POST' && writable[name]) {
         const body = route.request().postDataBuffer();
@@ -56,15 +62,24 @@ async function withRenderPage({ files = {}, writable = {} }, task) {
     });
     await page.goto(`${ORIGIN}/render.html`);
     await page.waitForFunction(() => window.cuetakeRender, null, { timeout: 15_000 }).catch(() => { throw new Error(`Render page failed to load: ${errors.join('; ')}`); });
-    return await task(page);
+    const result = await task(page).catch(error => { throw offline(error, blocked); });
+    if (blocked.length) throw offline(null, blocked);
+    return result;
   } finally { await browser.close(); }
 }
 
-/** Composes the Final from a Source, Timeline and Edit. */
-export async function renderFinal({ sourcePath, finalPath, timeline, edit }) {
+/** Names what styling code tried to fetch, which the render page cannot. */
+function offline(error, blocked) {
+  if (!blocked.length) return error;
+  const note = `The render page has no network and refused ${[...new Set(blocked)].join(', ')}; download it next to the Look or Take and name it by its relative path in \`files\``;
+  return new Error(error ? `${error.message}\n${note}` : note);
+}
+
+/** Composes the Final from a Source, Timeline and Edit; `files` serves the Edit's styling files (styles.js forRender). */
+export async function renderFinal({ sourcePath, finalPath, timeline, edit, files = {} }) {
   const handle = await fs.open(finalPath, 'w');
   try {
-    return await withRenderPage({ files: { source: sourcePath }, writable: { final: handle } }, page => page.evaluate(options => window.cuetakeRender(options), {
+    return await withRenderPage({ files: { ...files, source: sourcePath }, writable: { final: handle } }, page => page.evaluate(options => window.cuetakeRender(options), {
       sourceUrl: `${ORIGIN}/files/source`, finalUrl: `${ORIGIN}/files/final`, duration: timeline.duration,
       viewport: timeline.viewport, pointer: timeline.pointer ?? [], events: timeline.events ?? [], edit,
     }));
@@ -72,8 +87,8 @@ export async function renderFinal({ sourcePath, finalPath, timeline, edit }) {
 }
 
 /** A Preview PNG of `tiles` ([{ name, edit }]) at `at` seconds, or at the end with the camera wide. No Final is touched. */
-export async function composePreview({ sourcePath, timeline, tiles, at }) {
-  const png = await withRenderPage({ files: { source: sourcePath } }, page => page.evaluate(options => window.cuetakePreview(options), {
+export async function composePreview({ sourcePath, timeline, tiles, at, files = {} }) {
+  const png = await withRenderPage({ files: { ...files, source: sourcePath } }, page => page.evaluate(options => window.cuetakePreview(options), {
     sourceUrl: `${ORIGIN}/files/source`, duration: timeline.duration, viewport: timeline.viewport,
     pointer: timeline.pointer ?? [], events: timeline.events ?? [], tiles, at: at ?? null,
   }));

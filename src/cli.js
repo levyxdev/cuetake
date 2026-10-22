@@ -3,6 +3,7 @@ import { parseArgs } from 'node:util';
 import pkg from '../package.json' with { type: 'json' };
 import { recordScenario, renderTake, verifyTake, previewTake, applyLookToTake, saveLookFromTake } from './pipeline.js';
 import { listLooks, removeLook } from './look.js';
+import { BUILTINS, BUILTIN_DIR } from './styles.js';
 import { doctor, installBrowser } from './environment.js';
 import { login } from './auth.js';
 import { extractFrame } from './render.js';
@@ -23,18 +24,22 @@ const help = `CueTake ${pkg.version} — browser demos directed by code
   cuetake look save <name> <take-directory> [--global] [--replace]
   cuetake look apply <name|file.json> <take-directory>
   cuetake look rm <name> [--global]
+  cuetake styles
 
 install-browser downloads the Chromium build this CueTake version drives (about 150 MB).
 record captures, renders and verifies a new take; an existing directory is never overwritten.
   Capture runs headless; --headed shows the browser window while recording.
   --look seeds the first Edit from a Look; fields the Scenario config names win.
-preview writes preview.png in the take: the current Edit beside up to five Looks, at --at seconds
+preview writes preview.png in the take: the current Edit beside each Look, at --at seconds
   or at the end with the camera wide. It never changes edit.json or final.mp4.
 render reuses source.webm, timeline.json and edit.json, replacing final.mp4 only on success.
 frame saves one Final frame as a PNG for inspection.
 login opens a separate browser; close its window after logging in to save the profile.
-A Look is a take's reusable styling. Looks are saved locally (.cuetake/looks in this directory)
-  unless --global; a local Look hides a global one with the same name. apply rewrites edit.json.
+A Look is a take's reusable styling, with the files it draws with. Looks are saved locally
+  (.cuetake/looks in this directory) unless --global; a local Look hides a global one with the same
+  name. list names the code each Look runs. apply rewrites edit.json and copies files into styles/.
+styles lists the built-in shaders and drawing code, with their files and starting parameters.
+Styling is agent-written code and is not validated; the render page has no network.
 Scenario files are trusted JavaScript. Recording runs locally, without audio.
 `;
 try {
@@ -58,5 +63,6 @@ try {
   else if (command === 'look' && target === 'save' && positionals[3]) print(await saveLookFromTake(positionals[2], positionals[3], { global: values.global, replace: values.replace }));
   else if (command === 'look' && target === 'apply' && positionals[3]) print(await applyLookToTake(positionals[2], positionals[3]));
   else if (command === 'look' && target === 'rm' && positionals[2]) print(await removeLook(positionals[2], { global: values.global }));
+  else if (command === 'styles') print(Object.entries(BUILTINS).map(([name, { file, params }]) => ({ name, kind: file.endsWith('.glsl') ? 'shader' : 'draw', path: join(BUILTIN_DIR, file), params })));
   else throw new Error(`Unknown or incomplete command.\n${help}`);
 } catch (error) { console.error(`CueTake: ${error.message}`); process.exitCode = 1; }

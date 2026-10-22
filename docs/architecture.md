@@ -8,20 +8,22 @@ Agent + skill → business scenario → CLI → Playwright context → Chromium 
 
 The scenario controls story and timing. All pointer/camera coordinates are CSS pixels; the source uses device pixels. Device scale does not change the page layout. Render samples the latest Source frame at or before each output time, turning the variable-rate Source into a constant-rate Final and holding the last frame to the measured Take duration.
 
-The Source holds only page pixels; `probe.js` hides the page cursor during Capture. Render draws the cursor from the Timeline's pointer path and a spark at each press, as WebGL sprites under the same camera, so a Take can be restyled without recording again (ADR 0002).
+The Source holds only page pixels; `probe.js` hides the page cursor during Capture. Render draws the cursor from the Timeline's pointer path and a click effect at each press, as WebGL sprites under the same camera, so a Take can be restyled without recording again (ADR 0002). The Background, window effects, chrome, cursor and click effect are agent-written shaders, drawing code or images, with built-in defaults in `src/styles/` (ADR 0005); the render page has no network.
 
 ## Modules
 
 - `pipeline.js`: scenario validation, artifact lifecycle, render and verification.
 - `director.js`: timed interactions and focus targets.
 - `recorder.js` / `tab-capture.js`: supported HD capture only.
-- `cursor.js`: cursor position, sparks and their drawing; shared by Node and the render page.
+- `cursor.js`: cursor position and click-effect timing; shared by Node and the render page.
 - `camera.js`: camera chains and the crop at any time; shared by Node and the render page.
-- `stage.js`: output size, window and page layout, camera view and background presets; shared by Node and the render page.
+- `stage.js`: output size, window and page layout, camera view and brand color; shared by Node and the render page.
+- `styles.js` / `styles/`: built-in styling files, and the file refs an Edit or Look names (copying, serving).
+- `look.js`: saving, listing and adopting Looks.
 - `environment.js`: `doctor` and `install-browser`.
 - `render.js` / `render-page.js`: the Render driver and the in-browser compositor, encoder and inspector.
 - `probe.js`: in-page Timeline recording.
-- `edit.js`: the Edit schema and its first version from a Scenario.
+- `edit.js`: the Edit's defaults, merging, and its first version from a Scenario.
 - `auth.js`: the `login` command and Auth profile storage.
 - `cli.js`: the command interface, the only entry point.
 

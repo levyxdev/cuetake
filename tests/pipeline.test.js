@@ -3,20 +3,22 @@ import { readFileSync } from 'node:fs';
 import pkg from '../package.json' with { type: 'json' };
 import { scenarioSchema, summarizeFrames } from '../src/pipeline.js';
 import { fitZoom, cropAround, zoomSegments, cameraTrack } from '../src/camera.js';
-import { cameraTargets, createEdit, editFields } from '../src/edit.js';
+import { cameraTargets, createEdit, DEFAULT_STYLE, withDefaults } from '../src/edit.js';
 import { pointerAt, presses, sparksAt } from '../src/cursor.js';
-import { outputSize, layout, cameraView, brandHue, previewSheet } from '../src/stage.js';
-import { lookSchema, lookFromEdit, applyLook, mergeLook, summarize, saveLook, loadLook, listLooks, removeLook } from '../src/look.js';
+import { atShortSide, layout, cameraView, brandHue, brandColor, previewSheet } from '../src/stage.js';
+import { lookFromEdit, applyLook, mergeLook, summarize, saveLook, loadLook, listLooks, removeLook, resolvedLook } from '../src/look.js';
+import { bundle, codeRefs, forRender, BUILTIN_DIR } from '../src/styles.js';
 import fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-test('rejects unsupported capture rates and odd H.264 output dimensions', () => {
+test('validates capture settings but passes styling through untouched', () => {
   const base = { name: 'demo', url: 'https://example.com' };
   expect(scenarioSchema.safeParse({ ...base, capture: { fps: 45 } }).success).toBe(false);
-  expect(scenarioSchema.safeParse({ ...base, output: { size: 1079 } }).success).toBe(false);
-  expect(scenarioSchema.safeParse({ ...base, output: { aspect: '4:3' } }).success).toBe(false);
+  expect(scenarioSchema.safeParse({ ...base, viewport: { width: 1441, height: 900 } }).success).toBe(false);
   expect(scenarioSchema.parse(base).capture.fps).toBe(60);
+  const styling = { output: { width: 1234, height: 4 }, frame: { glow: 'anything' } };
+  expect(scenarioSchema.parse({ ...base, ...styling })).toMatchObject(styling);
 });
 
 test('reports sparse static capture honestly rather than labeling it 60 unique fps', () => {
@@ -28,7 +30,7 @@ test('reports sparse static capture honestly rather than labeling it 60 unique f
 const viewport = { width: 320, height: 240 };
 const box = { x: 1, y: 2, width: 3, height: 4 };
 const small = (x, y) => ({ x, y, width: 20, height: 20 });
-const camera = editFields.camera.parse({ padding: 0 });
+const camera = { ...DEFAULT_STYLE.camera, padding: 0 };
 const zoomAt = (track, t, fps = 60) => viewport.width / track[Math.round(t * fps)].w;
 const centerAt = (track, t, fps = 60) => { const c = track[Math.round(t * fps)]; return { x: c.x + c.w / 2, y: c.y + c.h / 2 }; };
 
@@ -43,7 +45,7 @@ test('the camera follows observed clicks, typing and drags, except during focus:
   ]);
   expect(cameraTargets(timeline, [], [{ start: 1.5, end: 4.5 }]).map(target => target.t)).toEqual([1]);
   const edit = createEdit(scenarioSchema.parse({ name: 'demo', url: 'https://example.com' }), timeline, []);
-  expect(edit.schemaVersion).toBe(2);
+  expect(edit.schemaVersion).toBe(3);
   expect(edit.camera).toMatchObject({ maxZoom: 2, follow: true, targets: expect.any(Array) });
 });
 
@@ -112,10 +114,10 @@ test('the cursor interpolates the pointer path and is hidden before the first sa
 test('clicks and drag starts spark for the click effect duration', () => {
   const list = presses([{ type: 'click', t: 1, x: 5, y: 6 }, { type: 'type', t: 2, end: 3 }, { type: 'drag', t: 4, end: 5, from: { x: 7, y: 8 }, to: { x: 9, y: 9 } }]);
   expect(list).toEqual([{ t: 1, x: 5, y: 6 }, { t: 4, x: 7, y: 8 }]);
-  const effect = { style: 'spark', duration: 400 };
+  const effect = { draw: 'spark', duration: 400 };
   expect(sparksAt(list, effect, 1.2)).toEqual([{ x: 5, y: 6, progress: expect.closeTo(0.5, 6) }]);
   expect(sparksAt(list, effect, 1.5)).toEqual([]);
-  expect(sparksAt(list, { ...effect, style: 'none' }, 1.2)).toEqual([]);
+  expect(sparksAt(list, false, 1.2)).toEqual([]);
 });
 
 test('the skill launcher pins the version being released', () => {
@@ -124,16 +126,16 @@ test('the skill launcher pins the version being released', () => {
 });
 
 const pageViewport = { width: 1440, height: 900 };
-const framed = (frame = {}, output = {}) => ({ output: { size: '2160p', aspect: '16:9', ...output }, frame: { window: 'browser', padding: 0.08, radius: 12, ...frame } });
+const framed = (frame = {}, output = {}) => ({ output: { width: 3840, height: 2160, ...output }, frame: { padding: 0.08, radius: 12, ...frame } });
 
-test('output size names the short side; aspect applies only with a frame', () => {
-  expect(outputSize(framed(), pageViewport)).toEqual({ width: 3840, height: 2160 });
-  expect(outputSize(framed({}, { size: '1080p', aspect: '9:16' }), pageViewport)).toEqual({ width: 1080, height: 1920 });
-  expect(outputSize({ output: { size: 240 }, frame: false }, { width: 320, height: 240 })).toEqual({ width: 320, height: 240 });
+test('Previews scale the output to a short side, keeping its proportions and even sizes', () => {
+  expect(atShortSide(framed(), 1080).output).toMatchObject({ width: 1920, height: 1080 });
+  expect(atShortSide(framed({}, { width: 1080, height: 1350 }), 1080).output).toMatchObject({ width: 1080, height: 1350 });
+  expect(atShortSide(framed({}, { width: 2160, height: 3841 }), 1080).output).toMatchObject({ width: 1080, height: 1920 });
 });
 
 test('the window sits centered inside the padding with its chrome above the page', () => {
-  const stage = layout(framed(), pageViewport);
+  const stage = layout(framed(), pageViewport, 44);
   const pad = 2160 * 0.08;
   expect(stage.window.y).toBeGreaterThanOrEqual(pad - 0.001);
   expect(stage.window.x + stage.window.w / 2).toBeCloseTo(1920, 6);
@@ -141,10 +143,15 @@ test('the window sits centered inside the padding with its chrome above the page
   expect(stage.page.y).toBeCloseTo(stage.window.y + stage.chrome, 6);
   expect(stage.page.w / stage.page.h).toBeCloseTo(1440 / 900, 6);
   expect(stage.radius).toBe(24);
+  // Padding per side, as [top, right, bottom, left]: the window shifts away from the larger side.
+  const shifted = layout(framed({ padding: [0.05, 0.05, 0.05, 0.3] }), pageViewport);
+  expect(shifted.window.x).toBeGreaterThan(0.3 * 2160 - 0.001);
+  // Without padding or chrome at the viewport's own proportions, the page fills the output.
+  expect(layout(framed({ padding: 0 }, { width: 2880, height: 1800 }), pageViewport).page).toEqual({ x: 0, y: 0, w: 2880, h: 1800 });
 });
 
 test('at zoom 1 the camera shows the whole stage; zoomed views stay inside it', () => {
-  const stage = layout(framed(), pageViewport);
+  const stage = layout(framed(), pageViewport, 44);
   expect(cameraView({ x: 0, y: 0, w: 1440, h: 900 }, stage, pageViewport)).toEqual({ x: 1920, y: 1080, zoom: 1 });
   const corner = cameraView({ x: 0, y: 0, w: 720, h: 450 }, stage, pageViewport);
   expect(corner.zoom).toBe(2);
@@ -153,12 +160,15 @@ test('at zoom 1 the camera shows the whole stage; zoomed views stay inside it', 
   expect(corner.x - 3840 / 4).toBeGreaterThanOrEqual(0);
 });
 
-test('auto backgrounds find the brand hue among neutral pixels', () => {
+test('the brand color comes from the brand hue among neutral pixels, or is a neutral gray', () => {
   const pixels = [];
   for (let i = 0; i < 90; i++) pixels.push(245, 245, 245, 255);
   for (let i = 0; i < 10; i++) pixels.push(79, 70, 229, 255);
   expect(brandHue(pixels)).toBeCloseTo(243, 0);
+  const [r, g, b] = brandColor(pixels);
+  expect(b).toBeGreaterThan(r); expect(r).toBeGreaterThan(g);
   expect(brandHue([250, 250, 250, 255])).toBeNull();
+  expect(brandColor([250, 250, 250, 255])).toEqual([0.55, 0.56, 0.6]);
 });
 
 const takeEdit = () => createEdit(scenarioSchema.parse({ name: 'demo', url: 'https://app.example.com/editor', capture: { fps: 30 } }), { events: [{ type: 'click', t: 1, x: 0, y: 0, box }] }, []);
@@ -168,55 +178,83 @@ test('a Look keeps only the choices that do not depend on one Take', () => {
   expect(look.frame).not.toHaveProperty('url');
   expect(look.camera).not.toHaveProperty('targets');
   expect(look.output).not.toHaveProperty('fps');
-  expect(look.frame).toMatchObject({ window: 'browser', background: 'aurora' });
-  for (const bad of [{ frame: { url: 'x.com' } }, { output: { fps: 30 } }, { camera: { targets: [] } }, { frame: { backgroud: 'ocean' } }, { name: 'brand' }]) {
-    expect(lookSchema.safeParse(bad).success).toBe(false);
-  }
-  expect(lookSchema.parse({ frame: { background: 'ocean' } })).toEqual({ frame: { background: 'ocean' } });
+  expect(look).not.toHaveProperty('schemaVersion');
+  expect(look.frame).toMatchObject({ chrome: { draw: 'browser' }, background: [{ shader: 'fluted' }], effects: [{ shader: 'shadow' }] });
 });
 
 test('adopting a Look keeps camera targets, the frame rate and the address bar', () => {
   const edit = takeEdit();
-  const next = applyLook(edit, { frame: { background: 'ocean', padding: 0.04 }, output: { aspect: '9:16' } }, 'app.example.com');
-  expect(next.frame).toMatchObject({ window: 'browser', background: 'ocean', padding: 0.04, url: 'app.example.com' });
-  expect(next.output).toMatchObject({ aspect: '9:16', fps: 30, size: '2160p' });
+  const next = applyLook(edit, { frame: { padding: 0.04, background: [{ image: 'photo.jpg' }] }, output: { width: 1080, height: 1920 } }, 'app.example.com');
+  expect(next.frame).toMatchObject({ chrome: { draw: 'browser' }, padding: 0.04, background: [{ image: 'photo.jpg' }], url: 'app.example.com' });
+  expect(next.output).toMatchObject({ width: 1080, height: 1920, fps: 30, quality: 22 });
   expect(next.camera.targets).toEqual(edit.camera.targets);
-  expect(applyLook(edit, { frame: false }).frame).toBe(false);
-  // A framed Look on an unframed Edit fills in defaults and shows the Scenario's host.
-  expect(applyLook({ ...edit, frame: false }, { frame: { background: 'paper' } }, 'app.example.com').frame).toMatchObject({ window: 'browser', background: 'paper', url: 'app.example.com' });
+  // Changing an item's parameters merges; naming a new drawing replaces the item.
+  expect(applyLook(edit, { cursor: { size: 40 } }).cursor).toEqual({ draw: 'arrow', size: 40, color: '#ffffff' });
+  expect(applyLook(edit, { cursor: { image: 'hand.png', hotspot: [4, 2] } }).cursor).toEqual({ image: 'hand.png', hotspot: [4, 2] });
+  expect(applyLook(edit, { clickEffect: false }).clickEffect).toBe(false);
 });
 
 test('fields the Scenario config names win over a Look', () => {
-  const merged = mergeLook({ frame: { background: 'ocean', radius: 20 }, cursor: { size: 32 } }, { name: 'demo', url: 'https://example.com', frame: { radius: 4 } });
+  const merged = mergeLook({ frame: { radius: 20, chrome: { draw: 'macos' } }, cursor: { size: 32 } }, { name: 'demo', url: 'https://example.com', frame: { radius: 4 } });
   const config = scenarioSchema.parse(merged);
-  expect(config.frame).toMatchObject({ background: 'ocean', radius: 4 });
+  expect(config.frame).toMatchObject({ chrome: { draw: 'macos' }, radius: 4 });
   expect(config.cursor.size).toBe(32);
-  expect(scenarioSchema.parse(mergeLook({ frame: { background: 'ocean' } }, { name: 'demo', url: 'https://example.com', frame: false })).frame).toBe(false);
+  expect(withDefaults({ frame: { chrome: false } }).frame).toMatchObject({ chrome: false, padding: 0.08 });
 });
 
-test('summaries name the window, background, aspect and size', () => {
-  expect(summarize(lookFromEdit(takeEdit()))).toBe('browser · aurora · 16:9 · 2160p');
-  expect(summarize({ frame: false, output: { size: '1080p' } })).toBe('no frame · 1080p');
+test('summaries name the chrome, Background layers and output size', () => {
+  expect(summarize(lookFromEdit(takeEdit()))).toBe('browser · fluted · 3840×2160');
+  expect(summarize({ frame: { chrome: false, background: [{ image: 'styles/photo.jpg' }, { shader: 'glass.glsl' }] } })).toBe('none · photo.jpg · glass.glsl');
   expect(summarize({ cursor: { size: 30 } })).toBe('cursor');
 });
 
+const tmp = prefix => fs.mkdtemp(join(tmpdir(), prefix));
+
+test('file refs are copied beside their Take or Look, with a suffix when a different file has the name', async () => {
+  const from = await tmp('cuetake-from-'), to = await tmp('cuetake-to-');
+  try {
+    await fs.writeFile(join(from, 'glass.glsl'), 'void main() {}');
+    await fs.mkdir(join(from, 'other'));
+    await fs.writeFile(join(from, 'other', 'glass.glsl'), 'void main() { }');
+    await fs.writeFile(join(from, 'font.woff2'), 'font');
+    const style = { frame: { background: [{ shader: 'glass.glsl' }, { shader: 'other/glass.glsl' }, { shader: 'fluted' }], chrome: { draw: 'browser', files: { font: 'font.woff2' } } } };
+    const copied = await bundle(style, from, join(to, 'styles'), 'styles/');
+    expect(copied.frame.background.map(layer => layer.shader)).toEqual(['styles/glass.glsl', 'styles/glass-2.glsl', 'fluted']);
+    expect(copied.frame.chrome.files.font).toBe('styles/font.woff2');
+    expect(await fs.readFile(join(to, 'styles', 'glass-2.glsl'), 'utf8')).toBe('void main() { }');
+    // Files already in place stay where they are.
+    expect(await bundle(copied, to, join(to, 'styles'), 'styles/')).toEqual(copied);
+    expect(codeRefs(copied)).toEqual(['styles/glass.glsl', 'styles/glass-2.glsl']);
+  } finally { await fs.rm(from, { recursive: true, force: true }); await fs.rm(to, { recursive: true, force: true }); }
+});
+
+test('Render reads built-ins with their parameters under the item and every file by URL', () => {
+  const files = {};
+  const { edit } = forRender(withDefaults({ frame: { background: [{ shader: 'fluted', count: 12 }, { image: 'bg.svg' }], chrome: { draw: 'browser-dark' } } }), '/take', files);
+  expect(edit.frame.background[0]).toMatchObject({ count: 12, strength: 0.09, kind: 'shader', ref: 'fluted' });
+  expect(edit.frame.chrome).toMatchObject({ dark: true, kind: 'draw' });
+  expect(files[edit.frame.background[1].url.slice('/files/'.length)]).toBe('/take/bg.svg');
+  expect(files[edit.frame.background[0].url.slice('/files/'.length)]).toBe(join(BUILTIN_DIR, 'fluted.glsl'));
+  expect(() => forRender(withDefaults({ cursor: { draw: 'hand' } }), '/take')).toThrow('No built-in named');
+});
+
 test('local Looks hide global ones with the same name; saving never overwrites unless asked', async () => {
-  const cwd = await fs.mkdtemp(join(tmpdir(), 'cuetake-look-')), global = await fs.mkdtemp(join(tmpdir(), 'cuetake-look-global-'));
+  const cwd = await tmp('cuetake-look-'), global = await tmp('cuetake-look-global-');
   const old = process.env.CUETAKE_LOOK_DIR;
   process.env.CUETAKE_LOOK_DIR = global;
   try {
-    await saveLook('brand', { frame: { background: 'sunset' } }, { global: true, cwd });
-    await saveLook('minimal', { frame: false }, { global: true, cwd });
-    expect((await loadLook('brand', cwd)).look.frame.background).toBe('sunset');
-    await saveLook('brand', { frame: { background: 'ocean' } }, { cwd });
-    expect(await loadLook('brand', cwd)).toMatchObject({ scope: 'local', look: { frame: { background: 'ocean' } } });
-    await expect(saveLook('brand', { frame: { background: 'paper' } }, { cwd })).rejects.toThrow('--replace');
-    await saveLook('brand', { frame: { background: 'paper' } }, { cwd, replace: true });
+    await saveLook('brand', { frame: { chrome: { draw: 'macos' } } }, { global: true, cwd });
+    await saveLook('minimal', { frame: { chrome: false } }, { global: true, cwd });
+    expect((await loadLook('brand', cwd)).look.frame.chrome.draw).toBe('macos');
+    await saveLook('brand', { frame: { chrome: { draw: 'browser-dark' } } }, { cwd });
+    expect(await loadLook('brand', cwd)).toMatchObject({ scope: 'local', look: { frame: { chrome: { draw: 'browser-dark' } } } });
+    await expect(saveLook('brand', { cursor: { size: 30 } }, { cwd })).rejects.toThrow('--replace');
+    await saveLook('brand', { frame: { chrome: { draw: 'macos-dark' } } }, { cwd, replace: true });
     const listed = await listLooks(cwd);
     expect(listed.map(({ name, scope, shadowed }) => [name, scope, shadowed])).toEqual([['brand', 'local', false], ['brand', 'global', true], ['minimal', 'global', false]]);
-    expect(listed[0].summary).toBe('paper');
-    await fs.writeFile(join(cwd, 'try.json'), JSON.stringify({ name: 'try-ocean', output: { aspect: '1:1' } }));
-    expect(await loadLook('try.json', cwd)).toEqual({ name: 'try-ocean', look: { output: { aspect: '1:1' } } });
+    expect(listed[0].summary).toBe('macos-dark');
+    await fs.writeFile(join(cwd, 'try.json'), JSON.stringify({ name: 'try-portrait', output: { width: 1080, height: 1920 } }));
+    expect(await loadLook('try.json', cwd)).toEqual({ name: 'try-portrait', dir: cwd, look: { output: { width: 1080, height: 1920 } } });
     await expect(loadLook('missing', cwd)).rejects.toThrow(global);
     await expect(saveLook('../escape', {}, { cwd })).rejects.toThrow();
     await removeLook('brand', { cwd });
@@ -225,6 +263,24 @@ test('local Looks hide global ones with the same name; saving never overwrites u
     if (old === undefined) delete process.env.CUETAKE_LOOK_DIR; else process.env.CUETAKE_LOOK_DIR = old;
     await fs.rm(cwd, { recursive: true, force: true }); await fs.rm(global, { recursive: true, force: true });
   }
+});
+
+test('a Look that names files is saved as a folder with copies of them, and lists its code', async () => {
+  const cwd = await tmp('cuetake-look-'), take = await tmp('cuetake-take-');
+  try {
+    await fs.mkdir(join(take, 'styles'));
+    await fs.writeFile(join(take, 'styles', 'glow.glsl'), 'void main() { color = vec4(1.0); }');
+    await fs.writeFile(join(take, 'styles', 'photo.png'), 'png');
+    const look = { frame: { background: [{ image: 'styles/photo.png' }, { shader: 'styles/glow.glsl', amount: 0.4 }] } };
+    const saved = await saveLook('glow', look, { cwd, from: take });
+    expect(saved.path).toBe(join(cwd, '.cuetake', 'looks', 'glow', 'look.json'));
+    const loaded = await loadLook('glow', cwd);
+    expect(loaded.look.frame.background).toEqual([{ image: 'photo.png' }, { shader: 'glow.glsl', amount: 0.4 }]);
+    expect(resolvedLook(loaded).frame.background[1].shader).toBe(join(cwd, '.cuetake', 'looks', 'glow', 'glow.glsl'));
+    expect((await listLooks(cwd))[0].code).toEqual([join(cwd, '.cuetake', 'looks', 'glow', 'glow.glsl')]);
+    await removeLook('glow', { cwd });
+    expect(await listLooks(cwd)).toEqual([]);
+  } finally { await fs.rm(cwd, { recursive: true, force: true }); await fs.rm(take, { recursive: true, force: true }); }
 });
 
 test('a Preview shows one tile as is and several at half size, labeled, in up to three columns', () => {
