@@ -36,6 +36,14 @@ _Avoid_: session, cookies, login state
 The editable choices that turn a Source and Timeline into a Final: camera, cursor, click effects, frame styling, and output.
 _Avoid_: camera edit, render config, project settings
 
+**Look**:
+A named, reusable set of the Edit choices that do not depend on one Take (frame styling, cursor, click effects, output size and quality, camera behavior) that a new or existing Take can adopt. A Look is saved locally, for the directory CueTake runs in, or globally, for every directory; a local Look hides a global one with the same name.
+_Avoid_: style, theme, preset
+
+**Preview**:
+A still picture of a Take composed exactly as Render would compose it, one tile per Look being compared, made without producing a Final.
+_Avoid_: thumbnail, mockup, frame
+
 **Render**:
 The phase that composes the Final from the Source, the Timeline and the Edit.
 _Avoid_: convert, export, encode
