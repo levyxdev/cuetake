@@ -6,7 +6,7 @@
 
 Built entirely for AI agents, CueTake turns browser interactions into sharp product demo videos with a precise cursor and continuous camera moves. Give an agent a scenario, then capture, render, and verify the result locally.
 
-![A CueTake Final: the page in a browser window on a gradient, the camera zooming to the field being typed into](docs/media/demo.gif)
+![A CueTake Final: Excalidraw in a browser window over purple fluted glass, the camera following as a sign-up flow is drawn, labeled, linked and filled](docs/media/demo.gif)
 
 - Retina tab capture at 30 or 60 fps and a 2× pixel scale, headless by default.
 - An automatic camera in the style of Screen Studio: it arrives just before each click, field and drag, follows the cursor on a spring, and ends on the wide shot.
