@@ -5,14 +5,21 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 const root = () => process.env.CUETAKE_AUTH_DIR || join(homedir(), '.local/share/cuetake/auth');
+const NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
 function profilePath(profile) {
-  if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(profile)) throw new Error('Use a short lowercase profile name, such as product-demo');
+  if (!NAME.test(profile)) throw new Error('Use a short lowercase profile name, such as product-demo');
   return join(root(), `${profile}.json`);
 }
 export async function resolveAuthProfile(profile) {
   const path = profilePath(profile);
   await fs.access(path).catch(() => { throw new Error(`Auth profile '${profile}' is missing. Run: cuetake login ${profile} <login-url>`); });
   return path;
+}
+/** The saved Auth profile files, with any left over from an interrupted save; other files in the folder are not CueTake's. */
+export async function authProfileFiles() {
+  const dir = root(), names = await fs.readdir(dir).catch(error => { if (error.code === 'ENOENT') return []; throw error; });
+  const paths = names.filter(name => { const [profile, ext, ...rest] = name.split('.'); return NAME.test(profile) && ext === 'json' && (rest.length === 0 || (rest.length === 2 && rest[1] === 'tmp')); });
+  return { dir, paths: paths.sort().map(name => join(dir, name)) };
 }
 /** Accepts a browser context or an already-read storage state. */
 export async function saveAuthState(source, profile) {

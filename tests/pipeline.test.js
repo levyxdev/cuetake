@@ -8,6 +8,7 @@ import { pointerAt, presses, sparksAt } from '../src/cursor.js';
 import { atShortSide, layout, cameraView, brandHue, brandColor, previewSheet } from '../src/stage.js';
 import { lookFromEdit, applyLook, mergeLook, summarize, saveLook, loadLook, listLooks, removeLook, resolvedLook } from '../src/look.js';
 import { bundle, codeRefs, forRender, BUILTIN_DIR } from '../src/styles.js';
+import { npxFolders, uninstall } from '../src/uninstall.js';
 import fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -293,4 +294,58 @@ test('a Preview shows one tile as is and several at half size, labeled, in up to
   expect(landscapeFirst.tiles[2].y).toBe(32 + 44 + 540 + 32 + 44);   // the landscape row stays 540 tall
   expect(landscapeFirst.height).toBe(landscapeFirst.tiles[2].y + 960 + 32);
   expect(previewSheet(Array(5).fill({ width: 1920, height: 1080 })).tiles[2].y).toBe(sheet.tiles[0].y);
+});
+
+const withEnv = async (vars, run) => {
+  const old = Object.fromEntries(Object.keys(vars).map(key => [key, process.env[key]]));
+  Object.assign(process.env, vars);
+  try { return await run(); } finally { for (const [key, value] of Object.entries(old)) if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+};
+const writeJson = async (path, data) => { await fs.mkdir(join(path, '..'), { recursive: true }); await fs.writeFile(path, JSON.stringify(data)); };
+
+test('npx folders made for CueTake alone are found, including the one the CLI runs from', async () => {
+  const cache = await tmp('cuetake-npm-'), other = await tmp('cuetake-npm-other-');
+  try {
+    await writeJson(join(cache, '_npx', 'old', 'package.json'), { dependencies: { cuetake: '^0.2.0' } });
+    await writeJson(join(cache, '_npx', 'mixed', 'package.json'), { dependencies: { cuetake: '^0.3.0', zod: '^3' } });
+    await writeJson(join(cache, '_npx', 'tool', 'package.json'), { dependencies: { prettier: '^3' } });
+    await fs.mkdir(join(cache, '_npx', 'broken'));
+    await writeJson(join(other, '_npx', 'own', 'package.json'), { dependencies: { cuetake: '^0.3.0' } });
+    const packageDir = join(other, '_npx', 'own', 'node_modules', 'cuetake');
+    expect(await npxFolders({ cache, packageDir })).toEqual([join(cache, '_npx', 'old'), join(other, '_npx', 'own')]);
+    expect(await npxFolders({ cache: join(cache, 'missing'), packageDir: '/src/cuetake' })).toEqual([]);
+  } finally { await fs.rm(cache, { recursive: true, force: true }); await fs.rm(other, { recursive: true, force: true }); }
+});
+
+test('uninstall removes caches and the browser, and keeps Auth profiles and global Looks unless asked', async () => {
+  const home = await tmp('cuetake-uninstall-');
+  const auth = join(home, 'auth'), looks = join(home, 'looks'), cache = join(home, 'npm');
+  const browser = { path: '/cache/chromium/chrome', existed: true, removed: true };
+  const removeBrowser = async ({ dryRun }) => ({ ...browser, removed: !dryRun });
+  try {
+    await withEnv({ CUETAKE_AUTH_DIR: auth, CUETAKE_LOOK_DIR: looks, npm_config_cache: cache }, async () => {
+      await writeJson(join(cache, '_npx', 'old', 'package.json'), { dependencies: { cuetake: '^0.2.0' } });
+      await writeJson(join(auth, 'product-demo.json'), {});
+      await writeJson(join(auth, 'product-demo.json.0b6c1a2e-0000-4000-8000-000000000000.tmp'), {});
+      await fs.writeFile(join(auth, 'notes.txt'), 'not CueTake\'s');
+      await saveLook('brand', { cursor: { size: 30 } }, { global: true, cwd: home });
+      await writeJson(join(looks, 'ocean', 'look.json'), {});
+      await fs.mkdir(join(looks, 'scratch'));
+
+      const plan = await uninstall({ dryRun: true, removeBrowser });
+      expect(plan.wouldRemove.map(r => r.item)).toEqual(['npx cache', 'browser']);
+      expect(plan.kept).toMatchObject([{ item: 'Auth profile', count: 2, reason: 'pass --auth to remove' }, { item: 'global Look', count: 2, reason: 'pass --looks to remove' }]);
+      await fs.access(join(cache, '_npx', 'old'));
+
+      const done = await uninstall({ removeBrowser });
+      expect(done.removed).toEqual([{ item: 'npx cache', path: join(cache, '_npx', 'old') }, { item: 'browser', path: browser.path }]);
+      expect((await fs.readdir(auth)).length).toBe(3);
+
+      const all = await uninstall({ auth: true, looks: true, removeBrowser: async () => ({ ...browser, removed: false }) });
+      expect(all.kept).toEqual([{ item: 'browser', path: browser.path, reason: 'another Playwright installation still uses it' }]);
+      expect(all.removed.map(r => r.path)).toEqual([join(auth, 'product-demo.json'), join(auth, 'product-demo.json.0b6c1a2e-0000-4000-8000-000000000000.tmp'), join(looks, 'brand.json'), join(looks, 'ocean')]);
+      expect(await fs.readdir(auth)).toEqual(['notes.txt']);
+      expect(await fs.readdir(looks)).toEqual(['scratch']);
+    });
+  } finally { await fs.rm(home, { recursive: true, force: true }); }
 });

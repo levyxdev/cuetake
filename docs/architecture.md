@@ -20,7 +20,8 @@ The Source holds only page pixels; `probe.js` hides the page cursor during Captu
 - `stage.js`: output size, window and page layout, camera view and brand color; shared by Node and the render page.
 - `styles.js` / `styles/`: built-in styling files, and the file refs an Edit or Look names (copying, serving).
 - `look.js`: saving, listing and adopting Looks.
-- `environment.js`: `doctor` and `install-browser`.
+- `environment.js`: `doctor`, `install-browser`, and removing the browser.
+- `uninstall.js`: the `uninstall` command; it removes only what CueTake owns.
 - `render.js` / `render-page.js`: the Render driver and the in-browser compositor, encoder and inspector.
 - `probe.js`: in-page Timeline recording.
 - `edit.js`: the Edit's defaults, merging, and its first version from a Scenario.

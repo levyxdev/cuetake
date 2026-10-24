@@ -47,6 +47,7 @@ Playwright is a local package dependency. Browser binaries use Playwright's norm
 ```sh
 bun src/cli.js doctor
 bun src/cli.js install-browser
+bun src/cli.js uninstall --dry-run
 bun src/cli.js record ./my-scenario.mjs --out ./recordings/my-take [--headed]
 bun src/cli.js render ./recordings/my-take
 bun src/cli.js verify ./recordings/my-take

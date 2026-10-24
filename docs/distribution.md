@@ -15,4 +15,4 @@ The Claude Code plugin in `.claude-plugin/` installs the same skill and nothing 
 1. Publish the versioned package under a verified npm identity. Done since 0.1.0; keep the skill's pinned version in step with each release.
 2. Give the skill the knowledge to set up Node and the browser: detect existing version managers first, offer the user a choice, and install only after the user agrees.
 3. Validate on a clean macOS machine. Linux and Windows are separate later qualifications; keep current platform limits visible.
-4. Make uninstall remove only CueTake-owned caches. Let users keep Take folders and choose explicitly whether to remove Auth profiles.
+4. Make uninstall remove only CueTake-owned caches. Let users keep Take folders and choose explicitly whether to remove Auth profiles. Done: `cuetake uninstall` removes CueTake's npx folders, and the browser unless another Playwright installation uses it; it removes Auth profiles only with `--auth` and global Looks only with `--looks`.
