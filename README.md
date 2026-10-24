@@ -67,7 +67,7 @@ Source capture is variable frame rate. Static scenes may drop to approximately o
 
 ## Current scope
 
-The supported workflow is a short, same-document browser demo, including SPA interactions. A full page navigation or reload destroys the in-page recorder; record those as separate takes. Audio and desktop/window capture are outside this workflow. Input inside cross-origin iframes is not seen by the Timeline probe, so the cursor and camera do not follow it there. Headless Chromium renders the generic `monospace` family as Courier rather than Menlo; record with `--headed` when a page relies on it. Browser automation and captured data stay local; the visited website still receives normal browser requests.
+The supported workflow is a short, same-document browser demo, including SPA interactions. A full page navigation or reload destroys the in-page recorder; record those as separate takes. Page audio and desktop/window capture are outside this workflow; a Narration voiced by a separate speech tool is mixed in at Render, with Subtitles ([narration](skills/cuetake/narration.md)). Input inside cross-origin iframes is not seen by the Timeline probe, so the cursor and camera do not follow it there. Headless Chromium renders the generic `monospace` family as Courier rather than Menlo; record with `--headed` when a page relies on it. Browser automation and captured data stay local; the visited website still receives normal browser requests.
 
 The bundled [agent skill](skills/cuetake/SKILL.md) teaches planning and operation; site-specific scenarios stay in your application project. See [distribution](docs/distribution.md) and [login](skills/cuetake/authentication.md).
 

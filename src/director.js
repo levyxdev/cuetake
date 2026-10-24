@@ -1,5 +1,8 @@
-/** Timed, viewport-aligned interactions shared by all scenarios. */
-export function createDirector(page, startedAt, fps, focusTargets, wideWindows) {
+/**
+ * Timed, viewport-aligned interactions shared by all scenarios. `said` collects where each Line
+ * starts; `voiced` maps the Narration's Line ids to their audio's seconds, or is null without one.
+ */
+export function createDirector(page, startedAt, fps, focusTargets, wideWindows, said = [], voiced = null) {
   let cursor = { x: 0, y: 0 };
   const wait = ms => page.waitForTimeout(Math.max(0, ms));
   const time = () => (Date.now() - startedAt) / 1000;
@@ -50,5 +53,18 @@ export function createDirector(page, startedAt, fps, focusTargets, wideWindows) 
       finally { await page.mouse.up(); }
     });
   }
-  return { page, wait, time, at: seconds => wait(seconds * 1000 - (Date.now() - startedAt)), move, click, type, drag, focus };
+  /** Starts a Line. With a Narration it holds for the Line's audio, so the picture follows the voice. */
+  async function say(id, text) {
+    const t = time(), earlier = said.find(line => line.id === id);
+    if (earlier) throw new Error(`Line '${id}' was already said at ${earlier.t.toFixed(2)} s`);
+    if (voiced) {
+      if (!voiced.has(id)) throw new Error(`The Narration has no Line '${id}'; its Lines are ${[...voiced.keys()].join(', ')}`);
+      said.push({ t, id });
+      await wait((t + voiced.get(id)) * 1000 - (Date.now() - startedAt));
+    } else {
+      if (typeof text !== 'string' || !text) throw new Error(`d.say('${id}') needs the Line's text when recording without --narration`);
+      said.push({ t, id, text });
+    }
+  }
+  return { page, wait, time, at: seconds => wait(seconds * 1000 - (Date.now() - startedAt)), move, click, type, drag, focus, say };
 }

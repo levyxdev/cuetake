@@ -5,7 +5,7 @@ description: Plan, record, refine, and verify browser product demo videos with t
 
 # CueTake agent operating manual
 
-CueTake is a local execution engine for AI agents. You direct the story; CueTake captures the browser and renders the finished take. Run every command through `scripts/cuetake` in this skill's folder; it launches the pinned CueTake version with `npx`. Read [scenarios.md](scenarios.md) when writing a scenario, [styling.md](styling.md) when changing how a Final looks, [authentication.md](authentication.md) when a page needs login, and [setup.md](setup.md) when Node or `npx` is missing, `doctor` reports a failed check, or the user wants CueTake removed.
+CueTake is a local execution engine for AI agents. You direct the story; CueTake captures the browser and renders the finished take. Run every command through `scripts/cuetake` in this skill's folder; it launches the pinned CueTake version with `npx`. Read [scenarios.md](scenarios.md) when writing a scenario, [narration.md](narration.md) when a demo needs a voice or subtitles, [styling.md](styling.md) when changing how a Final looks, [authentication.md](authentication.md) when a page needs login, and [setup.md](setup.md) when Node or `npx` is missing, `doctor` reports a failed check, or the user wants CueTake removed.
 
 ## Workflow
 
@@ -49,7 +49,7 @@ Defaults: CSS viewport 1440×900, 2× capture resolution, 60 fps target, a 3840�
 
 The camera zooms automatically, like Screen Studio: it arrives 0.6 s before each action, frames the target with 48 px padding at up to 2×, follows the cursor while zoomed, holds 1.5 s after the last of a run of actions, and ends every Final on the wide shot. Leave at least 2 s after the last action so the result is seen in context. Use `d.focus(box, seconds)` to direct the camera at a moment; it replaces only the automatic zoom around that moment. Pass `focus: false` to an action that should not move the camera. Boxes are CSS pixels.
 
-Capture is variable frame rate: static scenes reduce cadence and moving scenes can drop frames. Report observed stats, not a promise of 60 independent page frames each second. Capture runs headless by default; pass `--headed` to watch it. Coverage is macOS, same-document/SPA operations, no audio. Known limitation: headless Chromium renders the generic `monospace` family as Courier rather than Menlo; record with `--headed` when a page relies on it. Full document navigation during capture requires separate takes; login and other navigation may happen before capture.
+Capture is variable frame rate: static scenes reduce cadence and moving scenes can drop frames. Report observed stats, not a promise of 60 independent page frames each second. Capture runs headless by default; pass `--headed` to watch it. Coverage is macOS, same-document/SPA operations, no page audio (Narration is voiced separately). Known limitation: headless Chromium renders the generic `monospace` family as Courier rather than Menlo; record with `--headed` when a page relies on it. Full document navigation during capture requires separate takes; login and other navigation may happen before capture.
 
 ## Commands
 
@@ -59,7 +59,8 @@ Capture is variable frame rate: static scenes reduce cadence and moving scenes c
 <skill>/scripts/cuetake doctor
 <skill>/scripts/cuetake install-browser
 <skill>/scripts/cuetake uninstall [--auth] [--looks] [--dry-run]
-<skill>/scripts/cuetake record <scenario.mjs> --out <new-take-directory> [--auth-profile product-demo] [--look brand] [--headed]
+<skill>/scripts/cuetake record <scenario.mjs> --out <new-take-directory> [--auth-profile product-demo] [--look brand] [--narration narration.json] [--headed]
+<skill>/scripts/cuetake narrate import <take-directory> narration.json
 <skill>/scripts/cuetake preview <take-directory> [--look brand --look ./ocean.json] [--at 2.5]
 <skill>/scripts/cuetake render <take-directory>
 <skill>/scripts/cuetake verify <take-directory>

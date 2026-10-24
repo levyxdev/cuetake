@@ -1,10 +1,10 @@
 import fs from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, extname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { doctor } from './environment.js';
 import { z } from 'zod';
 import { startRecording, getRecordingPage, beginCapture, stopRecording, cleanup } from './recorder.js';
-import { renderFinal, inspectFinal, composePreview } from './render.js';
+import { renderFinal, inspectFinal, composePreview, measureLines } from './render.js';
 import { outputSize, atShortSide } from './stage.js';
 import { resolveAuthProfile } from './auth.js';
 import { createDirector } from './director.js';
@@ -12,6 +12,7 @@ import { collectTimeline } from './probe.js';
 import { createEdit, evenSize, merge, withDefaults } from './edit.js';
 import { loadLook, resolvedLook, applyLook, lookFromEdit, saveLook, summarize } from './look.js';
 import { absolute, bundle, forRender } from './styles.js';
+import { isCjk, lineProblems, subtitleCues, toSrt, toVtt } from './narration.js';
 import pkg from '../package.json' with { type: 'json' };
 
 const SCHEMA_VERSION = 3;
@@ -22,8 +23,67 @@ export const scenarioSchema = z.object({
   viewport: z.object({ width: evenSize, height: evenSize }).default({ width: 1440, height: 900 }),
   capture: z.object({ fps: z.union([z.literal(30), z.literal(60)]).default(60), resolutionScale: z.union([z.literal(1), z.literal(2)]).default(2) }).default({}),
 }).passthrough();
+/**
+ * A Narration file: Lines in one language, each with its text, its audio (relative to the file) and
+ * optionally word timings from the speech tool and a start in seconds. Any duration it states is
+ * ignored: CueTake measures each Line from its audio.
+ */
+export const narrationSchema = z.object({
+  language: z.string().min(2),
+  lines: z.array(z.object({
+    id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/, 'Use a short Line id of letters, digits, dots, dashes and underscores'),
+    text: z.string().min(1),
+    audio: z.string().min(1),
+    start: z.number().min(0).optional(),
+    words: z.array(z.object({ text: z.string(), start: z.number().min(0), end: z.number().min(0) })).optional(),
+  })).min(1).refine(lines => new Set(lines.map(line => line.id)).size === lines.length, 'Line ids must be unique'),
+});
 const writeJson = (path, data) => fs.writeFile(path, JSON.stringify(data, null, 2) + '\n');
 const readJson = async path => JSON.parse(await fs.readFile(path, 'utf8'));
+const readIfPresent = path => readJson(path).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+
+/**
+ * Copies a Narration file and its audio into the Take's narration/ folder, replacing any earlier one,
+ * and measures each Line. The audio is renamed after its Line.
+ */
+async function intoTakeNarration(file, dir) {
+  const path = resolve(file), parsed = narrationSchema.safeParse(await readJson(path));
+  if (!parsed.success) throw new Error(`${path} is not a Narration file: ${parsed.error.issues.map(issue => `${issue.path.join('.') || 'file'}: ${issue.message}`).join('; ')}`);
+  // Read everything first: the file may already be the Take's own.
+  const lines = await Promise.all(parsed.data.lines.map(async line => {
+    const from = resolve(dirname(path), line.audio);
+    const bytes = await fs.readFile(from).catch(error => { throw error.code === 'ENOENT' ? new Error(`Line '${line.id}': no audio at ${from}`) : error; });
+    return { line: { ...line, audio: line.id + extname(from).toLowerCase() }, bytes };
+  }));
+  const folder = join(dir, 'narration');
+  await fs.rm(folder, { recursive: true, force: true });
+  await fs.mkdir(folder, { recursive: true });
+  for (const { line, bytes } of lines) await fs.writeFile(join(folder, line.audio), bytes);
+  const narration = { language: parsed.data.language, lines: lines.map(({ line }) => line) };
+  await writeJson(join(folder, 'narration.json'), narration);
+  return { narration, durations: await measureLines(narration.lines.map(line => ({ id: line.id, path: join(folder, line.audio) }))) };
+}
+
+/** The Edit with a Line added at its `start` for each Narration Line that has one and is not placed yet; also names the Lines left unplaced. */
+function placeLines(edit, narration) {
+  const placed = new Set(edit.narration.lines.map(line => line.id));
+  const added = narration.lines.filter(line => !placed.has(line.id) && line.start !== undefined).map(line => ({ id: line.id, start: line.start }));
+  const lines = [...edit.narration.lines, ...added].sort((a, b) => a.start - b.start);
+  return { edit: { ...edit, narration: { ...edit.narration, lines } }, unplaced: narration.lines.filter(line => !placed.has(line.id) && line.start === undefined).map(line => line.id) };
+}
+
+/**
+ * The Edit's Lines joined with the Narration's text, audio and word timings, as Render takes them.
+ * A Line the Narration does not voice stops the Render.
+ */
+function voicedLines(edit, narration, dir) {
+  const voiced = new Map((narration?.lines ?? []).map(line => [line.id, line]));
+  return edit.narration.lines.map(line => {
+    const voice = voiced.get(line.id);
+    if (!voice) throw new Error(`Line '${line.id}' has no audio in the Take's Narration; import one with cuetake narrate import ${dir} <narration.json>`);
+    return { ...line, text: voice.text, words: voice.words, path: join(dir, 'narration', voice.audio) };
+  });
+}
 
 /** New take directories are exclusive: reruns never overwrite a previous take. */
 export async function recordScenario(scenarioPath, outputDir, options = {}) {
@@ -42,7 +102,10 @@ export async function recordScenario(scenarioPath, outputDir, options = {}) {
   let project = { schemaVersion: SCHEMA_VERSION, tool: 'CueTake', version: pkg.version, createdAt: new Date().toISOString(), status: 'recording', authenticated: Boolean(authState), ...(look && { look: look.name }), config };
   await writeJson(join(dir, 'project.json'), project);
   await fs.copyFile(resolve(scenarioPath), join(dir, 'scenario.mjs'));
+  let unplaced = [];
   try {
+    // The Narration is voiced before Capture, so d.say can hold each Line for its audio (ADR 0006).
+    const voice = options.narration ? await intoTakeNarration(options.narration, dir) : null;
     const session = await startRecording(config.url, {
       ...config.viewport, ...config.capture, outputDir: dir, deferCapture: true, storageState: authState, headed: options.headed,
     });
@@ -51,8 +114,8 @@ export async function recordScenario(scenarioPath, outputDir, options = {}) {
     await page.evaluate(() => document.fonts.ready);
     const capture = await beginCapture(session.sessionId);
     const startedAtMs = Date.parse(capture.startedAt);
-    const focus = [], wide = [];
-    const director = createDirector(page, startedAtMs, config.capture.fps, focus, wide);
+    const focus = [], wide = [], said = [];
+    const director = createDirector(page, startedAtMs, config.capture.fps, focus, wide, said, voice && new Map(Object.entries(voice.durations)));
     const evidence = await scenario.run(director);
     await page.screenshot({ path: join(dir, 'poster.png') });
     const observed = await collectTimeline(page, startedAtMs);
@@ -61,10 +124,12 @@ export async function recordScenario(scenarioPath, outputDir, options = {}) {
     await fs.rename(stopped.webmPath.replace(/\.webm$/, '-capture.json'), join(dir, 'capture.json'));
     const timeline = {
       schemaVersion: SCHEMA_VERSION, viewport: config.viewport, scale: config.capture.resolutionScale, duration: stopped.durationSeconds,
-      pointer: observed.pointer, events: [...observed.events, ...focus.map(f => ({ type: 'focus', ...f }))].sort((a, b) => a.t - b.t),
+      pointer: observed.pointer, events: [...observed.events, ...focus.map(f => ({ type: 'focus', ...f })), ...said.map(line => ({ type: 'say', ...line }))].sort((a, b) => a.t - b.t),
     };
     await writeJson(join(dir, 'timeline.json'), timeline);
-    await writeJson(join(dir, 'edit.json'), await intoTake(createEdit(config, timeline, focus, wide), dir));
+    let edit = createEdit(config, timeline, focus, wide);
+    if (voice) ({ edit, unplaced } = placeLines(edit, voice.narration));
+    await writeJson(join(dir, 'edit.json'), await intoTake(edit, dir));
     project = { ...project, status: 'captured', duration: stopped.durationSeconds, evidence: evidence ?? null };
     await writeJson(join(dir, 'project.json'), project);
   } catch (error) {
@@ -73,7 +138,25 @@ export async function recordScenario(scenarioPath, outputDir, options = {}) {
   } finally { await cleanup(); }
   await renderTake(dir);
   const verification = await verifyTake(dir);
-  return { directory: dir, final: join(dir, 'final.mp4'), verification };
+  return { directory: dir, final: join(dir, 'final.mp4'), verification, ...(unplaced.length && { unplaced: { lines: unplaced, note: 'These Lines were never said and have no start; add d.say or a start in edit.json' } }) };
+}
+
+/**
+ * Imports a Narration into a recorded Take, replacing its earlier one. Lines keep their place in the
+ * Edit; a new Line is placed at its `start`, if the file gives one. Problems are reported here and
+ * stop the next Render.
+ */
+export async function importNarration(directory, file) {
+  const dir = resolve(directory);
+  const { timeline, edit } = await loadTake(dir);
+  const { narration, durations } = await intoTakeNarration(file, dir);
+  const { edit: next, unplaced } = placeLines(edit, narration);
+  await writeJson(join(dir, 'edit.json'), next);
+  const voiced = new Set(narration.lines.map(line => line.id));
+  const lines = next.narration.lines.filter(line => voiced.has(line.id)).map(line => ({ ...line, duration: durations[line.id] }));
+  const missing = next.narration.lines.filter(line => !voiced.has(line.id)).map(line => line.id);
+  const problems = [...lineProblems(lines, timeline.duration), ...missing.map(id => `Line '${id}' is placed in edit.json but the Narration has no audio for it`)];
+  return { narration: join(dir, 'narration', 'narration.json'), lines, unplaced, problems, next: `cuetake render ${dir}` };
 }
 
 /** The Edit with every file it names copied into the Take's styles/ folder, so the Take stands alone (ADR 0002). */
@@ -83,7 +166,24 @@ const intoTake = (edit, dir) => bundle(edit, dir, join(dir, 'styles'), 'styles/'
 async function loadTake(dir) {
   const project = await readJson(join(dir, 'project.json'));
   if (project.schemaVersion !== SCHEMA_VERSION) throw new Error(`${dir} was recorded by an older CueTake (schema ${project.schemaVersion ?? 1}); record it again`);
-  return { project, config: scenarioSchema.parse(project.config), timeline: await readJson(join(dir, 'timeline.json')), edit: withDefaults(await readJson(join(dir, 'edit.json'))) };
+  return {
+    project, config: scenarioSchema.parse(project.config), timeline: await readJson(join(dir, 'timeline.json')),
+    edit: withDefaults(await readJson(join(dir, 'edit.json'))), narration: await readIfPresent(join(dir, 'narration', 'narration.json')),
+  };
+}
+
+/**
+ * The Narration as Render takes it, or null without Lines. Burned-in Chinese, Japanese or Korean
+ * Subtitles drawn by the built-in need a font: macOS has PingFang SC; elsewhere the Edit or Look names one.
+ */
+function narrationForRender(edit, narration, dir) {
+  if (!edit.narration.lines.length) return null;
+  const lines = voicedLines(edit, narration, dir), { subtitles } = edit;
+  const builtin = subtitles && subtitles.burn !== false && subtitles.draw === 'subtitles' && !subtitles.files?.font;
+  if (builtin && process.platform !== 'darwin' && lines.some(line => isCjk(line.text, narration.language))) {
+    throw new Error('Burned-in Subtitles in this language need a font outside macOS: add one to the Edit or Look as subtitles.files.font (a .woff2, .ttf or .otf file), or set subtitles.burn to false');
+  }
+  return { language: narration.language, volume: edit.narration.volume, lines };
 }
 
 /**
@@ -92,13 +192,13 @@ async function loadTake(dir) {
  */
 export async function previewTake(directory, refs = [], { at } = {}) {
   const dir = resolve(directory);
-  const { config, timeline, edit } = await loadTake(dir);
+  const { config, timeline, edit, narration } = await loadTake(dir);
   if (at !== undefined && !(at >= 0 && at <= timeline.duration)) throw new Error(`--at must be between 0 and ${timeline.duration} seconds`);
   const host = new URL(config.url).host;
   const looks = await Promise.all(refs.map(ref => loadLook(ref)));
   const tiles = [{ name: 'current', edit }, ...looks.map(look => ({ name: look.name, edit: applyLook(edit, resolvedLook(look), host) }))];
   const files = {}, shown = tiles.map(({ name, edit }) => ({ name, edit: forRender(atShortSide(edit, 1080), dir, files).edit }));
-  const png = await composePreview({ sourcePath: join(dir, 'source.webm'), timeline, at, tiles: shown, files });
+  const png = await composePreview({ sourcePath: join(dir, 'source.webm'), timeline, at, tiles: shown, files, narration: narrationForRender(edit, narration, dir) });
   const preview = join(dir, 'preview.png');
   await fs.writeFile(preview, png);
   return { preview, at: at ?? 'end, camera wide', tiles: tiles.map(({ name, edit }) => ({ name, summary: summarize(lookFromEdit(edit)) })) };
@@ -120,19 +220,60 @@ export async function saveLookFromTake(name, directory, options) {
   return saveLook(name, lookFromEdit(edit), { ...options, from: dir });
 }
 
+/** Writes subtitles.srt and subtitles.vtt for the cues Render drew from, or removes them for a Take without Lines. */
+async function writeSubtitles(dir, cues) {
+  for (const [name, format] of [['subtitles.srt', toSrt], ['subtitles.vtt', toVtt]]) {
+    if (cues) await fs.writeFile(join(dir, name), format(cues)); else await fs.rm(join(dir, name), { force: true });
+  }
+}
+
 export async function renderTake(directory) {
   const dir = resolve(directory);
-  const { project, config, timeline, edit } = await loadTake(dir);
+  const { project, timeline, edit, narration } = await loadTake(dir);
+  const voice = narrationForRender(edit, narration, dir);
   // Render to a temporary output; preserve the last complete final if encoding fails.
   const temporary = join(dir, 'final.pending.mp4');
   try {
-    const render = await renderFinal({ sourcePath: join(dir, 'source.webm'), finalPath: temporary, timeline, ...forRender(edit, dir) });
+    const render = await renderFinal({ sourcePath: join(dir, 'source.webm'), finalPath: temporary, timeline, ...forRender(edit, dir), narration: voice });
     await fs.rename(temporary, join(dir, 'final.mp4'));
+    await writeSubtitles(dir, render.subtitles?.map(({ frames, ...cue }) => cue) ?? null);
     await writeJson(join(dir, 'render.json'), render);
     await fs.rm(join(dir, 'verification.json'), { force: true });
     await writeJson(join(dir, 'project.json'), { ...project, status: 'rendered' });
   } catch (error) { await fs.rm(temporary, { force: true }); throw error; }
   return join(dir, 'final.mp4');
+}
+
+/**
+ * What stops the Final from playing the Narration as placed: a missing or undecodable audio track or
+ * Line, Lines that do not fit, subtitle files that do not match the Lines, and burned-in Subtitles
+ * Render did not draw for a Line.
+ */
+async function narrationProblems(dir, edit, voice, media, end) {
+  const problems = [], fps = edit.output.fps;
+  if (!media.audio) return ['no audio track, though the Edit places Lines'];
+  if (media.audio.error) problems.push(`the audio track does not decode: ${media.audio.error}`);
+  if (Math.abs(media.audio.duration - media.duration) > 0.1) problems.push(`audio lasts ${media.audio.duration.toFixed(3)} s, video ${media.duration.toFixed(3)} s`);
+  const measured = new Map(media.lines.map(line => [line.id, line]));
+  for (const line of media.lines) if (line.error) problems.push(line.error);
+  if (problems.length) return problems;
+  const lines = voice.lines.map(line => ({ ...line, duration: measured.get(line.id).duration }));
+  problems.push(...lineProblems(lines, end));
+  if (problems.length) return problems;
+  const { maxChars, maxRows, minDuration } = edit.subtitles || {};
+  const cues = subtitleCues(lines, { language: voice.language, maxChars, maxRows, minDuration, end });
+  for (const [name, format] of [['subtitles.srt', toSrt], ['subtitles.vtt', toVtt]]) {
+    const text = await fs.readFile(join(dir, name), 'utf8').catch(() => null);
+    if (text !== format(cues)) problems.push(`${name} ${text === null ? 'is missing' : 'does not match the Lines'}; render again`);
+  }
+  if (edit.subtitles && edit.subtitles.burn !== false) {
+    const drawn = (await readIfPresent(join(dir, 'render.json')))?.subtitles ?? [];
+    for (const line of lines) {
+      const own = drawn.filter(cue => cue.id === line.id);
+      if (!own.length || own.some(cue => !cue.frames || cue.frames[0] > Math.ceil(cue.start * fps) + 1 || cue.frames[1] < Math.floor(cue.end * fps) - 2)) problems.push(`Subtitles for Line '${line.id}' were not drawn while it is spoken`);
+    }
+  }
+  return problems;
 }
 
 export function summarizeFrames(frames, duration) {
@@ -144,8 +285,9 @@ export function summarizeFrames(frames, duration) {
 
 export async function verifyTake(directory) {
   const dir = resolve(directory);
-  const { project, config, timeline, edit } = await loadTake(dir);
-  const media = await inspectFinal(join(dir, 'final.mp4'));
+  const { project, edit, narration } = await loadTake(dir);
+  const voice = narrationForRender(edit, narration, dir);
+  const media = await inspectFinal(join(dir, 'final.mp4'), voice?.lines ?? []);
   const { fps } = edit.output;
   const expected = { ...outputSize(edit), fps, frames: Math.round(project.duration * fps) };
   const problems = [
@@ -153,10 +295,15 @@ export async function verifyTake(directory) {
     Math.abs(media.fps - expected.fps) > 0.01 ? `${media.fps} fps, expected ${expected.fps}` : null,
     media.packets !== expected.frames ? `${media.packets} frames, expected ${expected.frames}` : null,
     media.decodedFrames !== media.packets ? `only ${media.decodedFrames} of ${media.packets} frames decoded` : null,
+    ...(voice ? await narrationProblems(dir, edit, voice, media, expected.frames / fps) : []),
   ].filter(Boolean);
   if (problems.length) throw new Error(`Final failed verification: ${problems.join('; ')}`);
   const capture = await readJson(join(dir, 'capture.json'));
-  const verification = { passed: true, checkedAt: new Date().toISOString(), media, source: { settings: capture.settings, ...summarizeFrames(capture.frames, capture.duration) }, fullDecode: 'passed' };
+  const { lines, ...final } = media;
+  const verification = {
+    passed: true, checkedAt: new Date().toISOString(), media: final, source: { settings: capture.settings, ...summarizeFrames(capture.frames, capture.duration) }, fullDecode: 'passed',
+    ...(voice && { narration: { lines: voice.lines.map(({ id, start }) => ({ id, start, duration: lines.find(line => line.id === id).duration })), subtitles: ['subtitles.srt', 'subtitles.vtt'], burned: Boolean(edit.subtitles && edit.subtitles.burn !== false) } }),
+  };
   await writeJson(join(dir, 'verification.json'), verification);
   await writeJson(join(dir, 'project.json'), { ...project, status: 'verified' });
   return verification;

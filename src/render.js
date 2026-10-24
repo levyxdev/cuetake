@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
+import { basename, dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { contentType } from './styles.js';
@@ -20,6 +20,7 @@ const pageFiles = {
   '/camera.js': { path: fileURLToPath(new URL('./camera.js', import.meta.url)), type: 'text/javascript' },
   '/cursor.js': { path: fileURLToPath(new URL('./cursor.js', import.meta.url)), type: 'text/javascript' },
   '/stage.js': { path: fileURLToPath(new URL('./stage.js', import.meta.url)), type: 'text/javascript' },
+  '/narration.js': { path: fileURLToPath(new URL('./narration.js', import.meta.url)), type: 'text/javascript' },
   '/mediabunny.js': { path: mediabunnyBundle, type: 'text/javascript' },
 };
 
@@ -62,10 +63,16 @@ async function withRenderPage({ files = {}, writable = {} }, task) {
     });
     await page.goto(`${ORIGIN}/render.html`);
     await page.waitForFunction(() => window.cuetakeRender, null, { timeout: 15_000 }).catch(() => { throw new Error(`Render page failed to load: ${errors.join('; ')}`); });
-    const result = await task(page).catch(error => { throw offline(error, blocked); });
+    const result = await task(page).catch(error => { throw offline(fromPage(error), blocked); });
     if (blocked.length) throw offline(null, blocked);
     return result;
   } finally { await browser.close(); }
+}
+
+/** An error thrown in the render page, without Playwright's prefix and the page's stack. */
+function fromPage(error) {
+  const message = error.message.replace(/^page\.evaluate: (Error: )?/, '').split(/\n\s+at /)[0];
+  return message === error.message ? error : new Error(message);
 }
 
 /** Names what styling code tried to fetch, which the render page cannot. */
@@ -75,29 +82,57 @@ function offline(error, blocked) {
   return new Error(error ? `${error.message}\n${note}` : note);
 }
 
-/** Composes the Final from a Source, Timeline and Edit; `files` serves the Edit's styling files (styles.js forRender). */
-export async function renderFinal({ sourcePath, finalPath, timeline, edit, files = {} }) {
+/**
+ * Lines as the render page reads them, `{ id, audio, url, ... }`, with their audio served from `files`.
+ * Each Line is `{ id, path, ... }`, `path` being its audio file.
+ */
+function servedLines(lines, files) {
+  return lines.map(({ path, ...line }, i) => {
+    const name = `line-${i}${extname(path)}`;
+    files[name] = path;
+    return { ...line, audio: basename(path), url: `${ORIGIN}/files/${name}` };
+  });
+}
+
+/**
+ * Composes the Final from a Source, Timeline and Edit; `files` serves the Edit's styling files (styles.js
+ * forRender). `narration` ({ language, volume, lines }) adds its Lines' audio and Subtitles.
+ */
+export async function renderFinal({ sourcePath, finalPath, timeline, edit, files = {}, narration = null }) {
   const handle = await fs.open(finalPath, 'w');
+  const served = { ...files, source: sourcePath };
+  const voice = narration && { ...narration, lines: servedLines(narration.lines, served) };
   try {
-    return await withRenderPage({ files: { ...files, source: sourcePath }, writable: { final: handle } }, page => page.evaluate(options => window.cuetakeRender(options), {
+    return await withRenderPage({ files: served, writable: { final: handle } }, page => page.evaluate(options => window.cuetakeRender(options), {
       sourceUrl: `${ORIGIN}/files/source`, finalUrl: `${ORIGIN}/files/final`, duration: timeline.duration,
-      viewport: timeline.viewport, pointer: timeline.pointer ?? [], events: timeline.events ?? [], edit,
+      viewport: timeline.viewport, pointer: timeline.pointer ?? [], events: timeline.events ?? [], edit, narration: voice,
     }));
   } finally { await handle.close(); }
 }
 
 /** A Preview PNG of `tiles` ([{ name, edit }]) at `at` seconds, or at the end with the camera wide. No Final is touched. */
-export async function composePreview({ sourcePath, timeline, tiles, at, files = {} }) {
-  const png = await withRenderPage({ files: { ...files, source: sourcePath } }, page => page.evaluate(options => window.cuetakePreview(options), {
+export async function composePreview({ sourcePath, timeline, tiles, at, files = {}, narration = null }) {
+  const served = { ...files, source: sourcePath };
+  const voice = narration && { ...narration, lines: servedLines(narration.lines, served) };
+  const png = await withRenderPage({ files: served }, page => page.evaluate(options => window.cuetakePreview(options), {
     sourceUrl: `${ORIGIN}/files/source`, duration: timeline.duration, viewport: timeline.viewport,
-    pointer: timeline.pointer ?? [], events: timeline.events ?? [], tiles, at: at ?? null,
+    pointer: timeline.pointer ?? [], events: timeline.events ?? [], tiles, at: at ?? null, narration: voice,
   }));
   return Buffer.from(png, 'base64');
 }
 
-/** Container metadata of a Final plus a full decode. */
-export function inspectFinal(path) {
-  return withRenderPage({ files: { final: path } }, page => page.evaluate(url => window.cuetakeInspect(url), `${ORIGIN}/files/final`));
+/** Container metadata of a Final plus a full decode of its video and audio, and of each Line's audio (`lines`: [{ id, path }]). */
+export function inspectFinal(path, lines = []) {
+  const files = { final: path };
+  const served = servedLines(lines, files);
+  return withRenderPage({ files }, page => page.evaluate(([url, lines]) => window.cuetakeInspect(url, lines), [`${ORIGIN}/files/final`, served]));
+}
+
+/** Each Line's audio duration in seconds (`lines`: [{ id, path }]); the error names a Line whose audio cannot be decoded. */
+export function measureLines(lines) {
+  const files = {};
+  const served = servedLines(lines, files);
+  return withRenderPage({ files }, page => page.evaluate(lines => window.cuetakeMeasure(lines), served));
 }
 
 /** A PNG of the Final at `seconds`, for agents to look at without FFmpeg. */

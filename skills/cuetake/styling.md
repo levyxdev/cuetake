@@ -14,7 +14,8 @@ Everything drawn around the page is code or images you write: CueTake fills in d
     "effects": [{ "shader": "shadow", "blur": 60, "offset": 24, "opacity": 0.5, "rim": 0.12 }]
   },
   "cursor": { "draw": "arrow", "size": 24, "color": "#ffffff" },
-  "clickEffect": { "draw": "spark", "duration": 420, "radius": 32, "length": 16, "count": 8 }
+  "clickEffect": { "draw": "spark", "duration": 420, "radius": 32, "length": 16, "count": 8 },
+  "subtitles": { "draw": "subtitles", "burn": true, "fontSize": 40, "weight": 600, "color": "#ffffff", "band": "#000000b3", "bottom": 72, "padding": 14 }
 }
 ```
 
@@ -23,10 +24,11 @@ Everything drawn around the page is code or images you write: CueTake fills in d
 - `background` is a list of layers, each drawn over the one before. It stays still while the camera moves the window.
 - `effects` are drawn around the window every frame and follow it as the camera zooms and moves.
 - `chrome`, `cursor` and `clickEffect` take `false` to show nothing.
+- `subtitles` draws a Narration's Subtitles ([narration.md](narration.md)) over the Final, outside the camera. `burn: false` keeps them to the subtitle files. CueTake reads `maxChars` (characters per row), `maxRows` (rows per cue, 2) and `minDuration` (seconds, 1) itself. `files: { "font": "brand.woff2" }` sets the font, which burned-in Chinese, Japanese or Korean needs outside macOS.
 
 An **item** names what draws it, `shader`, `draw` or `image`, as a built-in name or a file path with its extension, relative to the Look or Take. Every other key is a parameter for its code. Images also go in `files: { "photo": "photo.jpg" }`. Changing an item's parameters keeps the rest; naming a new drawing replaces the whole item.
 
-Built-ins are ordinary files: `styles` lists their paths and starting parameters. Copy one to start your own. They are `fluted` and `shadow` (shaders), `browser`, `browser-dark`, `macos` and `macos-dark` (chrome), `arrow` and `dot` (cursors), and `spark` (click effect).
+Built-ins are ordinary files: `styles` lists their paths and starting parameters. Copy one to start your own. They are `fluted` and `shadow` (shaders), `browser`, `browser-dark`, `macos` and `macos-dark` (chrome), `arrow` and `dot` (cursors), `spark` (click effect) and `subtitles`.
 
 ## Shaders: `background` and `effects`
 
@@ -50,13 +52,14 @@ void main() {
 }
 ```
 
-## Drawing code: `chrome`, `cursor`, `clickEffect`
+## Drawing code: `chrome`, `cursor`, `clickEffect`, `subtitles`
 
 An ES module drawing on a 2D canvas in CSS pixels. `params` holds the item's parameters, and `files` its images (as `<img>`) and fonts (`.woff2`, `.ttf`…, registered under their key as a font family).
 
 - Chrome: `export const height` (CSS px), `export function draw(ctx, { width, height, radius, url, params, files })`. CueTake clips it to the window's rounded top.
 - Cursor: `export const box = { width, height, hotspot: [x, y] }` in its own units, `export function draw(ctx, { params, files })` in those units. The item's `size` sets its width in CSS px.
 - Click effect: `export const reach` (CSS px around the click, or a function of `params`), `export function draw(ctx, { progress, params, files, cursor })` with the origin at the click and `progress` from 0 to 1 over `duration` ms.
+- Subtitles: `export function draw(ctx, { width, height, rows, params, files })` over the whole Final in 1080p pixels (1920×1080 for a 16:9 Final), once per cue; `rows` are the cue's lines of text. A font in `files` is its key: the built-in uses `files.font` when given.
 
 An image works in place of code: chrome as wide as the window (`height` optional), a cursor with `hotspot` and `size`, a click effect that fades out.
 

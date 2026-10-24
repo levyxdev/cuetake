@@ -208,3 +208,85 @@ test('styling code errors name their file and line, and the render page refuses 
     await expect(preview(bare({ frame: { chrome: { draw: 'remote.js' } } }))).rejects.toThrow('no network and refused https://example.com/font.woff2');
   } finally { await browser.close(); await fs.rm(dir, { recursive: true, force: true }); }
 }, 60_000);
+
+/** A mono 16-bit WAV of a 440 Hz tone, `seconds` long. */
+function toneWav(seconds, rate = 24000) {
+  const n = Math.round(seconds * rate), data = Buffer.alloc(44 + n * 2);
+  data.write('RIFF', 0); data.writeUInt32LE(36 + n * 2, 4); data.write('WAVEfmt ', 8); data.writeUInt32LE(16, 16);
+  data.writeUInt16LE(1, 20); data.writeUInt16LE(1, 22); data.writeUInt32LE(rate, 24); data.writeUInt32LE(rate * 2, 28);
+  data.writeUInt16LE(2, 32); data.writeUInt16LE(16, 34); data.write('data', 36); data.writeUInt32LE(n * 2, 40);
+  for (let i = 0; i < n; i++) data.writeInt16LE(Math.round(Math.sin(2 * Math.PI * 440 * i / rate) * 16000), 44 + i * 2);
+  return data;
+}
+
+/** The RMS level of a Final's audio in each [from, to] window of seconds. */
+async function audioLevels(browser, path, windows) {
+  const page = await browser.newPage();
+  try {
+    await page.route('**/*', route => route.request().url().endsWith('/final.mp4')
+      ? fs.readFile(path).then(body => route.fulfill({ body, contentType: 'video/mp4' }))
+      : route.fulfill({ body: '<!doctype html>', contentType: 'text/html' }));
+    await page.goto('https://levels.invalid/');
+    return await page.evaluate(async windows => {
+      const buffer = await new OfflineAudioContext(1, 1, 48000).decodeAudioData(await (await fetch('/final.mp4')).arrayBuffer());
+      const samples = buffer.getChannelData(0);
+      return windows.map(([from, to]) => {
+        const part = samples.subarray(Math.round(from * buffer.sampleRate), Math.round(to * buffer.sampleRate));
+        return Math.sqrt(part.reduce((sum, v) => sum + v * v, 0) / part.length);
+      });
+    }, windows);
+  } finally { await page.close(); }
+}
+
+test('Render mixes each Line in at its start, as long as the video, and burns in its Subtitles outside the camera', async () => {
+  const dir = await fs.mkdtemp(join(tmpdir(), 'cuetake-narration-'));
+  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
+  try {
+    const sourcePath = join(dir, 'source.webm'), outputPath = join(dir, 'final.mp4');
+    await fs.writeFile(sourcePath, await syntheticSource(browser, 0.6));
+    await fs.writeFile(join(dir, 'a.wav'), toneWav(0.5));
+    await fs.writeFile(join(dir, 'b.wav'), toneWav(0.4));
+    const narration = { language: 'en', volume: 1, lines: [
+      { id: 'a', start: 0.3, text: 'Open the editor.', path: join(dir, 'a.wav') },
+      { id: 'b', start: 1.4, text: 'Done.', volume: 0.5, path: join(dir, 'b.wav') },
+    ] };
+    // An opaque red band shows where the built-in draws; zoomed in, it must stay put.
+    const edit = bare({ subtitles: { band: '#ff0000' }, camera: { maxZoom: 2, padding: 0, lead: 0.1, response: 0.1, hold: 2, endWide: 0, follow: false, targets: [{ t: 0.2, box: { x: 240, y: 100, width: 20, height: 20 } }] } });
+    const render = await renderFinal({ sourcePath, finalPath: outputPath, timeline: { viewport: { width: 320, height: 240 }, duration: 2 }, ...forRender(edit, dir), narration });
+    expect(render.lines).toEqual([{ id: 'a', start: 0.3, duration: 0.5 }, { id: 'b', start: 1.4, duration: 0.4 }]);
+    expect(render.subtitles.map(({ id, start, end, rows, frames }) => ({ id, start, end, rows, frames }))).toEqual([
+      { id: 'a', start: 0.3, end: expect.closeTo(1.3, 6), rows: ['Open the editor.'], frames: [9, 38] },
+      { id: 'b', start: 1.4, end: 2, rows: ['Done.'], frames: [42, 59] },
+    ]);
+    const media = await inspectFinal(outputPath, [{ id: 'a', path: join(dir, 'a.wav') }]);
+    expect(media.audio).toMatchObject({ channels: 1, sampleRate: 48000 });
+    expect(media.audio.duration).toBeCloseTo(2, 1);
+    expect(media.audio.decoded).toBeGreaterThan(0);
+    expect(media.lines).toEqual([{ id: 'a', duration: 0.5 }]);
+    const [silent, first, gap, second] = await audioLevels(browser, outputPath, [[0, 0.25], [0.4, 0.7], [0.9, 1.3], [1.5, 1.7]]);
+    expect(silent).toBeLessThan(0.01);
+    expect(first).toBeGreaterThan(0.25);
+    expect(gap).toBeLessThan(0.01);
+    expect(second).toBeGreaterThan(0.1); expect(second).toBeLessThan(first * 0.7);
+    const band = [160, 207]; // the band's top padding, above the text
+    const [during] = await pixelsAt(browser, await extractFrame(outputPath, 0.6), [band]);
+    const [before] = await pixelsAt(browser, await extractFrame(outputPath, 0.1), [band]);
+    expect(during[0]).toBeGreaterThan(200); expect(during[1]).toBeLessThan(60);
+    expect(Math.max(...before)).toBeLessThan(40);
+  } finally { await browser.close(); await fs.rm(dir, { recursive: true, force: true }); }
+}, 60_000);
+
+test('Render refuses Lines that overlap or run past the end, naming them, and audio it cannot decode', async () => {
+  const dir = await fs.mkdtemp(join(tmpdir(), 'cuetake-overlap-'));
+  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
+  try {
+    const sourcePath = join(dir, 'source.webm');
+    await fs.writeFile(sourcePath, await syntheticSource(browser, 0.6));
+    await fs.writeFile(join(dir, 'a.wav'), toneWav(0.8));
+    await fs.writeFile(join(dir, 'bad.wav'), 'not audio');
+    const render = lines => renderFinal({ sourcePath, finalPath: join(dir, 'final.mp4'), timeline: { viewport: { width: 320, height: 240 }, duration: 1 }, ...forRender(bare(), dir), narration: { language: 'en', lines } });
+    const line = (id, start, file = 'a.wav') => ({ id, start, text: 'Hello.', path: join(dir, file) });
+    await expect(render([line('a', 0), line('b', 0.5)])).rejects.toThrow("Line 'a' overlaps 'b' by 0.30 s; Line 'b' runs 0.30 s past the end of the Final");
+    await expect(render([line('a', 0, 'bad.wav')])).rejects.toThrow("Line 'a': its audio bad.wav is not a format the browser decodes");
+  } finally { await browser.close(); await fs.rm(dir, { recursive: true, force: true }); }
+}, 60_000);

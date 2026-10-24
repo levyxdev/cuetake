@@ -13,6 +13,7 @@ import * as MB from '/mediabunny.js';
 import { cameraTrack } from '/camera.js';
 import { pointerAt, presses, sparksAt } from '/cursor.js';
 import { layout, outputSize, cameraView, previewSheet, brandColor } from '/stage.js';
+import { lineProblems, subtitleCues } from '/narration.js';
 
 const VERTEX = `#version 300 es
 in vec2 p; void main() { gl_Position = vec4(p, 0, 1); }`;
@@ -78,7 +79,7 @@ void main() { color = texture(uSprite, uv); }`;
 
 // Item keys CueTake reads itself; every other key is a parameter for the item's shader or drawing code.
 const OWN_KEYS = new Set(['shader', 'draw', 'image', 'files', 'ref', 'kind', 'url']);
-const SLOT_KEYS = new Set(['size', 'hotspot', 'duration', 'reach', 'height']);
+const SLOT_KEYS = new Set(['size', 'hotspot', 'duration', 'reach', 'height', 'burn', 'maxChars', 'maxRows', 'minDuration']);
 const paramsOf = item => Object.fromEntries(Object.entries(item).filter(([key]) => !OWN_KEYS.has(key) && (item.kind === 'shader' || !SLOT_KEYS.has(key))));
 const fail = (item, error) => new Error(`${item.ref}: ${error?.message ?? error}`);
 
@@ -265,8 +266,11 @@ function createCompositor(stage, sourceWidth, sourceHeight, brand) {
       if (mipmaps) gl.generateMipmap(gl.TEXTURE_2D);
       return t;
     },
-    /** One frame with the camera at stage point (x, y) and `zoom`; `draw(texture, rect)` in `overlay` places sprites in stage pixels. */
-    frame(x, y, zoom, overlay) {
+    /**
+     * One frame with the camera at stage point (x, y) and `zoom`; `draw(texture, rect)` in `overlay`
+     * places sprites in stage pixels, and in `screen` in output pixels, outside the camera.
+     */
+    frame(x, y, zoom, overlay, screen) {
       gl.disable(gl.BLEND);
       gl.useProgram(blitProgram.p); bind(0, background); gl.bindVertexArray(fullScreen); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       gl.enable(gl.BLEND);
@@ -275,7 +279,9 @@ function createCompositor(stage, sourceWidth, sourceHeight, brand) {
       gl.useProgram(pageProgram.p); gl.uniform3f(pageProgram.camera, x, y, zoom);
       bind(0, pageTexture); gl.bindVertexArray(fullScreen); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       gl.useProgram(spriteProgram.p); gl.uniform3f(spriteProgram.camera, x, y, zoom); gl.bindVertexArray(unitQuad);
-      overlay((t, rect) => { gl.bindTexture(gl.TEXTURE_2D, t); gl.uniform4f(spriteRect, ...rect); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); });
+      const place = (t, rect) => { gl.bindTexture(gl.TEXTURE_2D, t); gl.uniform4f(spriteRect, ...rect); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); };
+      overlay(place);
+      if (screen) { gl.uniform3f(spriteProgram.camera, width / 2, height / 2, 1); screen(place); }
       if (effects.length) checkGpu('A window effect');
     },
   };
@@ -354,6 +360,60 @@ async function loadClickEffect(item, cursor) {
   return { reach, paint: (ctx, progress) => { try { module.draw(ctx, { progress, params, files, cursor }); } catch (error) { throw fail(item, error); } } };
 }
 
+/**
+ * Subtitles: drawing code exporting `draw(ctx, { width, height, rows, params, files })` in 1080p
+ * pixels over the whole Final. `canvas(width, height, rows)` rasterizes one cue at output size.
+ */
+async function loadSubtitles(item) {
+  if (item.kind !== 'draw') throw fail(item, 'Subtitles are drawing code');
+  const module = await loadModule(item), files = await loadFiles(item), params = paramsOf(item);
+  return {
+    canvas(width, height, rows) {
+      const unit = Math.min(width, height) / 1080, ctx = canvas2d(width, height);
+      ctx.scale(unit, unit);
+      try { module.draw(ctx, { width: width / unit, height: height / unit, rows, params, files }); } catch (error) { throw fail(item, error); }
+      return ctx.canvas;
+    },
+  };
+}
+
+const SAMPLE_RATE = 48000, AUDIO_BITRATE = 128000;
+/** Each Line's audio decoded at 48 kHz; the error names a Line whose audio cannot be read. */
+async function decodeLines(lines) {
+  const context = new OfflineAudioContext(1, 1, SAMPLE_RATE);
+  return Promise.all(lines.map(async line => {
+    const response = await fetch(line.url);
+    if (!response.ok) throw new Error(`Line '${line.id}': its audio ${line.audio} could not be read (${response.status})`);
+    try { return await context.decodeAudioData(await response.arrayBuffer()); }
+    catch { throw new Error(`Line '${line.id}': its audio ${line.audio} is not a format the browser decodes; use WAV, MP3, M4A, Ogg or FLAC`); }
+  }));
+}
+
+/**
+ * The Narration as Render plays it: each Line's decoded audio and measured duration, and its subtitle
+ * cues. Lines that overlap or run past `seconds`, the Final's length, stop the Render.
+ */
+async function prepareNarration(narration, subtitles, seconds) {
+  if (!narration?.lines.length) return null;
+  const buffers = await decodeLines(narration.lines);
+  const placed = narration.lines.map((line, i) => ({ ...line, duration: buffers[i].duration }));
+  const problems = lineProblems(placed, seconds);
+  if (problems.length) throw new Error(`The Narration does not fit: ${problems.join('; ')}`);
+  const { maxChars, maxRows, minDuration } = subtitles || {};
+  return { placed, buffers, cues: subtitleCues(placed, { language: narration.language, maxChars, maxRows, minDuration, end: seconds }) };
+}
+
+/** The Lines mixed into one mono track `seconds` long, each at its start and volume. */
+function mixLines({ placed, buffers }, volume, seconds) {
+  const context = new OfflineAudioContext(1, Math.max(1, Math.round(seconds * SAMPLE_RATE)), SAMPLE_RATE);
+  placed.forEach((line, i) => {
+    const source = new AudioBufferSourceNode(context, { buffer: buffers[i] });
+    source.connect(new GainNode(context, { gain: (volume ?? 1) * (line.volume ?? 1) })).connect(context.destination);
+    source.start(line.start);
+  });
+  return context.startRendering();
+}
+
 /** The page's brand color from the Source's first frame. */
 function brandOf(firstFrame) {
   const ctx = new OffscreenCanvas(96, 60).getContext('2d', { willReadFrequently: true });
@@ -412,8 +472,8 @@ async function encoderConfig(width, height, fps, quality) {
  * Everything Render draws for one Edit (as forRender in styles.js serves it). `firstFrame` is the
  * Source's first frame: Background layers see it, and it picks the brand color.
  */
-async function createScene(edit, viewport, { pointer, events }, firstFrame, sourceWidth, sourceHeight) {
-  const { camera, cursor, clickEffect, frame } = edit;
+async function createScene(edit, viewport, { pointer, events }, firstFrame, sourceWidth, sourceHeight, cues = []) {
+  const { camera, cursor, clickEffect, frame, subtitles } = edit;
   const chrome = frame.chrome ? await loadChrome(frame.chrome, viewport.width, frame.url ?? '') : null;
   const stage = layout(edit, viewport, chrome?.height ?? 0);
   const compositor = createCompositor(stage, sourceWidth, sourceHeight, brandOf(firstFrame));
@@ -428,12 +488,16 @@ async function createScene(edit, viewport, { pointer, events }, firstFrame, sour
   const pointerTexture = pointerSprite && compositor.sprite(pointerSprite.canvas(sharpest));
   const effect = clickEffect ? await loadClickEffect(clickEffect, cursor ? Object.fromEntries(Object.entries(cursor).filter(([key]) => !['ref', 'kind', 'url', 'files'].includes(key))) : {}) : null;
   const pressList = presses(events);
-  let effectTexture = null;
+  const captions = subtitles && subtitles.burn !== false && cues.length ? await loadSubtitles(subtitles) : null;
+  let effectTexture = null, captionTexture = null, shown = -1;
   return {
     stage, compositor,
-    /** Draws output time `t` with the camera showing `crop`, a viewport rectangle in CSS pixels. */
+    /** Draws output time `t` with the camera showing `crop`, a viewport rectangle in CSS pixels; returns the index of the cue it shows, or -1. */
     draw(t, crop) {
       const view = cameraView(crop, stage, viewport);
+      const cue = captions ? cues.findIndex(c => t >= c.start && t < c.end) : -1;
+      if (cue >= 0 && cue !== shown) captionTexture = compositor.sprite(captions.canvas(stage.width, stage.height, cues[cue].rows), captionTexture, false);
+      shown = cue;
       compositor.frame(view.x, view.y, view.zoom, draw => {
         if (chromeTexture) draw(chromeTexture, [stage.window.x, stage.window.y, stage.window.w, stage.chrome]);
         for (const press of effect ? sparksAt(pressList, clickEffect, t) : []) {
@@ -446,7 +510,8 @@ async function createScene(edit, viewport, { pointer, events }, firstFrame, sour
         }
         const point = pointerSprite && pointerAt(pointer, t);
         if (point) draw(pointerTexture, [...at(point.x + pointerSprite.offset.x, point.y + pointerSprite.offset.y), pointerSprite.size.w * stage.scale, pointerSprite.size.h * stage.scale]);
-      });
+      }, cue >= 0 ? draw => draw(captionTexture, [0, 0, stage.width, stage.height]) : null);
+      return cue;
     },
   };
 }
@@ -459,17 +524,35 @@ const uploadStream = url => new WritableStream({
   },
 });
 
-window.cuetakeRender = async ({ sourceUrl, finalUrl, duration, viewport, pointer, events, edit }) => {
+window.cuetakeRender = async ({ sourceUrl, finalUrl, duration, viewport, pointer, events, edit, narration }) => {
   const { camera } = edit, { quality, fps } = edit.output;
   const { width, height } = outputSize(edit);
   const started = performance.now();
   const input = new MB.Input({ formats: MB.ALL_FORMATS, source: new MB.UrlSource(sourceUrl) });
   const track = await input.getPrimaryVideoTrack();
   const reader = frameReader(track, await track.getDecoderConfig());
-  const frameCount = Math.round(duration * fps);
+  const frameCount = Math.round(duration * fps), seconds = frameCount / fps;
+  const voice = await prepareNarration(narration, edit.subtitles, seconds);
   const output = new MB.Output({ format: new MB.Mp4OutputFormat({ fastStart: 'reserve' }), target: new MB.StreamTarget(uploadStream(finalUrl), { chunked: true }) });
   const packets = new MB.EncodedVideoPacketSource('avc');
   output.addVideoTrack(packets, { frameRate: fps, maximumPacketCount: frameCount });
+  // AAC where the platform encodes it (macOS, Windows), else Opus; fed a second ahead of the video.
+  let audio = null;
+  if (voice) {
+    const codec = await MB.getFirstEncodableAudioCodec(['aac', 'opus'], { numberOfChannels: 1, sampleRate: SAMPLE_RATE, bitrate: AUDIO_BITRATE });
+    if (!codec) throw new Error('This browser encodes neither AAC nor Opus audio');
+    const source = new MB.AudioBufferSource({ codec, bitrate: AUDIO_BITRATE });
+    output.addAudioTrack(source, { maximumPacketCount: Math.ceil(seconds * 140) + 16 });
+    audio = { codec, source, mix: await mixLines(voice, narration.volume, seconds), fed: 0 };
+  }
+  const feedAudio = async until => {
+    const end = Math.min(audio.mix.length, Math.round(until * SAMPLE_RATE));
+    if (end <= audio.fed) return;
+    const chunk = new AudioBuffer({ length: end - audio.fed, numberOfChannels: 1, sampleRate: SAMPLE_RATE });
+    chunk.copyToChannel(audio.mix.getChannelData(0).subarray(audio.fed, end), 0);
+    audio.fed = end;
+    await audio.source.add(chunk);
+  };
   await output.start();
   const { config, quantizer } = await encoderConfig(width, height, fps, quality);
   let failure = null, muxed = Promise.resolve();
@@ -487,7 +570,8 @@ window.cuetakeRender = async ({ sourceUrl, finalUrl, duration, viewport, pointer
 
   let current = await reader.next(), next = await reader.next(), uploaded = null;
   if (!current) throw new Error('Source has no video frames');
-  const scene = await createScene(edit, viewport, { pointer, events }, current, track.codedWidth, track.codedHeight), { compositor } = scene;
+  const cues = voice?.cues ?? [], shownFrames = cues.map(() => null);
+  const scene = await createScene(edit, viewport, { pointer, events }, current, track.codedWidth, track.codedHeight, cues), { compositor } = scene;
   const cameraPath = cameraTrack({ targets: camera.targets, viewport, camera, duration, fps, pointerAt: t => pointerAt(pointer, t) });
   const origin = current.timestamp;
   try {
@@ -497,7 +581,9 @@ window.cuetakeRender = async ({ sourceUrl, finalUrl, duration, viewport, pointer
       const due = origin + Math.round(i * 1e6 / fps);
       while (next && next.timestamp <= due) { current.close(); current = next; next = await reader.next(); }
       if (uploaded !== current) { compositor.upload(current); uploaded = current; }
-      scene.draw(i / fps, cameraPath[i]);
+      if (audio && i % fps === 0) await feedAudio(i / fps + 1);
+      const cue = scene.draw(i / fps, cameraPath[i]);
+      if (cue >= 0) shownFrames[cue] = [shownFrames[cue]?.[0] ?? i, i];
       const videoFrame = new VideoFrame(compositor.canvas, { timestamp: Math.round(i * 1e6 / fps), duration: Math.round(1e6 / fps) });
       encoder.encode(videoFrame, { keyFrame: i % (fps * 2) === 0, ...(quantizer ? { avc: { quantizer } } : {}) });
       videoFrame.close();
@@ -506,6 +592,7 @@ window.cuetakeRender = async ({ sourceUrl, finalUrl, duration, viewport, pointer
     await encoder.flush();
     await muxed;
     if (failure) throw failure;
+    if (audio) await feedAudio(Infinity);
     await output.finalize();
   } finally {
     current?.close(); next?.close(); reader.close();
@@ -515,11 +602,36 @@ window.cuetakeRender = async ({ sourceUrl, finalUrl, duration, viewport, pointer
     width, height, frames: frameCount, sourceFrames: reader.stats().decoded, codec: config.codec,
     rateControl: quantizer ? `quantizer ${quantizer}` : `variable ${config.bitrate} bps`, gpu: compositor.gpu,
     seconds: +((performance.now() - started) / 1000).toFixed(2),
+    ...(voice && {
+      audio: { codec: audio.codec, sampleRate: SAMPLE_RATE, channels: 1, bitrate: AUDIO_BITRATE },
+      lines: voice.placed.map(({ id, start, duration }) => ({ id, start, duration })),
+      // Each cue with the first and last output frame it was drawn on (null when Subtitles are not burned in).
+      subtitles: cues.map((cue, i) => ({ ...cue, frames: shownFrames[i] })),
+    }),
   };
 };
 
-/** Reads a Final's container metadata and decodes every frame. */
-window.cuetakeInspect = async url => {
+/** Decodes every packet of an audio track; returns how many packets and how many decoded chunks it saw. */
+async function decodeAudioTrack(track) {
+  let decoded = 0, packets = 0, failure = null;
+  const decoder = new AudioDecoder({ output: data => { decoded++; data.close(); }, error: error => { failure = error; } });
+  decoder.configure(await track.getDecoderConfig());
+  try {
+    for await (const packet of new MB.EncodedPacketSink(track).packets()) {
+      decoder.decode(packet.toEncodedAudioChunk()); packets++;
+      while (decoder.decodeQueueSize > 16) await new Promise(resolve => decoder.addEventListener('dequeue', resolve, { once: true }));
+    }
+    await decoder.flush();
+  } finally { if (decoder.state !== 'closed') decoder.close(); }
+  if (failure) throw failure;
+  return { packets, decoded };
+}
+
+/**
+ * Reads a Final's container metadata and decodes every frame and audio packet. `lines` ([{ id, url,
+ * audio }]) are decoded too, giving each Line's duration or the reason it cannot be read.
+ */
+window.cuetakeInspect = async (url, lines = []) => {
   const input = new MB.Input({ formats: MB.ALL_FORMATS, source: new MB.UrlSource(url) });
   const track = await input.getPrimaryVideoTrack();
   const stats = await track.computePacketStats();
@@ -527,17 +639,31 @@ window.cuetakeInspect = async url => {
   let frames = 0;
   try { for (let frame; (frame = await reader.next());) { frames++; frame.close(); } }
   finally { reader.close(); }
+  const audioTrack = await input.getPrimaryAudioTrack();
+  let audio = null;
+  if (audioTrack) {
+    audio = { codec: await audioTrack.getCodecParameterString(), sampleRate: audioTrack.sampleRate, channels: audioTrack.numberOfChannels, duration: await audioTrack.computeDuration() };
+    try { audio = { ...audio, ...await decodeAudioTrack(audioTrack) }; } catch (error) { audio.error = error.message; }
+  }
+  const measured = await Promise.all(lines.map(line => decodeLines([line]).then(([buffer]) => ({ id: line.id, duration: buffer.duration }), error => ({ id: line.id, error: error.message }))));
   return {
     codec: await track.getCodecParameterString(), width: track.displayWidth, height: track.displayHeight,
-    duration: await input.computeDuration(), fps: +stats.averagePacketRate.toFixed(3), packets: stats.packetCount, decodedFrames: frames,
+    duration: await track.computeDuration(), fps: +stats.averagePacketRate.toFixed(3), packets: stats.packetCount, decodedFrames: frames,
+    audio, lines: measured,
   };
+};
+
+/** Each Line's audio duration in seconds, for the Director to hold each Line while it is spoken. */
+window.cuetakeMeasure = async lines => {
+  const buffers = await decodeLines(lines);
+  return Object.fromEntries(lines.map((line, i) => [line.id, buffers[i].duration]));
 };
 
 /**
  * A Preview as a base64 PNG: each tile's Edit composed by the same scene as Render, over the Source at
  * `at` seconds with the Final's camera, or (`at` null) over the last moment with the camera wide.
  */
-window.cuetakePreview = async ({ sourceUrl, duration, viewport, pointer, events, tiles, at }) => {
+window.cuetakePreview = async ({ sourceUrl, duration, viewport, pointer, events, tiles, at, narration }) => {
   const input = new MB.Input({ formats: MB.ALL_FORMATS, source: new MB.UrlSource(sourceUrl) });
   const track = await input.getPrimaryVideoTrack();
   const sink = new MB.VideoSampleSink(track), origin = await track.getFirstTimestamp();
@@ -552,7 +678,8 @@ window.cuetakePreview = async ({ sourceUrl, duration, viewport, pointer, events,
     ctx.imageSmoothingQuality = 'high';
     ctx.font = '600 22px system-ui, -apple-system, sans-serif'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#e5e7eb';
     for (const [i, { name, edit }] of tiles.entries()) {
-      const scene = await createScene(edit, viewport, { pointer, events }, firstFrame, track.codedWidth, track.codedHeight);
+      const voice = await prepareNarration(narration, edit.subtitles, duration);
+      const scene = await createScene(edit, viewport, { pointer, events }, firstFrame, track.codedWidth, track.codedHeight, voice?.cues);
       let crop = { x: 0, y: 0, w: viewport.width, h: viewport.height };
       if (at !== null) {
         const { fps } = edit.output, path = cameraTrack({ targets: edit.camera.targets, viewport, camera: edit.camera, duration, fps, pointerAt: s => pointerAt(pointer, s) });
