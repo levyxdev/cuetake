@@ -13,7 +13,7 @@ import * as MB from '/mediabunny.js';
 import { cameraTrack } from '/camera.js';
 import { pointerAt, presses, sparksAt } from '/cursor.js';
 import { layout, outputSize, cameraView, previewSheet, brandColor } from '/stage.js';
-import { lineProblems, subtitleCues } from '/narration.js';
+import { burnsIn, cuesFor, lineProblems } from '/narration.js';
 
 const VERTEX = `#version 300 es
 in vec2 p; void main() { gl_Position = vec4(p, 0, 1); }`;
@@ -399,8 +399,7 @@ async function prepareNarration(narration, subtitles, seconds) {
   const placed = narration.lines.map((line, i) => ({ ...line, duration: buffers[i].duration }));
   const problems = lineProblems(placed, seconds);
   if (problems.length) throw new Error(`The Narration does not fit: ${problems.join('; ')}`);
-  const { maxChars, maxRows, minDuration } = subtitles || {};
-  return { placed, buffers, cues: subtitleCues(placed, { language: narration.language, maxChars, maxRows, minDuration, end: seconds }) };
+  return { placed, buffers, cues: cuesFor(placed, narration.language, subtitles, seconds) };
 }
 
 /** The Lines mixed into one mono track `seconds` long, each at its start and volume. */
@@ -488,15 +487,15 @@ async function createScene(edit, viewport, { pointer, events }, firstFrame, sour
   const pointerTexture = pointerSprite && compositor.sprite(pointerSprite.canvas(sharpest));
   const effect = clickEffect ? await loadClickEffect(clickEffect, cursor ? Object.fromEntries(Object.entries(cursor).filter(([key]) => !['ref', 'kind', 'url', 'files'].includes(key))) : {}) : null;
   const pressList = presses(events);
-  const captions = subtitles && subtitles.burn !== false && cues.length ? await loadSubtitles(subtitles) : null;
-  let effectTexture = null, captionTexture = null, shown = -1;
+  const subtitleDrawing = burnsIn(subtitles) && cues.length ? await loadSubtitles(subtitles) : null;
+  let effectTexture = null, subtitleTexture = null, shown = -1;
   return {
     stage, compositor,
     /** Draws output time `t` with the camera showing `crop`, a viewport rectangle in CSS pixels; returns the index of the cue it shows, or -1. */
     draw(t, crop) {
       const view = cameraView(crop, stage, viewport);
-      const cue = captions ? cues.findIndex(c => t >= c.start && t < c.end) : -1;
-      if (cue >= 0 && cue !== shown) captionTexture = compositor.sprite(captions.canvas(stage.width, stage.height, cues[cue].rows), captionTexture, false);
+      const cue = subtitleDrawing ? cues.findIndex(c => t >= c.start && t < c.end) : -1;
+      if (cue >= 0 && cue !== shown) subtitleTexture = compositor.sprite(subtitleDrawing.canvas(stage.width, stage.height, cues[cue].rows), subtitleTexture, false);
       shown = cue;
       compositor.frame(view.x, view.y, view.zoom, draw => {
         if (chromeTexture) draw(chromeTexture, [stage.window.x, stage.window.y, stage.window.w, stage.chrome]);
@@ -510,7 +509,7 @@ async function createScene(edit, viewport, { pointer, events }, firstFrame, sour
         }
         const point = pointerSprite && pointerAt(pointer, t);
         if (point) draw(pointerTexture, [...at(point.x + pointerSprite.offset.x, point.y + pointerSprite.offset.y), pointerSprite.size.w * stage.scale, pointerSprite.size.h * stage.scale]);
-      }, cue >= 0 ? draw => draw(captionTexture, [0, 0, stage.width, stage.height]) : null);
+      }, cue >= 0 ? draw => draw(subtitleTexture, [0, 0, stage.width, stage.height]) : null);
       return cue;
     },
   };
@@ -542,7 +541,8 @@ window.cuetakeRender = async ({ sourceUrl, finalUrl, duration, viewport, pointer
     const codec = await MB.getFirstEncodableAudioCodec(['aac', 'opus'], { numberOfChannels: 1, sampleRate: SAMPLE_RATE, bitrate: AUDIO_BITRATE });
     if (!codec) throw new Error('This browser encodes neither AAC nor Opus audio');
     const source = new MB.AudioBufferSource({ codec, bitrate: AUDIO_BITRATE });
-    output.addAudioTrack(source, { maximumPacketCount: Math.ceil(seconds * 140) + 16 });
+    // Mediabunny's bound: a packet per 10 ms at most, plus a third for safety.
+    output.addAudioTrack(source, { maximumPacketCount: Math.ceil(seconds * 100 * 4 / 3) + 16 });
     audio = { codec, source, mix: await mixLines(voice, narration.volume, seconds), fed: 0 };
   }
   const feedAudio = async until => {
@@ -678,7 +678,7 @@ window.cuetakePreview = async ({ sourceUrl, duration, viewport, pointer, events,
     ctx.imageSmoothingQuality = 'high';
     ctx.font = '600 22px system-ui, -apple-system, sans-serif'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#e5e7eb';
     for (const [i, { name, edit }] of tiles.entries()) {
-      const voice = await prepareNarration(narration, edit.subtitles, duration);
+      const voice = await prepareNarration(narration, edit.subtitles, Math.round(duration * edit.output.fps) / edit.output.fps);
       const scene = await createScene(edit, viewport, { pointer, events }, firstFrame, track.codedWidth, track.codedHeight, voice?.cues);
       let crop = { x: 0, y: 0, w: viewport.width, h: viewport.height };
       if (at !== null) {

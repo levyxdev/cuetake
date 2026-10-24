@@ -114,6 +114,12 @@ export function subtitleCues(lines, { language, maxChars, maxRows = 2, minDurati
   return cues;
 }
 
+/** Whether the Edit's `subtitles` item draws them into the Final; otherwise they go only to the subtitle files. */
+export const burnsIn = subtitles => Boolean(subtitles) && subtitles.burn !== false;
+
+/** The cues of placed Lines as the Edit's `subtitles` item lays them out, ending by `end`. */
+export const cuesFor = (lines, language, subtitles, end) => subtitleCues(lines, { language, maxChars: subtitles?.maxChars, maxRows: subtitles?.maxRows, minDuration: subtitles?.minDuration, end });
+
 /**
  * What stops Lines from playing as placed: a Line overlapping the next one, starting before the
  * Take, or running past the end of the Final (`end` seconds). Each problem names its Line.
