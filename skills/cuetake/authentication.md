@@ -11,7 +11,7 @@ The default recorder launches an isolated browser context. It does not inherit t
 
 The state loader uses Playwright `storageState`, including cookies, localStorage, and IndexedDB. See [Playwright authentication](https://playwright.dev/docs/auth).
 
-Files live in `~/.local/share/cuetake/auth/<profile>.json` (or `CUETAKE_AUTH_DIR`). The directory is created with mode 0700; files are atomically saved with mode 0600. Files contain reusable session secrets and are not encrypted by CueTake. Never commit them, include them in a shared take, or paste their contents into agent messages. The take records only an authenticated-state boolean.
+Files live in `~/.local/share/cuetake/auth/<profile>.json` (or `CUETAKE_AUTH_DIR`); `cuetake uninstall --auth` deletes them all. The directory is created with mode 0700; files are atomically saved with mode 0600. Files contain reusable session secrets and are not encrypted by CueTake. Never commit them, include them in a shared take, or paste their contents into agent messages. The take records only an authenticated-state boolean.
 
 SessionStorage, device-bound sessions, passkeys, CAPTCHA, and some anti-automation SSO flows may require a different preparation path. A saved state does not bypass those controls or guarantee a session has not expired. The preferred flow remains authenticate before capture; refresh/re-authenticate when the site requires it.
 

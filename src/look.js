@@ -37,8 +37,9 @@ const scopes = (cwd = process.cwd()) => ({
   local: join(cwd, '.cuetake', 'looks'),
   global: process.env.CUETAKE_LOOK_DIR || join(homedir(), '.local/share/cuetake/looks'),
 });
+const NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
 function checkName(name) {
-  if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(name)) throw new Error('Use a short lowercase Look name, such as brand');
+  if (!NAME.test(name)) throw new Error('Use a short lowercase Look name, such as brand');
 }
 const readIfPresent = path => fs.readFile(path, 'utf8').catch(error => { if (['ENOENT', 'ENOTDIR'].includes(error.code)) return null; throw error; });
 const parse = (text, path) => { try { return JSON.parse(text); } catch (error) { throw new Error(`${path} is not JSON: ${error.message}`); } };
@@ -108,6 +109,18 @@ export async function saveLook(name, look, { global = false, replace = false, cw
   await fs.mkdir(dirname(path), { recursive: true });
   await fs.writeFile(path, JSON.stringify(saved, null, 2) + '\n');
   return { name, scope, path, summary: summarize(saved), code: codeRefs(absolute(saved, dir)) };
+}
+
+/** The file or folder of every global Look; other files in the folder are not CueTake's. */
+export async function globalLookFiles() {
+  const dir = scopes().global, paths = [];
+  const entries = await fs.readdir(dir, { withFileTypes: true }).catch(error => { if (error.code === 'ENOENT') return []; throw error; });
+  for (const entry of entries) {
+    const path = join(dir, entry.name);
+    if (entry.isFile() && entry.name.endsWith('.json') && NAME.test(basename(entry.name, '.json'))) paths.push(path);
+    else if (entry.isDirectory() && NAME.test(entry.name) && await readIfPresent(join(path, 'look.json')) !== null) paths.push(path);
+  }
+  return { dir, paths: paths.sort() };
 }
 
 export async function removeLook(name, { global = false, cwd } = {}) {

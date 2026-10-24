@@ -21,16 +21,32 @@ export async function doctor() {
   return { ok: checks.every(c => c.ok), checks };
 }
 
+function playwright(args) {
+  const cli = join(dirname(createRequire(import.meta.url).resolve('playwright/package.json')), 'cli.js');
+  return new Promise((resolve, reject) => {
+    // Progress goes to stderr so stdout stays the JSON result.
+    const child = spawn(process.execPath, [cli, ...args], { stdio: ['ignore', 2, 2] });
+    child.on('error', reject);
+    child.on('close', code => code === 0 ? resolve() : reject(new Error(`playwright ${args[0]} exited with ${code}`)));
+  });
+}
+
 /**
  * Downloads the Chromium build that CueTake's own Playwright version drives. Running
  * `npx playwright install` instead may resolve a newer Playwright and fetch a build CueTake never uses.
  */
-export function installBrowser() {
-  const cli = join(dirname(createRequire(import.meta.url).resolve('playwright/package.json')), 'cli.js');
-  return new Promise((resolve, reject) => {
-    // Progress goes to stderr so stdout stays the JSON result.
-    const child = spawn(process.execPath, [cli, 'install', 'chromium', '--no-shell'], { stdio: ['ignore', 2, 2] });
-    child.on('error', reject);
-    child.on('close', code => code === 0 ? resolve({ installed: true, path: chromium.executablePath() }) : reject(new Error(`Browser install exited with ${code}`)));
-  });
+export async function installBrowser() {
+  await playwright(['install', 'chromium', '--no-shell']);
+  return { installed: true, path: chromium.executablePath() };
+}
+
+/**
+ * Unregisters CueTake's Playwright from the shared browser cache, which deletes each browser no other
+ * Playwright installation still uses. Browsers other tools need stay.
+ */
+export async function uninstallBrowser({ dryRun = false } = {}) {
+  const path = chromium.executablePath(), exists = () => fs.access(path).then(() => true, () => false);
+  const existed = await exists();
+  if (existed && !dryRun) await playwright(['uninstall']);
+  return { path, existed, removed: existed && !dryRun && !await exists() };
 }

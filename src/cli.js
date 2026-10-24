@@ -5,6 +5,7 @@ import { recordScenario, renderTake, verifyTake, previewTake, applyLookToTake, s
 import { listLooks, removeLook } from './look.js';
 import { BUILTINS, BUILTIN_DIR } from './styles.js';
 import { doctor, installBrowser } from './environment.js';
+import { uninstall } from './uninstall.js';
 import { login } from './auth.js';
 import { extractFrame } from './render.js';
 import { writeFile } from 'node:fs/promises';
@@ -14,6 +15,7 @@ const help = `CueTake ${pkg.version} — browser demos directed by code
 
   cuetake doctor
   cuetake install-browser
+  cuetake uninstall [--auth] [--looks] [--dry-run]
   cuetake record <scenario.mjs> [--out <new-directory>] [--auth-profile <name>] [--look <name|file.json>] [--headed]
   cuetake preview <take-directory> [--look <name|file.json>]... [--at <seconds>]
   cuetake render <take-directory>
@@ -27,6 +29,9 @@ const help = `CueTake ${pkg.version} — browser demos directed by code
   cuetake styles
 
 install-browser downloads the Chromium build this CueTake version drives (about 150 MB).
+uninstall removes CueTake's npx cache and its browser, unless another Playwright installation uses it.
+  It keeps Auth profiles unless --auth and global Looks unless --looks; Take folders and local Looks
+  are never touched. --dry-run lists what would go and removes nothing.
 record captures, renders and verifies a new take; an existing directory is never overwritten.
   Capture runs headless; --headed shows the browser window while recording.
   --look seeds the first Edit from a Look; fields the Scenario config names win.
@@ -43,12 +48,13 @@ Styling is agent-written code and is not validated; the render page has no netwo
 Scenario files are trusted JavaScript. Recording runs locally, without audio.
 `;
 try {
-  const { values, positionals } = parseArgs({ args: process.argv.slice(2), allowPositionals: true, options: { out: { type: 'string' }, help: { type: 'boolean', short: 'h' }, 'auth-profile': { type: 'string' }, headed: { type: 'boolean' }, look: { type: 'string', multiple: true }, at: { type: 'string' }, global: { type: 'boolean' }, replace: { type: 'boolean' } } });
+  const { values, positionals } = parseArgs({ args: process.argv.slice(2), allowPositionals: true, options: { out: { type: 'string' }, help: { type: 'boolean', short: 'h' }, 'auth-profile': { type: 'string' }, headed: { type: 'boolean' }, look: { type: 'string', multiple: true }, at: { type: 'string' }, global: { type: 'boolean' }, replace: { type: 'boolean' }, auth: { type: 'boolean' }, looks: { type: 'boolean' }, 'dry-run': { type: 'boolean' } } });
   const [command, target] = positionals, looks = values.look ?? [];
   const print = data => console.log(JSON.stringify(data, null, 2));
   if (values.help || !command) console.log(help);
   else if (command === 'doctor') { const result = await doctor(); console.log(JSON.stringify(result, null, 2)); if (!result.ok) process.exitCode = 1; }
   else if (command === 'install-browser') console.log(JSON.stringify(await installBrowser(), null, 2));
+  else if (command === 'uninstall' && !target) print(await uninstall({ auth: values.auth, looks: values.looks, dryRun: values['dry-run'] }));
   else if (command === 'record' && target && looks.length <= 1) print(await recordScenario(target, values.out, { authProfile: values['auth-profile'], look: looks[0], headed: values.headed }));
   else if (command === 'preview' && target) print(await previewTake(target, looks, { at: values.at === undefined ? undefined : Number(values.at) }));
   else if (command === 'render' && target) { await renderTake(target); console.log(JSON.stringify(await verifyTake(target), null, 2)); }

@@ -26,3 +26,7 @@ Run `cuetake install-browser` (about 150 MB into Playwright's cache in the user'
 ## Check
 
 Run `cuetake doctor` again. Every check must report `ok`; a `platform` note means that platform is not yet verified.
+
+## Uninstall
+
+Run `cuetake uninstall --dry-run` first and show the user what it lists. Plain `cuetake uninstall` removes CueTake's npx cache and, through Playwright, the browser. Playwright keeps the browser while another Playwright installation still uses it. Auth profiles and global Looks are the user's work: the dry run lists them under `kept`. Ask about each one separately, and pass `--auth` or `--looks` only for the ones the user agrees to remove. Take folders and local Looks (`.cuetake/looks`) in the user's projects are never removed. Node stays, because other tools need it. Remove the skill itself with the tool that installed it, for example `/plugin uninstall cuetake` in Claude Code.
