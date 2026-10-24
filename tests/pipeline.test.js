@@ -1,7 +1,7 @@
 import { test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import pkg from '../package.json' with { type: 'json' };
-import { scenarioSchema, summarizeFrames } from '../src/pipeline.js';
+import { scenarioSchema, summarizeFrames, narrationSchema } from '../src/pipeline.js';
 import { fitZoom, cropAround, zoomSegments, cameraTrack } from '../src/camera.js';
 import { cameraTargets, createEdit, DEFAULT_STYLE, withDefaults } from '../src/edit.js';
 import { pointerAt, presses, sparksAt } from '../src/cursor.js';
@@ -9,6 +9,7 @@ import { atShortSide, layout, cameraView, brandHue, brandColor, previewSheet } f
 import { lookFromEdit, applyLook, mergeLook, summarize, saveLook, loadLook, listLooks, removeLook, resolvedLook } from '../src/look.js';
 import { bundle, codeRefs, forRender, BUILTIN_DIR } from '../src/styles.js';
 import { npxFolders, uninstall } from '../src/uninstall.js';
+import { subtitleRows, subtitleCues, lineProblems, toSrt, toVtt } from '../src/narration.js';
 import fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -348,4 +349,90 @@ test('uninstall removes caches and the browser, and keeps Auth profiles and glob
       expect(await fs.readdir(looks)).toEqual(['scratch']);
     });
   } finally { await fs.rm(home, { recursive: true, force: true }); }
+});
+
+test('subtitle rows break at sentence and clause ends, then between words, within the row width', () => {
+  expect(subtitleRows('Open the editor. Then pick a color for the title, and press save.', 42))
+    .toEqual(['Open the editor.', 'Then pick a color for the title,', 'and press save.']);
+  expect(subtitleRows('Hi. This one is the longer sentence of the two.', 42)).toEqual(['Hi. This one is the longer', 'sentence of the two.']);
+  expect(subtitleRows('先打开编辑器，然后给标题选一个颜色，再点击保存。', 16)).toEqual(['先打开编辑器，', '然后给标题选一个颜色，', '再点击保存。']);
+  expect(subtitleRows('点击 Preview 按钮，就能看到效果。', 16)).toEqual(['点击 Preview 按钮，', '就能看到效果。']);
+  for (const row of subtitleRows('A very long sentence that keeps going without any punctuation at all for quite a while', 42)) expect(row.length).toBeLessThanOrEqual(42);
+});
+
+const sentences = 'Open the editor from the dashboard menu. Then pick a color and press save.';
+const wordsOf = (text, from, to) => { const list = text.split(' '), step = (to - from) / list.length; return list.map((word, i) => ({ text: word, start: from + i * step, end: from + (i + 1) * step })); };
+
+test('cues share a Line by its spoken characters, or by its word timings when it has them', () => {
+  const line = { id: 'intro', text: sentences, start: 2, duration: 4 };
+  const even = subtitleCues([line]);
+  expect(even.map(c => c.rows)).toEqual([['Open the editor from the dashboard menu.'], ['Then pick a color and press save.']]);
+  expect(even[0]).toMatchObject({ id: 'intro', start: 2, end: expect.closeTo(2 + 4 * 33 / 59, 6) });
+  expect(even[1].end).toBe(6);
+  const words = [...wordsOf('Open the editor from the dashboard menu', 0.1, 1.5), ...wordsOf('Then pick a color and press save', 2, 3.2)];
+  const timed = subtitleCues([{ ...line, words }]);
+  expect(timed[0].start).toBeCloseTo(2.1, 6);
+  expect(timed[0].end).toBeCloseTo(3.5, 6);
+  expect(timed[1].start).toBeCloseTo(4, 6);
+});
+
+test('Chinese Lines break at about 16 characters and two rows make a cue', () => {
+  const cues = subtitleCues([{ id: 'a', text: '先打开编辑器然后给标题选一个颜色再点击保存按钮就能看到效果', start: 0, duration: 6 }], { language: 'zh-CN' });
+  expect(cues[0].rows).toHaveLength(2);
+  for (const row of cues.flatMap(c => c.rows)) expect(Array.from(row).length).toBeLessThanOrEqual(16);
+});
+
+test('a short cue stays at least a second, taking time from the next cue or the silence after', () => {
+  const words = [...wordsOf('Open the editor from the dashboard menu', 0, 0.5), ...wordsOf('Then pick a color and press save', 0.5, 3)];
+  const [first, second] = subtitleCues([{ id: 'a', text: sentences, start: 0, duration: 3, words }]);
+  expect(first.end).toBeCloseTo(1, 6);
+  expect(second.start).toBeCloseTo(1, 6);
+  const [alone] = subtitleCues([{ id: 'a', text: 'Hi.', start: 0, duration: 0.3 }, { id: 'b', text: 'Next.', start: 0.8, duration: 1 }]);
+  expect(alone.end).toBe(0.8);
+});
+
+test('Lines that overlap, start early or run past the end are named with the seconds involved', () => {
+  const lines = [{ id: 'b', start: 3, duration: 2 }, { id: 'a', start: 1, duration: 2.5 }, { id: 'c', start: 9, duration: 2 }];
+  expect(lineProblems(lines, 10)).toEqual(["Line 'a' overlaps 'b' by 0.50 s", "Line 'c' runs 1.00 s past the end of the Final"]);
+  expect(lineProblems([{ id: 'a', start: -0.2, duration: 1 }], 10)).toEqual(["Line 'a' starts 0.20 s before the Take"]);
+  expect(lineProblems([{ id: 'a', start: 0, duration: 1 }, { id: 'b', start: 1, duration: 1 }], 2)).toEqual([]);
+});
+
+test('subtitle files time each cue to the millisecond', () => {
+  const cues = [{ id: 'a', start: 1.5, end: 3.25, rows: ['Open the editor.'] }, { id: 'b', start: 3661.001, end: 3662, rows: ['Two', 'rows'] }];
+  expect(toSrt(cues)).toBe('1\n00:00:01,500 --> 00:00:03,250\nOpen the editor.\n\n2\n01:01:01,001 --> 01:01:02,000\nTwo\nrows\n');
+  expect(toVtt(cues)).toBe('WEBVTT\n\n00:00:01.500 --> 00:00:03.250\nOpen the editor.\n\n01:01:01.001 --> 01:01:02.000\nTwo\nrows\n');
+});
+
+test('the first Edit starts each Line where the Scenario said it; a Look keeps Subtitle styling but no Lines', () => {
+  const timeline = { events: [{ type: 'say', t: 0.5, id: 'intro' }, { type: 'click', t: 1, x: 0, y: 0, box }, { type: 'say', t: 2.25, id: 'save', text: 'Save it.' }] };
+  const edit = createEdit(scenarioSchema.parse({ name: 'demo', url: 'https://example.com', subtitles: { fontSize: 48 } }), timeline, []);
+  expect(edit.narration).toEqual({ volume: 1, lines: [{ id: 'intro', start: 0.5 }, { id: 'save', start: 2.25 }] });
+  expect(edit.camera.targets.map(target => target.t)).toEqual([1]);
+  expect(edit.subtitles).toEqual({ draw: 'subtitles', burn: true, fontSize: 48 });
+  const look = lookFromEdit(edit);
+  expect(look).not.toHaveProperty('narration');
+  expect(look.subtitles).toEqual(edit.subtitles);
+  expect(applyLook(edit, { subtitles: { burn: false } })).toMatchObject({ narration: edit.narration, subtitles: { draw: 'subtitles', burn: false, fontSize: 48 } });
+  expect(withDefaults({}).narration).toEqual({ volume: 1, lines: [] });
+});
+
+test('a Narration file needs unique Line ids, text and audio, and its stated durations are ignored', () => {
+  const line = { id: 'intro', text: 'Hello.', audio: 'intro.wav' };
+  expect(narrationSchema.parse({ language: 'zh-CN', lines: [{ ...line, duration: 9 }] }).lines[0]).toEqual(line);
+  expect(narrationSchema.safeParse({ language: 'en', lines: [line, line] }).success).toBe(false);
+  expect(narrationSchema.safeParse({ language: 'en', lines: [{ ...line, id: '../x' }] }).success).toBe(false);
+  expect(narrationSchema.safeParse({ language: 'en', lines: [{ ...line, audio: '' }] }).success).toBe(false);
+});
+
+test('Render and Looks read the built-in Subtitles with their parameters, and bundle a font they name', async () => {
+  const dir = await tmp('cuetake-subtitles-');
+  try {
+    await fs.writeFile(join(dir, 'brand.woff2'), 'font');
+    const { edit } = forRender(withDefaults({ subtitles: { fontSize: 50, files: { font: 'brand.woff2' } } }), dir);
+    expect(edit.subtitles).toMatchObject({ kind: 'draw', ref: 'subtitles', fontSize: 50, band: '#000000b3', url: expect.stringMatching(/^\/files\//) });
+    expect(edit.subtitles.files.font).toMatch(/^\/files\/style-\d+\.woff2$/);
+    const take = join(dir, 'take');
+    expect((await bundle({ subtitles: { draw: 'subtitles', files: { font: 'brand.woff2' } } }, dir, join(take, 'styles'), 'styles/')).subtitles.files.font).toBe('styles/brand.woff2');
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });

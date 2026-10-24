@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
 import pkg from '../package.json' with { type: 'json' };
-import { recordScenario, renderTake, verifyTake, previewTake, applyLookToTake, saveLookFromTake } from './pipeline.js';
+import { recordScenario, renderTake, verifyTake, previewTake, applyLookToTake, saveLookFromTake, importNarration } from './pipeline.js';
 import { listLooks, removeLook } from './look.js';
 import { BUILTINS, BUILTIN_DIR } from './styles.js';
 import { doctor, installBrowser } from './environment.js';
@@ -16,7 +16,8 @@ const help = `CueTake ${pkg.version} — browser demos directed by code
   cuetake doctor
   cuetake install-browser
   cuetake uninstall [--auth] [--looks] [--dry-run]
-  cuetake record <scenario.mjs> [--out <new-directory>] [--auth-profile <name>] [--look <name|file.json>] [--headed]
+  cuetake record <scenario.mjs> [--out <new-directory>] [--auth-profile <name>] [--look <name|file.json>] [--narration <narration.json>] [--headed]
+  cuetake narrate import <take-directory> <narration.json>
   cuetake preview <take-directory> [--look <name|file.json>]... [--at <seconds>]
   cuetake render <take-directory>
   cuetake verify <take-directory>
@@ -35,6 +36,9 @@ uninstall removes CueTake's npx cache and its browser, unless another Playwright
 record captures, renders and verifies a new take; an existing directory is never overwritten.
   Capture runs headless; --headed shows the browser window while recording.
   --look seeds the first Edit from a Look; fields the Scenario config names win.
+  --narration copies a Narration and its audio into the Take first: d.say(id) holds each Line for its audio.
+narrate import copies a Narration and its audio into a recorded Take, replacing its earlier one. Lines keep
+  their start in edit.json; a new Line takes the start the file gives it. Render plays and subtitles them.
 preview writes preview.png in the take: the current Edit beside each Look, at --at seconds
   or at the end with the camera wide. It never changes edit.json or final.mp4.
 render reuses source.webm, timeline.json and edit.json, replacing final.mp4 only on success.
@@ -45,17 +49,19 @@ A Look is a take's reusable styling, with the files it draws with. Looks are sav
   name. list names the code each Look runs. apply rewrites edit.json and copies files into styles/.
 styles lists the built-in shaders and drawing code, with their files and starting parameters.
 Styling is agent-written code and is not validated; the render page has no network.
-Scenario files are trusted JavaScript. Recording runs locally, without audio.
+Scenario files are trusted JavaScript. Recording runs locally and captures no page audio; Narration is
+  voiced beforehand by a speech tool of your choice.
 `;
 try {
-  const { values, positionals } = parseArgs({ args: process.argv.slice(2), allowPositionals: true, options: { out: { type: 'string' }, help: { type: 'boolean', short: 'h' }, 'auth-profile': { type: 'string' }, headed: { type: 'boolean' }, look: { type: 'string', multiple: true }, at: { type: 'string' }, global: { type: 'boolean' }, replace: { type: 'boolean' }, auth: { type: 'boolean' }, looks: { type: 'boolean' }, 'dry-run': { type: 'boolean' } } });
+  const { values, positionals } = parseArgs({ args: process.argv.slice(2), allowPositionals: true, options: { out: { type: 'string' }, help: { type: 'boolean', short: 'h' }, 'auth-profile': { type: 'string' }, headed: { type: 'boolean' }, look: { type: 'string', multiple: true }, narration: { type: 'string' }, at: { type: 'string' }, global: { type: 'boolean' }, replace: { type: 'boolean' }, auth: { type: 'boolean' }, looks: { type: 'boolean' }, 'dry-run': { type: 'boolean' } } });
   const [command, target] = positionals, looks = values.look ?? [];
   const print = data => console.log(JSON.stringify(data, null, 2));
   if (values.help || !command) console.log(help);
   else if (command === 'doctor') { const result = await doctor(); console.log(JSON.stringify(result, null, 2)); if (!result.ok) process.exitCode = 1; }
   else if (command === 'install-browser') console.log(JSON.stringify(await installBrowser(), null, 2));
   else if (command === 'uninstall' && !target) print(await uninstall({ auth: values.auth, looks: values.looks, dryRun: values['dry-run'] }));
-  else if (command === 'record' && target && looks.length <= 1) print(await recordScenario(target, values.out, { authProfile: values['auth-profile'], look: looks[0], headed: values.headed }));
+  else if (command === 'record' && target && looks.length <= 1) print(await recordScenario(target, values.out, { authProfile: values['auth-profile'], look: looks[0], narration: values.narration, headed: values.headed }));
+  else if (command === 'narrate' && target === 'import' && positionals[3]) print(await importNarration(positionals[2], positionals[3]));
   else if (command === 'preview' && target) print(await previewTake(target, looks, { at: values.at === undefined ? undefined : Number(values.at) }));
   else if (command === 'render' && target) { await renderTake(target); console.log(JSON.stringify(await verifyTake(target), null, 2)); }
   else if (command === 'verify' && target) console.log(JSON.stringify(await verifyTake(target), null, 2));

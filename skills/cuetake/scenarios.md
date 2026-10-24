@@ -37,7 +37,7 @@ export async function run(d) {
 }
 ```
 
-Only `name` and `url` are required in config. Other fields use the shown defaults. Capture FPS accepts 30 or 60. Resolution scale accepts 1 or 2. Widths and heights must be even. There is no audio capture.
+Only `name` and `url` are required in config. Other fields use the shown defaults. Capture FPS accepts 30 or 60. Resolution scale accepts 1 or 2. Widths and heights must be even. Page audio is not captured; a voiced Narration is added with `record --narration` ([narration.md](narration.md)).
 
 ## Director
 
@@ -51,6 +51,7 @@ Only `name` and `url` are required in config. Other fields use the shown default
 | `type(locator, text, { msPerChar=70, focus })` | Click a field, then type with a visible per-character delay. |
 | `drag({x,y}, {x,y}, { duration=1200, focus })` | Move to the start, press, move, then release. |
 | `focus({x,y,width,height}, seconds?)` | Add a camera target; defaults to the current time. |
+| `say(id, text?)` | Start a Narration Line. With `--narration` it waits until the Line's audio ends; without, `text` is required and it does not wait. See [narration.md](narration.md). |
 | `time()` | Seconds elapsed since capture started. |
 
 `move` starts from (0,0). If preparation positioned the cursor elsewhere, initialize it with `await d.move(x, y, 0)` at the start of `run`.
@@ -76,8 +77,10 @@ Use actual locators for clicks. Canvas drags often require coordinates; derive o
   scenario.mjs       Snapshot of the original scenario module
   source.webm        Source: original high-resolution VP9 capture
   capture.json       Track settings and video frame callback observations
-  timeline.json      Timeline: pointer path, clicks, drags, typing and focus, in seconds and CSS pixels
-  edit.json          Edit: camera targets and settings, cursor, click effect, frame, output
+  timeline.json      Timeline: pointer path, clicks, drags, typing, focus and said Lines, in seconds and CSS pixels
+  edit.json          Edit: camera targets and settings, cursor, click effect, frame, Line starts and volumes, Subtitles, output
+  narration/         The Narration: narration.json (text, word timings) and each Line's audio, named by its id
+  subtitles.srt/.vtt Subtitles of the placed Lines, from the last Render
   styles/            Shaders, drawing code and images the Edit names
   poster.png         Final page state at native capture resolution
   preview.png        Preview: the current Edit beside candidate Looks, from the last `preview`

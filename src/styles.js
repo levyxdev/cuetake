@@ -18,14 +18,15 @@ export const BUILTINS = {
   arrow: { file: 'arrow.js', params: {} },
   dot: { file: 'dot.js', params: {} },
   spark: { file: 'spark.js', params: { radius: 32, length: 16, count: 8 } },
+  subtitles: { file: 'subtitles.js', params: { fontSize: 40, weight: 600, color: '#ffffff', band: '#000000b3', bottom: 72, padding: 14 } },
 };
 export const KINDS = ['shader', 'draw', 'image'];
 export const isFile = ref => typeof ref === 'string' && extname(ref) !== '';
 
 /** Every drawn item an Edit or (partial) Look holds. */
 function items(style) {
-  const { frame, cursor, clickEffect } = style ?? {};
-  return [...(Array.isArray(frame?.background) ? frame.background : []), ...(Array.isArray(frame?.effects) ? frame.effects : []), frame?.chrome, cursor, clickEffect]
+  const { frame, cursor, clickEffect, subtitles } = style ?? {};
+  return [...(Array.isArray(frame?.background) ? frame.background : []), ...(Array.isArray(frame?.effects) ? frame.effects : []), frame?.chrome, cursor, clickEffect, subtitles]
     .filter(item => item && typeof item === 'object');
 }
 

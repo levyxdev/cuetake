@@ -23,6 +23,10 @@ export const DEFAULT_STYLE = {
   // fits below `minZoom` stay wide. The camera arrives `lead` before an action, holds `hold` after the
   // last one in a segment, settles in about `response`, and returns wide `endWide` before the end.
   camera: { maxZoom: 2, minZoom: 1.2, padding: 48, lead: 0.6, hold: 1.5, chainGap: 2, response: 0.6, follow: true, endWide: 1.5 },
+  // Drawn over the Final, outside the camera, while a Line is spoken; `burn: false` keeps them to the
+  // subtitle files. Rows hold up to `maxChars` (about 16 in Chinese, 42 otherwise), `maxRows` to a cue,
+  // each shown at least `minDuration`.
+  subtitles: { draw: 'subtitles', burn: true },
 };
 
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -40,7 +44,7 @@ export function merge(base, over) {
 
 /** A complete Edit: the defaults under whatever `edit` names. */
 export function withDefaults(edit) {
-  return merge({ schemaVersion: EDIT_VERSION, ...DEFAULT_STYLE, output: { ...DEFAULT_STYLE.output, fps: 60 }, camera: { ...DEFAULT_STYLE.camera, targets: [] } }, edit);
+  return merge({ schemaVersion: EDIT_VERSION, ...DEFAULT_STYLE, output: { ...DEFAULT_STYLE.output, fps: 60 }, camera: { ...DEFAULT_STYLE.camera, targets: [] }, narration: { volume: 1, lines: [] } }, edit);
 }
 
 /**
@@ -64,11 +68,16 @@ export function cameraTargets(timeline, focus, wide = [], camera = {}) {
   return [...automatic, ...focus].sort((a, b) => a.t - b.t);
 }
 
+/**
+ * The first Edit of a Take. Each Line starts where the Scenario said it (`d.say`); its text, audio and
+ * word timings stay in the Take's Narration, since they change only with new audio.
+ */
 export function createEdit(config, timeline, focus, wide = []) {
   return withDefaults({
-    cursor: config.cursor, clickEffect: config.clickEffect, output: { ...config.output, fps: config.capture.fps },
+    cursor: config.cursor, clickEffect: config.clickEffect, subtitles: config.subtitles, output: { ...config.output, fps: config.capture.fps },
     // The browser chrome shows the Scenario's host unless the config names something else.
     frame: { url: new URL(config.url).host, ...config.frame },
     camera: { ...config.camera, targets: cameraTargets(timeline, focus, wide, config.camera) },
+    narration: { lines: timeline.events.filter(event => event.type === 'say').map(event => ({ id: event.id, start: event.t })) },
   });
 }
