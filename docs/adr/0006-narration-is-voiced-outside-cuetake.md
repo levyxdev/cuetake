@@ -12,6 +12,7 @@ The agent writes the Narration and has a separate speech tool voice each Line; C
 ## Consequences
 
 - A Take receives its Narration as audio files with optional word timings, copied into the Take. CueTake measures each Line's duration from its audio.
+- Render reads the Take's Narration besides the Source, the Timeline and the Edit. It still never touches the captured page (ADR 0002).
 - Lines are timed in Source time; cuts and retiming come from the time map of #11.
 - A Line that overlaps the next one or runs past the end of the Final is an error naming that Line. CueTake does not move Lines or stretch the picture.
 - Choosing models and voices, cloning, and keeping narration text on the user's machine are the speech tool's concerns.

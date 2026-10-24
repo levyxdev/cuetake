@@ -23,7 +23,7 @@ The unedited picture of the page produced by Capture, in device pixels.
 _Avoid_: raw video, recording
 
 **Timeline**:
-Every interaction observed during Capture (pointer path, clicks, typing, focus targets), timed from the start of Capture and positioned in CSS pixels.
+Every interaction observed during Capture (pointer path, clicks, typing, focus targets, where each Line was said), timed from the start of Capture and positioned in CSS pixels.
 _Avoid_: event log, camera events
 
 **Auth profile**:

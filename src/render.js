@@ -101,11 +101,11 @@ function servedLines(lines, files) {
 export async function renderFinal({ sourcePath, finalPath, timeline, edit, files = {}, narration = null }) {
   const handle = await fs.open(finalPath, 'w');
   const served = { ...files, source: sourcePath };
-  const voice = narration && { ...narration, lines: servedLines(narration.lines, served) };
+  const spoken = narration && { ...narration, lines: servedLines(narration.lines, served) };
   try {
     return await withRenderPage({ files: served, writable: { final: handle } }, page => page.evaluate(options => window.cuetakeRender(options), {
       sourceUrl: `${ORIGIN}/files/source`, finalUrl: `${ORIGIN}/files/final`, duration: timeline.duration,
-      viewport: timeline.viewport, pointer: timeline.pointer ?? [], events: timeline.events ?? [], edit, narration: voice,
+      viewport: timeline.viewport, pointer: timeline.pointer ?? [], events: timeline.events ?? [], edit, narration: spoken,
     }));
   } finally { await handle.close(); }
 }
@@ -113,10 +113,10 @@ export async function renderFinal({ sourcePath, finalPath, timeline, edit, files
 /** A Preview PNG of `tiles` ([{ name, edit }]) at `at` seconds, or at the end with the camera wide. No Final is touched. */
 export async function composePreview({ sourcePath, timeline, tiles, at, files = {}, narration = null }) {
   const served = { ...files, source: sourcePath };
-  const voice = narration && { ...narration, lines: servedLines(narration.lines, served) };
+  const spoken = narration && { ...narration, lines: servedLines(narration.lines, served) };
   const png = await withRenderPage({ files: served }, page => page.evaluate(options => window.cuetakePreview(options), {
     sourceUrl: `${ORIGIN}/files/source`, duration: timeline.duration, viewport: timeline.viewport,
-    pointer: timeline.pointer ?? [], events: timeline.events ?? [], tiles, at: at ?? null, narration: voice,
+    pointer: timeline.pointer ?? [], events: timeline.events ?? [], tiles, at: at ?? null, narration: spoken,
   }));
   return Buffer.from(png, 'base64');
 }
