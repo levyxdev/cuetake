@@ -313,7 +313,7 @@ test('npx folders made for CueTake alone are found, including the one the CLI ru
     await fs.mkdir(join(cache, '_npx', 'broken'));
     await writeJson(join(other, '_npx', 'own', 'package.json'), { dependencies: { cuetake: '^0.3.0' } });
     const packageDir = join(other, '_npx', 'own', 'node_modules', 'cuetake');
-    expect(await npxFolders({ cache, packageDir })).toEqual([join(cache, '_npx', 'old'), join(other, '_npx', 'own')]);
+    expect(await npxFolders({ cache, packageDir })).toEqual([join(cache, '_npx', 'old'), join(other, '_npx', 'own')].sort());
     expect(await npxFolders({ cache: join(cache, 'missing'), packageDir: '/src/cuetake' })).toEqual([]);
   } finally { await fs.rm(cache, { recursive: true, force: true }); await fs.rm(other, { recursive: true, force: true }); }
 });
