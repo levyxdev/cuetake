@@ -10,6 +10,10 @@ CueTake records browser product demos for AI agents: an agent writes a Scenario,
 A trusted script describing one demo: the start page, the timed interactions, and the evidence that the demonstrated change happened.
 _Avoid_: script, flow file, recipe
 
+**Director**:
+What a Scenario's `run` is handed to act on the page like a person: it moves the cursor, clicks, types and drags at a human pace, and marks camera targets and Lines.
+_Avoid_: driver, bot, automation
+
 **Take**:
 One recording attempt and everything it produces, kept together in its own folder.
 _Avoid_: recording, run, project
