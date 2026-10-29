@@ -45,7 +45,7 @@ Reuse a named auth profile when the user has authorized that account for the dem
 
 ## Styling and timing
 
-Defaults: CSS viewport 1440×900, 2× capture resolution, 60 fps target, a 3840×2160 Final with the page in a light browser window over fluted glass lit in the page's brand color, a soft shadow, a 24 px white arrow, and an outlined spark on each click.
+Defaults: CSS viewport 1440×900, 2× capture resolution, 60 fps target, a 3840×2160 Final with the page in a light browser window over fluted glass lit in the page's brand color, a soft shadow, and a 24 px white arrow that takes the shape the page asks for, presses on each click and fades out when still.
 
 The camera zooms automatically, like Screen Studio: it arrives 0.6 s before each action, frames the target with 48 px padding at up to 2×, follows the cursor while zoomed, holds 1.5 s after the last of a run of actions, and ends every Final on the wide shot. Leave at least 2 s after the last action so the result is seen in context. Use `d.focus(box, seconds)` to direct the camera at a moment; it replaces only the automatic zoom around that moment. Pass `focus: false` to an action that should not move the camera. Boxes are CSS pixels.
 

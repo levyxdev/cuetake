@@ -126,7 +126,7 @@ export async function recordScenario(scenarioPath, outputDir, options = {}) {
     await fs.rename(stopped.webmPath.replace(/\.webm$/, '-capture.json'), join(dir, 'capture.json'));
     const timeline = {
       schemaVersion: SCHEMA_VERSION, viewport: config.viewport, scale: config.capture.resolutionScale, duration: stopped.durationSeconds,
-      pointer: observed.pointer, events: [...observed.events, ...focus.map(f => ({ type: 'focus', ...f })), ...said.map(line => ({ type: 'say', ...line }))].sort((a, b) => a.t - b.t),
+      pointer: observed.pointer, shapes: observed.shapes, events: [...observed.events, ...focus.map(f => ({ type: 'focus', ...f })), ...said.map(line => ({ type: 'say', ...line }))].sort((a, b) => a.t - b.t),
     };
     await writeJson(join(dir, 'timeline.json'), timeline);
     let edit = createEdit(config, timeline, focus, wide);

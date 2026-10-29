@@ -4,14 +4,14 @@
  *
  * Each output frame is the Background (drawn once, still in output pixels), the window effects (drawn
  * every frame around the window as the camera moves it), the page, then the chrome, click effects and
- * cursor. Everything but the page is agent-written shaders, drawing code or images (ADR 0005).
+ * Cursor. Everything but the page is agent-written shaders, drawing code or images (ADR 0005).
  *
  * Spaces: camera crops are CSS pixels of the viewport; the Source texture is sampled by UV only;
  * "stage" is the Final's pixels at camera zoom 1, laid out by stage.js.
  */
 import * as MB from '/mediabunny.js';
 import { cameraTrack } from '/camera.js';
-import { pointerAt, presses, sparksAt } from '/cursor.js';
+import { cursorTrack, drawnShape, pointerAt, presses, sparksAt } from '/cursor.js';
 import { layout, outputSize, cameraView, previewSheet, brandColor } from '/stage.js';
 import { burnsIn, cuesFor, lineProblems } from '/narration.js';
 
@@ -73,13 +73,13 @@ void main() {
 }`;
 const SPRITE_FRAGMENT = `#version 300 es
 precision highp float;
-uniform sampler2D uSprite;
+uniform sampler2D uSprite; uniform float uAlpha;
 in vec2 uv; out vec4 color;
-void main() { color = texture(uSprite, uv); }`;
+void main() { color = texture(uSprite, uv) * uAlpha; }`;
 
 // Item keys CueTake reads itself; every other key is a parameter for the item's shader or drawing code.
 const OWN_KEYS = new Set(['shader', 'draw', 'image', 'files', 'ref', 'kind', 'url']);
-const SLOT_KEYS = new Set(['size', 'hotspot', 'duration', 'reach', 'height', 'burn', 'maxChars', 'maxRows', 'minDuration']);
+const SLOT_KEYS = new Set(['size', 'hotspot', 'press', 'hideAfter', 'duration', 'reach', 'height', 'burn', 'maxChars', 'maxRows', 'minDuration']);
 const paramsOf = item => Object.fromEntries(Object.entries(item).filter(([key]) => !OWN_KEYS.has(key) && (item.kind === 'shader' || !SLOT_KEYS.has(key))));
 const fail = (item, error) => new Error(`${item.ref}: ${error?.message ?? error}`);
 
@@ -175,7 +175,7 @@ function createCompositor(stage, sourceWidth, sourceHeight, brand) {
   gl.uniform4f(pageProgram.uniform('uWindow'), stage.window.x, stage.window.y, stage.window.w, stage.window.h);
   gl.uniform1f(pageProgram.uniform('uRadius'), stage.radius);
   const blitProgram = program(VERTEX, BLIT);
-  const spriteProgram = program(SPRITE_VERTEX, SPRITE_FRAGMENT), spriteRect = spriteProgram.uniform('uRect');
+  const spriteProgram = program(SPRITE_VERTEX, SPRITE_FRAGMENT), spriteRect = spriteProgram.uniform('uRect'), spriteAlpha = spriteProgram.uniform('uAlpha');
 
   /** An agent shader with its parameters declared and set, and its `files` bound from texture unit 2. */
   async function agentProgram(item, source) {
@@ -267,8 +267,8 @@ function createCompositor(stage, sourceWidth, sourceHeight, brand) {
       return t;
     },
     /**
-     * One frame with the camera at stage point (x, y) and `zoom`; `draw(texture, rect)` in `overlay`
-     * places sprites in stage pixels, and in `screen` in output pixels, outside the camera.
+     * One frame with the camera at stage point (x, y) and `zoom`; `draw(texture, rect, opacity)` in
+     * `overlay` places sprites in stage pixels, and in `screen` in output pixels, outside the camera.
      */
     frame(x, y, zoom, overlay, screen) {
       gl.disable(gl.BLEND);
@@ -279,7 +279,7 @@ function createCompositor(stage, sourceWidth, sourceHeight, brand) {
       gl.useProgram(pageProgram.p); gl.uniform3f(pageProgram.camera, x, y, zoom);
       bind(0, pageTexture); gl.bindVertexArray(fullScreen); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       gl.useProgram(spriteProgram.p); gl.uniform3f(spriteProgram.camera, x, y, zoom); gl.bindVertexArray(unitQuad);
-      const place = (t, rect) => { gl.bindTexture(gl.TEXTURE_2D, t); gl.uniform4f(spriteRect, ...rect); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); };
+      const place = (t, rect, opacity = 1) => { gl.bindTexture(gl.TEXTURE_2D, t); gl.uniform4f(spriteRect, ...rect); gl.uniform1f(spriteAlpha, opacity); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); };
       overlay(place);
       if (screen) { gl.uniform3f(spriteProgram.camera, width / 2, height / 2, 1); screen(place); }
       if (effects.length) checkGpu('A window effect');
@@ -316,33 +316,38 @@ async function loadChrome(item, width, url) {
 }
 
 /**
- * The cursor: drawing code exporting `box` ({ width, height, hotspot: [x, y] } in its own units) and
- * `draw(ctx, { params, files })` in those units, or an image whose `hotspot` the item names. It is shown
- * `size` CSS px wide, with a margin of a quarter box around it for shadows.
+ * The cursor: drawing code exporting `shapes` (each shape's { width, height, hotspot: [x, y] } in the
+ * code's own units, `default` among them) and `draw(ctx, { shape, params, files })` in those units, or
+ * an image of the default shape whose `hotspot` the item names. The default shape is `size` CSS px wide
+ * and the others share its scale; each sprite has a margin of a quarter box around it for shadows.
  */
 async function loadCursor(item) {
-  let box, paint;
+  let boxes, paint;
   if (item.kind === 'image') {
     const image = await loadImage(item, item.url);
-    box = { width: image.naturalWidth || 32, height: image.naturalHeight || 32, hotspot: item.hotspot ?? [0, 0] };
-    paint = ctx => ctx.drawImage(image, 0, 0, box.width, box.height);
+    boxes = { default: { width: image.naturalWidth || 32, height: image.naturalHeight || 32, hotspot: item.hotspot ?? [0, 0] } };
+    paint = ctx => ctx.drawImage(image, 0, 0, boxes.default.width, boxes.default.height);
   } else {
     const module = await loadModule(item), files = await loadFiles(item), params = paramsOf(item);
-    box = { ...module.box, ...(item.hotspot && { hotspot: item.hotspot }) };
-    paint = ctx => module.draw(ctx, { params, files });
+    boxes = module.shapes;
+    if (!boxes?.default) throw fail(item, 'a cursor exports `shapes` with a `default` box');
+    paint = (ctx, shape) => module.draw(ctx, { shape, params, files });
   }
-  const k = (item.size ?? 24) / box.width, margin = Math.max(box.width, box.height) / 4;
-  return {
-    /** Where the sprite's top-left sits relative to the pointer, and its size, in CSS px. */
-    offset: { x: -(box.hotspot[0] + margin) * k, y: -(box.hotspot[1] + margin) * k },
-    size: { w: (box.width + 2 * margin) * k, h: (box.height + 2 * margin) * k },
-    canvas(scale) {
-      const ctx = canvas2d((box.width + 2 * margin) * k * scale, (box.height + 2 * margin) * k * scale);
-      ctx.scale(k * scale, k * scale); ctx.translate(margin, margin);
-      try { paint(ctx); } catch (error) { throw fail(item, error); }
-      return ctx.canvas;
-    },
-  };
+  const k = (item.size ?? 24) / boxes.default.width;
+  return Object.fromEntries(Object.entries(boxes).map(([shape, box]) => {
+    const margin = Math.max(box.width, box.height) / 4;
+    return [shape, {
+      /** Where the sprite's top-left sits relative to the pointer, and its size, in CSS px. */
+      offset: { x: -(box.hotspot[0] + margin) * k, y: -(box.hotspot[1] + margin) * k },
+      size: { w: (box.width + 2 * margin) * k, h: (box.height + 2 * margin) * k },
+      canvas(scale) {
+        const ctx = canvas2d((box.width + 2 * margin) * k * scale, (box.height + 2 * margin) * k * scale);
+        ctx.scale(k * scale, k * scale); ctx.translate(margin, margin);
+        try { paint(ctx, shape); } catch (error) { throw fail(item, error); }
+        return ctx.canvas;
+      },
+    }];
+  }));
 }
 
 /**
@@ -471,7 +476,7 @@ async function encoderConfig(width, height, fps, quality) {
  * Everything Render draws for one Edit (as forRender in styles.js serves it). `firstFrame` is the
  * Source's first frame: Background layers see it, and it picks the brand color.
  */
-async function createScene(edit, viewport, { pointer, events }, firstFrame, sourceWidth, sourceHeight, cues = []) {
+async function createScene(edit, viewport, { pointer, shapes, events }, firstFrame, sourceWidth, sourceHeight, cues = []) {
   const { camera, cursor, clickEffect, frame, subtitles } = edit;
   const chrome = frame.chrome ? await loadChrome(frame.chrome, viewport.width, frame.url ?? '') : null;
   const stage = layout(edit, viewport, chrome?.height ?? 0);
@@ -483,8 +488,9 @@ async function createScene(edit, viewport, { pointer, events }, firstFrame, sour
   const at = (x, y) => [stage.page.x + x * stage.scale, stage.page.y + y * stage.scale];
   const sharpest = stage.scale * camera.maxZoom * 2;
   const chromeTexture = chrome ? compositor.sprite(chrome.canvas(sharpest, stage.radius / stage.scale)) : null;
-  const pointerSprite = cursor ? await loadCursor(cursor) : null;
-  const pointerTexture = pointerSprite && compositor.sprite(pointerSprite.canvas(sharpest));
+  const cursorSprites = cursor ? await loadCursor(cursor) : {};
+  const cursorTextures = Object.fromEntries(Object.entries(cursorSprites).map(([shape, sprite]) => [shape, compositor.sprite(sprite.canvas(sharpest))]));
+  const drawn = new Set(Object.keys(cursorSprites)), track = cursor && cursorTrack({ pointer, shapes, events }, cursor);
   const effect = clickEffect ? await loadClickEffect(clickEffect, cursor ? Object.fromEntries(Object.entries(cursor).filter(([key]) => !['ref', 'kind', 'url', 'files'].includes(key))) : {}) : null;
   const pressList = presses(events);
   const subtitleDrawing = burnsIn(subtitles) && cues.length ? await loadSubtitles(subtitles) : null;
@@ -507,8 +513,12 @@ async function createScene(edit, viewport, { pointer, events }, firstFrame, sour
           effectTexture = compositor.sprite(ctx.canvas, effectTexture, false);
           draw(effectTexture, [...at(press.x - effect.reach, press.y - effect.reach), 2 * effect.reach * stage.scale, 2 * effect.reach * stage.scale]);
         }
-        const point = pointerSprite && pointerAt(pointer, t);
-        if (point) draw(pointerTexture, [...at(point.x + pointerSprite.offset.x, point.y + pointerSprite.offset.y), pointerSprite.size.w * stage.scale, pointerSprite.size.h * stage.scale]);
+        // The Cursor scales around its hotspot, so a press keeps its tip on the target.
+        const now = track && track.at(t);
+        if (now && now.opacity > 0) {
+          const shape = drawnShape(now.shape, drawn), sprite = cursorSprites[shape], k = now.scale;
+          draw(cursorTextures[shape], [...at(now.x + sprite.offset.x * k, now.y + sprite.offset.y * k), sprite.size.w * k * stage.scale, sprite.size.h * k * stage.scale], now.opacity);
+        }
       }, cue >= 0 ? draw => draw(subtitleTexture, [0, 0, stage.width, stage.height]) : null);
       return cue;
     },
@@ -523,7 +533,7 @@ const uploadStream = url => new WritableStream({
   },
 });
 
-window.cuetakeRender = async ({ sourceUrl, finalUrl, duration, viewport, pointer, events, edit, narration }) => {
+window.cuetakeRender = async ({ sourceUrl, finalUrl, duration, viewport, pointer, shapes, events, edit, narration }) => {
   const { camera } = edit, { quality, fps } = edit.output;
   const { width, height } = outputSize(edit);
   const started = performance.now();
@@ -571,7 +581,7 @@ window.cuetakeRender = async ({ sourceUrl, finalUrl, duration, viewport, pointer
   let current = await reader.next(), next = await reader.next(), uploaded = null;
   if (!current) throw new Error('Source has no video frames');
   const cues = voice?.cues ?? [], shownFrames = cues.map(() => null);
-  const scene = await createScene(edit, viewport, { pointer, events }, current, track.codedWidth, track.codedHeight, cues), { compositor } = scene;
+  const scene = await createScene(edit, viewport, { pointer, shapes, events }, current, track.codedWidth, track.codedHeight, cues), { compositor } = scene;
   const cameraPath = cameraTrack({ targets: camera.targets, viewport, camera, duration, fps, pointerAt: t => pointerAt(pointer, t) });
   const origin = current.timestamp;
   try {
@@ -663,7 +673,7 @@ window.cuetakeMeasure = async lines => {
  * A Preview as a base64 PNG: each tile's Edit composed by the same scene as Render, over the Source at
  * `at` seconds with the Final's camera, or (`at` null) over the last moment with the camera wide.
  */
-window.cuetakePreview = async ({ sourceUrl, duration, viewport, pointer, events, tiles, at, narration }) => {
+window.cuetakePreview = async ({ sourceUrl, duration, viewport, pointer, shapes, events, tiles, at, narration }) => {
   const input = new MB.Input({ formats: MB.ALL_FORMATS, source: new MB.UrlSource(sourceUrl) });
   const track = await input.getPrimaryVideoTrack();
   const sink = new MB.VideoSampleSink(track), origin = await track.getFirstTimestamp();
@@ -679,7 +689,7 @@ window.cuetakePreview = async ({ sourceUrl, duration, viewport, pointer, events,
     ctx.font = '600 22px system-ui, -apple-system, sans-serif'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#e5e7eb';
     for (const [i, { name, edit }] of tiles.entries()) {
       const voice = await prepareNarration(narration, edit.subtitles, Math.round(duration * edit.output.fps) / edit.output.fps);
-      const scene = await createScene(edit, viewport, { pointer, events }, firstFrame, track.codedWidth, track.codedHeight, voice?.cues);
+      const scene = await createScene(edit, viewport, { pointer, shapes, events }, firstFrame, track.codedWidth, track.codedHeight, voice?.cues);
       let crop = { x: 0, y: 0, w: viewport.width, h: viewport.height };
       if (at !== null) {
         const { fps } = edit.output, path = cameraTrack({ targets: edit.camera.targets, viewport, camera: edit.camera, duration, fps, pointerAt: s => pointerAt(pointer, s) });

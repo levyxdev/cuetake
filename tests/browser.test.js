@@ -40,7 +40,7 @@ test('local auth state restores cookie and localStorage without adding it to tak
   } finally { await browser.close(); if (old === undefined) delete process.env.CUETAKE_AUTH_DIR; else process.env.CUETAKE_AUTH_DIR = old; await fs.rm(directory, { recursive: true, force: true }); }
 }, 30_000);
 
-test('probe records the pointer path, clicks with their target box, drags and typing bursts', async () => {
+test('probe records the pointer path, clicks with their target box and release, drags and typing bursts', async () => {
   const browser = await chromium.launch({ headless: true, channel: 'chromium' });
   try {
     const page = await browser.newPage({ viewport: { width: 640, height: 480 } });
@@ -48,7 +48,7 @@ test('probe records the pointer path, clicks with their target box, drags and ty
     const startedAtMs = Date.now();
     await installProbe(page);
     await page.mouse.move(140, 120);
-    await page.mouse.click(140, 120);
+    await page.mouse.click(140, 120, { delay: 100 });
     await page.mouse.move(10, 300);
     await page.mouse.down();
     await page.mouse.move(200, 400, { steps: 5 });
@@ -61,10 +61,43 @@ test('probe records the pointer path, clicks with their target box, drags and ty
     expect(timeline.events.map(e => e.type)).toEqual(['click', 'drag', 'click', 'type']);
     const [click, drag, , typing] = timeline.events;
     expect(click).toMatchObject({ x: 140, y: 120, box: { x: 100, y: 100, width: 80, height: 40 } });
+    expect(click.end - click.t).toBeGreaterThanOrEqual(0.09);
     expect(drag).toMatchObject({ from: { x: 10, y: 300 }, to: { x: 200, y: 400 } });
     expect(drag.end).toBeGreaterThanOrEqual(drag.t);
     expect(typing.box).toMatchObject({ x: 300, width: 200 });
     expect(typing.end).toBeGreaterThan(typing.t);
+  } finally { await browser.close(); }
+}, 30_000);
+
+test('probe records the cursor shape the page asks for, as the browser resolves it', async () => {
+  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
+  try {
+    const page = await browser.newPage({ viewport: { width: 640, height: 480 } });
+    await page.setContent(`<style>body { margin: 0; font: 16px sans-serif } div { position: fixed }</style>
+      <div style="left: 20px; top: 20px"><a href="#">A link</a></div>
+      <div style="left: 20px; top: 80px">Plain paragraph text</div>
+      <input style="position: fixed; left: 20px; top: 140px; width: 200px">
+      <button style="position: fixed; left: 20px; top: 200px">Button text</button>
+      <div id="pen" style="left: 300px; top: 20px; width: 100px; height: 100px; cursor: url(data:image/png;base64,AAAA) 4 4, crosshair"></div>
+      <div id="board" style="left: 300px; top: 200px; width: 100px; height: 100px"></div>`);
+    // A page that sets its cursor from its own pointer handler, as canvas apps do.
+    await page.evaluate(() => document.getElementById('board').addEventListener('pointermove', e => { e.currentTarget.style.cursor = 'grab'; }));
+    const startedAtMs = Date.now();
+    await installProbe(page);
+    const visit = async (x, y) => { await page.mouse.move(x, y); await page.waitForTimeout(50); };
+    await visit(30, 28); // the link
+    await visit(30, 88); // paragraph text
+    await visit(500, 400); // empty page
+    await visit(60, 150); // the input
+    await visit(40, 210); // button text
+    await visit(350, 70); // an image cursor with its fallback
+    await visit(350, 250); // set by the page's handler
+    const { shapes } = await collectTimeline(page, startedAtMs);
+    expect(shapes.map(([, shape]) => shape)).toEqual(['pointer', 'text', 'default', 'text', 'default', 'crosshair', 'grab']);
+    expect(shapes.every(([t], i) => t >= 0 && (i === 0 || t > shapes[i - 1][0]))).toBe(true);
+    // A shape shown before Capture starts is where the Timeline begins.
+    const later = await collectTimeline(page, Date.now());
+    expect(later.shapes).toEqual([[0, 'grab']]);
   } finally { await browser.close(); }
 }, 30_000);
 
@@ -132,7 +165,7 @@ test('Render draws the built-in cursor at the pointer and a spark around each cl
     const sourcePath = join(dir, 'source.webm'), outputPath = join(dir, 'final.mp4');
     await fs.writeFile(sourcePath, await syntheticSource(browser, 0.6));
     const timeline = { viewport: { width: 320, height: 240 }, duration: 1, pointer: [[0, 60, 60], [1, 60, 60]], events: [{ type: 'click', t: 0.2, x: 200, y: 60 }] };
-    await renderFinal({ sourcePath, finalPath: outputPath, timeline, ...forRender(bare(), dir) });
+    await renderFinal({ sourcePath, finalPath: outputPath, timeline, ...forRender(bare({ clickEffect: { draw: 'spark' } }), dir) });
     // A spark ray sits ~26 px from the click along 22.5° at t=0.3; the arrow body lies just below-right of the tip.
     const ray = [Math.round(200 + 26 * Math.cos(Math.PI / 8)), Math.round(60 + 26 * Math.sin(Math.PI / 8))];
     const [arrow, spark, clear] = await pixelsAt(browser, await extractFrame(outputPath, 0.3), [[64, 72], ray, [120, 200]]);
@@ -140,6 +173,35 @@ test('Render draws the built-in cursor at the pointer and a spark around each cl
     expect(Math.min(...spark)).toBeGreaterThan(110);
     expect(Math.max(...clear)).toBeLessThan(40);
     const [gone] = await pixelsAt(browser, await extractFrame(outputPath, 0.9), [ray]);
+    expect(Math.max(...gone)).toBeLessThan(40);
+  } finally { await browser.close(); await fs.rm(dir, { recursive: true, force: true }); }
+}, 60_000);
+
+test('Render draws the Cursor in the shape the page asked for, pressed while held, and fades it when idle', async () => {
+  const dir = await fs.mkdtemp(join(tmpdir(), 'cuetake-cursor-'));
+  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
+  try {
+    const sourcePath = join(dir, 'source.webm'), outputPath = join(dir, 'final.mp4');
+    await fs.writeFile(sourcePath, await syntheticSource(browser, 0.6));
+    const timeline = {
+      viewport: { width: 320, height: 240 }, duration: 2.6, pointer: [[0, 60, 60]], shapes: [[0, 'default'], [0.4, 'pointer']],
+      events: [{ type: 'click', t: 0.8, end: 0.9, x: 60, y: 60 }],
+    };
+    await renderFinal({ sourcePath, finalPath: outputPath, timeline, ...forRender(bare({ cursor: { hideAfter: 1 } }), dir) });
+    const frame = async (t, points) => (await pixelsAt(browser, await extractFrame(outputPath, t), points)).map(rgb => Math.min(...rgb));
+    // The arrow's body is right of its tip; the hand's thumb is left of the fingertip, and its palm reaches lower.
+    const arrow = [64, 72], thumb = [56, 73], palm = [68, 80];
+    const [arrowBody, noThumb] = await frame(0.1, [arrow, thumb]);
+    expect(arrowBody).toBeGreaterThan(180);
+    expect(noThumb).toBeLessThan(60);
+    const [hand, palmUp] = await frame(0.5, [thumb, palm]);
+    expect(hand).toBeGreaterThan(180);
+    expect(palmUp).toBeGreaterThan(180);
+    // Held, the hand shrinks toward its fingertip; released, it springs back.
+    expect((await frame(0.9, [palm]))[0]).toBeLessThan(60);
+    expect((await frame(1.3, [palm]))[0]).toBeGreaterThan(180);
+    // Still for a second after the release, it fades out.
+    const gone = await frame(2.4, [thumb, palm]);
     expect(Math.max(...gone)).toBeLessThan(40);
   } finally { await browser.close(); await fs.rm(dir, { recursive: true, force: true }); }
 }, 60_000);

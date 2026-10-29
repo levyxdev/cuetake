@@ -4,8 +4,8 @@ import pkg from '../package.json' with { type: 'json' };
 import { scenarioSchema, summarizeFrames, narrationSchema } from '../src/pipeline.js';
 import { fitZoom, cropAround, zoomSegments, cameraTrack } from '../src/camera.js';
 import { cameraTargets, createEdit, DEFAULT_STYLE, withDefaults } from '../src/edit.js';
-import { pointerAt, presses, sparksAt } from '../src/cursor.js';
-import { random, reachMs, reach, landing, typingDelays } from '../src/motion.js';
+import { pointerAt, presses, sparksAt, heldSpans, pressScale, activityTimes, idleOpacity, shapeAt, drawnShape, cursorTrack } from '../src/cursor.js';
+import { random, reachMs, reach, landing, pauseMs, typingDelays } from '../src/motion.js';
 import { atShortSide, layout, cameraView, brandHue, brandColor, previewSheet } from '../src/stage.js';
 import { lookFromEdit, applyLook, mergeLook, summarize, saveLook, loadLook, listLooks, removeLook, resolvedLook } from '../src/look.js';
 import { bundle, codeRefs, forRender, BUILTIN_DIR } from '../src/styles.js';
@@ -117,6 +117,68 @@ test('the cursor interpolates the pointer path and is hidden before the first sa
   expect(pointerAt(pointer, 9)).toEqual({ x: 100, y: 50 });
 });
 
+test('a press shrinks the Cursor while the button is held and springs back after release', () => {
+  const spans = heldSpans([{ type: 'click', t: 1, end: 1.1, x: 5, y: 6 }, { type: 'type', t: 2, end: 3 }, { type: 'drag', t: 4, end: 5, from: { x: 7, y: 8 }, to: { x: 9, y: 9 } }]);
+  expect(spans).toEqual([{ t: 1, end: 1.1 }, { t: 4, end: 5 }]);
+  const scale = t => pressScale(spans, 0.8, t);
+  expect(scale(0.99)).toBe(1);
+  expect(scale(1.02)).toBeLessThan(1);
+  expect(scale(1.02)).toBeGreaterThan(0.8);
+  expect(scale(1.1)).toBeCloseTo(0.8);
+  // After release it springs back past full size for a moment, then rests at 1.
+  const after = Array.from({ length: 30 }, (_, i) => scale(1.1 + i / 100));
+  expect(Math.max(...after)).toBeGreaterThan(1);
+  expect(Math.max(...after)).toBeLessThan(1.05);
+  expect(scale(1.5)).toBe(1);
+  // A drag stays pressed from grab to drop.
+  for (const t of [4.2, 4.6, 5]) expect(scale(t)).toBeCloseTo(0.8);
+  expect(scale(5.5)).toBe(1);
+  expect(pressScale(spans, false, 1.1)).toBe(1);
+  expect(pressScale([], 0.8, 1.1)).toBe(1);
+});
+
+test('the Cursor fades out after resting hideAfter seconds and is fully shown again when it next moves', () => {
+  // Still from 1 s (a click at 1–1.1 s) until it moves again just before 6.1 s.
+  const pointer = [[0, 0, 0], [0.5, 50, 50], [1, 100, 100], [1, 100, 100], [6.1, 140, 120]];
+  const activity = activityTimes(pointer, heldSpans([{ type: 'click', t: 1, end: 1.1 }]));
+  expect(activity).toEqual([0, 0.45, 0.5, 0.95, 1, 1, 1.1, 6.05, 6.1]);
+  const opacity = t => idleOpacity(activity, 2.5, t);
+  expect(opacity(3.5)).toBe(1);
+  expect(opacity(3.75)).toBeCloseTo(0.5);
+  expect(opacity(4)).toBe(0);
+  expect(opacity(5.9)).toBeCloseTo(0.5);
+  expect(opacity(6.05)).toBe(1);
+  // Still to the end, it stays hidden; hideAfter: false keeps it shown.
+  expect(opacity(30)).toBe(0);
+  expect(idleOpacity(activity, false, 30)).toBe(1);
+});
+
+test('the Cursor takes the shape the page asked for, its alias, or default', () => {
+  const shapes = [[0, 'default'], [1, 'pointer'], [2, 'col-resize'], [3, 'zoom-in']];
+  expect(shapeAt(shapes, 0.5)).toBe('default');
+  expect(shapeAt(shapes, 1.5)).toBe('pointer');
+  expect(shapeAt([], 1.5)).toBe('default');
+  const arrow = new Set(['default', 'pointer', 'text', 'ew-resize', 'wait']), dot = new Set(['default']);
+  expect(drawnShape(shapeAt(shapes, 1.5), arrow)).toBe('pointer');
+  expect(drawnShape(shapeAt(shapes, 2.5), arrow)).toBe('ew-resize');
+  expect(drawnShape('progress', arrow)).toBe('wait');
+  expect(drawnShape(shapeAt(shapes, 3.5), arrow)).toBe('default');
+  expect(drawnShape('pointer', dot)).toBe('default');
+});
+
+test('the Cursor track puts point, press, fade and shape together, and is hidden before the first sample', () => {
+  const track = cursorTrack({ pointer: [[1, 10, 20], [2, 30, 40]], shapes: [[1.5, 'text']], events: [{ type: 'click', t: 2, end: 2.1 }] }, { press: 0.8, hideAfter: 2.5 });
+  expect(track.at(0.5)).toBeNull();
+  expect(track.at(1)).toEqual({ x: 10, y: 20, scale: 1, opacity: 1, shape: 'default' });
+  expect(track.at(2.1)).toMatchObject({ x: 30, y: 40, scale: expect.closeTo(0.8, 6), opacity: 1, shape: 'text' });
+  expect(track.at(9).opacity).toBe(0);
+});
+
+test('the default Edit shows clicks on the Cursor, without a click effect', () => {
+  expect(DEFAULT_STYLE.clickEffect).toBe(false);
+  expect(DEFAULT_STYLE.cursor).toMatchObject({ press: 0.8, hideAfter: 2.5 });
+});
+
 test('clicks and drag starts spark for the click effect duration', () => {
   const list = presses([{ type: 'click', t: 1, x: 5, y: 6 }, { type: 'type', t: 2, end: 3 }, { type: 'drag', t: 4, end: 5, from: { x: 7, y: 8 }, to: { x: 9, y: 9 } }]);
   expect(list).toEqual([{ t: 1, x: 5, y: 6 }, { t: 4, x: 7, y: 8 }]);
@@ -178,6 +240,14 @@ test('a click lands a little off the center of its box, at most 8 px however lar
     expect(Math.abs(p.y - 35)).toBeLessThanOrEqual(4.5);
   }
   expect(points.some(p => p.x !== 510)).toBe(true);
+});
+
+test('a click holds the button about a tenth of a second, unevenly, scaled by speed', () => {
+  const rand = random(5), holds = Array.from({ length: 100 }, () => pauseMs('press', 1, rand));
+  expect(Math.min(...holds)).toBeGreaterThanOrEqual(75);
+  expect(Math.max(...holds)).toBeLessThanOrEqual(125);
+  expect(new Set(holds.map(Math.round)).size).toBeGreaterThan(10);
+  expect(pauseMs('press', 2, random(5))).toBeCloseTo(pauseMs('press', 1, random(5)) / 2);
 });
 
 test('typing is uneven, pauses longer after a word, and keeps its average pace', () => {
@@ -259,9 +329,10 @@ test('adopting a Look keeps camera targets, the frame rate and the address bar',
   expect(next.output).toMatchObject({ width: 1080, height: 1920, fps: 30, quality: 22 });
   expect(next.camera.targets).toEqual(edit.camera.targets);
   // Changing an item's parameters merges; naming a new drawing replaces the item.
-  expect(applyLook(edit, { cursor: { size: 40 } }).cursor).toEqual({ draw: 'arrow', size: 40, color: '#ffffff' });
+  expect(applyLook(edit, { cursor: { size: 40 } }).cursor).toEqual({ draw: 'arrow', size: 40, color: '#ffffff', press: 0.8, hideAfter: 2.5 });
   expect(applyLook(edit, { cursor: { image: 'hand.png', hotspot: [4, 2] } }).cursor).toEqual({ image: 'hand.png', hotspot: [4, 2] });
-  expect(applyLook(edit, { clickEffect: false }).clickEffect).toBe(false);
+  expect(edit.clickEffect).toBe(false);
+  expect(applyLook(edit, { clickEffect: { draw: 'spark' } }).clickEffect).toEqual({ draw: 'spark' });
 });
 
 test('fields the Scenario config names win over a Look', () => {

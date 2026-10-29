@@ -48,16 +48,19 @@ Only `name` and `url` are required in config. Other fields use the shown default
 | `at(seconds)` | Wait until a time relative to the capture start. Past times return immediately. |
 | `wait(ms)` | Hold the current state. |
 | `move(x, y, durationMs?)` | Move along a slight arc using viewport CSS coordinates. `0` jumps there. |
-| `click(locator, { duration, focus })` | Move to a visible locator, pause, click near its center, pause. A CSS selector also works. |
+| `hover(locator, { duration })` | Move onto a visible locator and rest there without pressing, so the page shows its hover state. It adds no camera target; use `focus` to frame what it reveals. |
+| `click(locator, { duration, focus })` | Move to a visible locator, pause, press near its center for about a tenth of a second, release, pause. A CSS selector also works. |
 | `type(locator, text, { msPerChar=70, focus })` | Click a field, then type with uneven per-character delays averaging `msPerChar`, longer after a word. |
 | `drag({x,y}, {x,y}, { duration, focus })` | Move to the start, press, move more slowly than an empty-handed move, then release. |
 | `focus({x,y,width,height}, seconds?)` | Add a camera target; defaults to the current time. |
 | `say(id, text?)` | Start a Narration Line. With `--narration` it waits until the Line's audio ends; without, `text` is required and it does not wait. See [narration.md](narration.md). |
 | `time()` | Seconds elapsed since capture started. |
 
-The Director moves like a person. A move takes longer the farther and smaller its target is (Fitts's law), starts quickly and settles slowly, and at the default speed stays under about 2000 CSS px/s; it pauses briefly before pressing and after releasing. A `duration` fixes one move's length in ms and `msPerChar` one field's typing pace; the arc, pauses and uneven typing stay. The same Scenario and `seed` move the same way on every recording. Changing any of this needs a new recording.
+The Director moves like a person. A move takes longer the farther and smaller its target is (Fitts's law), starts quickly and settles slowly, and at the default speed stays under about 2000 CSS px/s; it pauses briefly before pressing and after releasing, and holds a click's button for a moment, so the Cursor's press shows. A `duration` fixes one move's length in ms and `msPerChar` one field's typing pace; the arc, pauses and uneven typing stay. The same Scenario and `seed` move the same way on every recording. Changing any of this needs a new recording.
 
 `move` starts from (0,0). If preparation positioned the cursor elsewhere, initialize it with `await d.move(x, y, 0)` at the start of `run`.
+
+Capture records the cursor shape the page asks for (a hand over links, an I-beam over text, whatever a canvas app sets), and Render draws the Cursor in that shape; the page's own cursor never appears in the Source.
 
 The camera works like Screen Studio's auto zoom. It follows the clicks, typing and drags the page observed, whether they came from the director or from Playwright input directly:
 
@@ -80,7 +83,7 @@ Use actual locators for clicks. Canvas drags often require coordinates; derive o
   scenario.mjs       Snapshot of the original scenario module
   source.webm        Source: original high-resolution VP9 capture
   capture.json       Track settings and video frame callback observations
-  timeline.json      Timeline: pointer path, clicks, drags, typing, focus and said Lines, in seconds and CSS pixels
+  timeline.json      Timeline: pointer path, cursor shapes, clicks and drags with their release, typing, focus and said Lines, in seconds and CSS pixels
   edit.json          Edit: camera targets and settings, cursor, click effect, frame, Line starts and volumes, Subtitles, output
   narration/         The Narration: narration.json (text, word timings) and each Line's audio, named by its id
   subtitles.srt/.vtt Subtitles of the placed Lines, from the last Render

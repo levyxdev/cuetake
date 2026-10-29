@@ -25,7 +25,7 @@ export function createDirector(page, startedAt, fps, focusTargets, wideWindows, 
     cursor = { ...to };
   }
   const move = (x, y, duration) => glide({ x, y }, { duration });
-  // Clicks, typing and drags are recorded by the in-page probe; only deliberate camera choices live here.
+  // Clicks, typing, drags and cursor shapes are recorded by the in-page probe; only deliberate camera choices live here.
   const focus = (box, t = time()) => focusTargets.push({ t, box });
   /** Options may be a bare number for the action's main timing; `focus: false` keeps the camera wide. */
   const options = (value, key) => typeof value === 'number' ? { [key]: value } : value ?? {};
@@ -34,18 +34,29 @@ export function createDirector(page, startedAt, fps, focusTargets, wideWindows, 
     try { return await action(); }
     finally { if (follow === false) wideWindows.push({ start, end: time() }); }
   }
+  /** Moves onto a target, landing a little off its center; returns the target and where it landed inside its box. */
+  async function approach(locator, duration, action) {
+    const target = typeof locator === 'string' ? page.locator(locator) : locator;
+    const box = await target.boundingBox();
+    if (!box) throw new Error(`${action} target has no visible bounding box`);
+    const point = landing(box, rand);
+    await glide(point, { size: Math.min(box.width, box.height), duration });
+    return { target, position: { x: point.x - box.x, y: point.y - box.y } };
+  }
   function click(locator, opts) {
     const { duration, ...rest } = options(opts, 'duration');
     return act(rest, async () => {
-      const target = typeof locator === 'string' ? page.locator(locator) : locator;
-      const box = await target.boundingBox();
-      if (!box) throw new Error('Click target has no visible bounding box');
-      const point = landing(box, rand);
-      await glide(point, { size: Math.min(box.width, box.height), duration });
+      const { target, position } = await approach(locator, duration, 'Click');
       await pause('beforePress');
-      await target.click({ position: { x: point.x - box.x, y: point.y - box.y } });
+      // A person holds the button for a moment, so the Cursor's press shows.
+      await target.click({ position, delay: pauseMs('press', speed, rand) });
       await pause('afterRelease');
     });
+  }
+  /** Rests the cursor on a target without pressing, so the page shows its hover state. */
+  async function hover(locator, opts) {
+    const { duration } = options(opts, 'duration');
+    await approach(locator, duration, 'Hover');
   }
   function type(locator, text, opts) {
     const { msPerChar = 70 / speed, ...rest } = options(opts, 'msPerChar');
@@ -85,5 +96,5 @@ export function createDirector(page, startedAt, fps, focusTargets, wideWindows, 
       said.push({ t, id, text });
     }
   }
-  return { page, wait, time, at: seconds => wait(seconds * 1000 - (Date.now() - startedAt)), move, click, type, drag, focus, say };
+  return { page, wait, time, at: seconds => wait(seconds * 1000 - (Date.now() - startedAt)), move, hover, click, type, drag, focus, say };
 }

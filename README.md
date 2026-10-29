@@ -11,7 +11,7 @@ Built entirely for AI agents, CueTake turns browser interactions into sharp prod
 - Retina tab capture at 30 or 60 fps and a 2× pixel scale, headless by default.
 - An automatic camera in the style of Screen Studio: it arrives just before each click, field and drag, follows the cursor on a spring, and ends on the wide shot.
 - The page framed in a browser or macOS window over fluted glass lit in the product's brand color, at any output size; backgrounds, chrome, cursors and click effects are shaders or drawing code the agent can write.
-- Cursor and click sparks drawn at Render time, so a Take can be restyled without recording again.
+- A Cursor drawn at Render time in the shape the page asks for, pressing on each click and fading out when still, so a Take can be restyled without recording again.
 - Styling chosen in conversation: the agent shows Previews of candidate Looks side by side in about a second, and the Look you pick is saved for later Takes.
 - Rendering in Chromium with WebGL and WebCodecs: no FFmpeg, 4K60 by default.
 - A separate folder for every Take: Source, Timeline, Edit, Final MP4, and verification.
@@ -79,4 +79,4 @@ bun test tests/pipeline.test.js
 bun test tests/browser.test.js
 ```
 
-`pipeline.test.js` covers configuration and camera math; `browser.test.js` covers the probe, Auth profiles, and Render geometry, cursor and sparks at a 2× capture scale. No build step is required. Do not commit recordings, browser profiles, credentials, or product-specific scenarios into this generic tool repository.
+`pipeline.test.js` covers configuration and camera math; `browser.test.js` covers the probe, Auth profiles, and Render geometry, the Cursor's shape, press and fade, and sparks at a 2× capture scale. No build step is required. Do not commit recordings, browser profiles, credentials, or product-specific scenarios into this generic tool repository.

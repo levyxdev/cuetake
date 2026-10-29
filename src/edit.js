@@ -13,8 +13,10 @@ export const evenSize = z.number().int().min(240).max(7680).refine(n => n % 2 ==
 
 /** Times are seconds except clickEffect.duration, which is milliseconds; geometry is CSS pixels. */
 export const DEFAULT_STYLE = {
-  cursor: { draw: 'arrow', size: 24, color: '#ffffff' },
-  clickEffect: { draw: 'spark', duration: 420 },
+  // The Cursor shrinks to `press` while a button is held and fades out after `hideAfter` seconds still;
+  // `false` turns either off. A click shows on the Cursor, so no click effect is drawn unless named.
+  cursor: { draw: 'arrow', size: 24, color: '#ffffff', press: 0.8, hideAfter: 2.5 },
+  clickEffect: false,
   // quality is the H.264 quantizer (lower is sharper and larger).
   output: { width: 3840, height: 2160, quality: 22 },
   // padding is a fraction of the short side, one number or [top, right, bottom, left]; radius is in 1080p pixels.

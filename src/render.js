@@ -105,7 +105,7 @@ export async function renderFinal({ sourcePath, finalPath, timeline, edit, files
   try {
     return await withRenderPage({ files: served, writable: { final: handle } }, page => page.evaluate(options => window.cuetakeRender(options), {
       sourceUrl: `${ORIGIN}/files/source`, finalUrl: `${ORIGIN}/files/final`, duration: timeline.duration,
-      viewport: timeline.viewport, pointer: timeline.pointer ?? [], events: timeline.events ?? [], edit, narration: spoken,
+      viewport: timeline.viewport, pointer: timeline.pointer ?? [], shapes: timeline.shapes ?? [], events: timeline.events ?? [], edit, narration: spoken,
     }));
   } finally { await handle.close(); }
 }
@@ -116,7 +116,7 @@ export async function composePreview({ sourcePath, timeline, tiles, at, files = 
   const spoken = narration && { ...narration, lines: servedLines(narration.lines, served) };
   const png = await withRenderPage({ files: served }, page => page.evaluate(options => window.cuetakePreview(options), {
     sourceUrl: `${ORIGIN}/files/source`, duration: timeline.duration, viewport: timeline.viewport,
-    pointer: timeline.pointer ?? [], events: timeline.events ?? [], tiles, at: at ?? null, narration: spoken,
+    pointer: timeline.pointer ?? [], shapes: timeline.shapes ?? [], events: timeline.events ?? [], tiles, at: at ?? null, narration: spoken,
   }));
   return Buffer.from(png, 'base64');
 }
