@@ -27,7 +27,7 @@ The unedited picture of the page produced by Capture, in device pixels.
 _Avoid_: raw video, recording
 
 **Timeline**:
-Every interaction observed during Capture (pointer path, clicks, typing, focus targets, where each Line was said), timed from the start of Capture and positioned in CSS pixels.
+Every interaction observed during Capture (pointer path, presses and releases, the cursor shape the page asked for, typing, focus targets, where each Line was said), timed from the start of Capture and positioned in CSS pixels.
 _Avoid_: event log, camera events
 
 **Auth profile**:
@@ -43,6 +43,10 @@ _Avoid_: camera edit, render config, project settings
 **Background**:
 What fills the Final around the window: a list of image and shader layers, each drawn over the one before. It stays still while the camera moves the window over it.
 _Avoid_: backdrop, wallpaper, gradient
+
+**Cursor**:
+The pointer Render draws over the page, following the Timeline's pointer path, in the shape the page showed at each moment, pressed while a button is held.
+_Avoid_: mouse, pointer sprite
 
 **Look**:
 A named, reusable set of the Edit choices that do not depend on one Take (frame styling, cursor, click effects, Subtitle styling, output size and quality, camera behavior), with the files they name, that a new or existing Take can adopt. A Look is saved locally, for the directory CueTake runs in, or globally, for every directory; a local Look hides a global one with the same name.
