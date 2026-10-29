@@ -8,6 +8,7 @@ export const config = {
   url: 'http://localhost:3000/editor',
   viewport: { width: 1440, height: 900 },
   capture: { fps: 60, resolutionScale: 2 },
+  director: { speed: 1, seed: 1 },
   // Styling seeds the first Edit; see styling.md. File paths are relative to this file.
   output: { width: 3840, height: 2160, quality: 22 },
   frame: { padding: 0.08, chrome: { draw: 'browser' }, background: [{ shader: 'fluted' }] },
@@ -37,7 +38,7 @@ export async function run(d) {
 }
 ```
 
-Only `name` and `url` are required in config. Other fields use the shown defaults. Capture FPS accepts 30 or 60. Resolution scale accepts 1 or 2. Widths and heights must be even. Page audio is not captured; a voiced Narration is added with `record --narration` ([narration.md](narration.md)).
+Only `name` and `url` are required in config. Other fields use the shown defaults. `director.speed` scales how fast the Director moves, pauses and types (`1.25` is a quarter faster); `director.seed` picks another, equally human way to move. Capture FPS accepts 30 or 60. Resolution scale accepts 1 or 2. Widths and heights must be even. Page audio is not captured; a voiced Narration is added with `record --narration` ([narration.md](narration.md)).
 
 ## Director
 
@@ -46,13 +47,15 @@ Only `name` and `url` are required in config. Other fields use the shown default
 | `page` | The isolated Playwright page; use its locators and assertions. |
 | `at(seconds)` | Wait until a time relative to the capture start. Past times return immediately. |
 | `wait(ms)` | Hold the current state. |
-| `move(x, y, durationMs=500)` | Move along a smooth path using viewport CSS coordinates. |
-| `click(locator, { duration=450, focus })` | Move to a visible locator and click. A CSS selector also works. |
-| `type(locator, text, { msPerChar=70, focus })` | Click a field, then type with a visible per-character delay. |
-| `drag({x,y}, {x,y}, { duration=1200, focus })` | Move to the start, press, move, then release. |
+| `move(x, y, durationMs?)` | Move along a slight arc using viewport CSS coordinates. `0` jumps there. |
+| `click(locator, { duration, focus })` | Move to a visible locator, pause, click near its center, pause. A CSS selector also works. |
+| `type(locator, text, { msPerChar=70, focus })` | Click a field, then type with uneven per-character delays averaging `msPerChar`, longer after a word. |
+| `drag({x,y}, {x,y}, { duration, focus })` | Move to the start, press, move more slowly than an empty-handed move, then release. |
 | `focus({x,y,width,height}, seconds?)` | Add a camera target; defaults to the current time. |
 | `say(id, text?)` | Start a Narration Line. With `--narration` it waits until the Line's audio ends; without, `text` is required and it does not wait. See [narration.md](narration.md). |
 | `time()` | Seconds elapsed since capture started. |
+
+The Director moves like a person. A move takes longer the farther and smaller its target is (Fitts's law), starts quickly and settles slowly, and never passes about 2000 CSS px/s; it pauses briefly before pressing and after releasing. A `duration` fixes one move's length in ms and `msPerChar` one field's typing pace; the arc, pauses and uneven typing stay. The same Scenario and `seed` move the same way on every recording. Changing any of this needs a new recording.
 
 `move` starts from (0,0). If preparation positioned the cursor elsewhere, initialize it with `await d.move(x, y, 0)` at the start of `run`.
 

@@ -22,6 +22,7 @@ export const scenarioSchema = z.object({
   url: z.string().url().refine(s => /^https?:/.test(s), 'Capture requires HTTP(S)'),
   viewport: z.object({ width: evenSize, height: evenSize }).default({ width: 1440, height: 900 }),
   capture: z.object({ fps: z.union([z.literal(30), z.literal(60)]).default(60), resolutionScale: z.union([z.literal(1), z.literal(2)]).default(2) }).default({}),
+  director: z.object({ speed: z.number().positive().default(1), seed: z.number().int().default(1) }).strict().default({}),
 }).passthrough();
 /**
  * A Narration file: Lines in one language, each with its text, its audio (relative to the file) and
@@ -116,7 +117,7 @@ export async function recordScenario(scenarioPath, outputDir, options = {}) {
     const capture = await beginCapture(session.sessionId);
     const startedAtMs = Date.parse(capture.startedAt);
     const focus = [], wide = [], said = [];
-    const director = createDirector(page, startedAtMs, config.capture.fps, focus, wide, said, imported && new Map(Object.entries(imported.durations)));
+    const director = createDirector(page, startedAtMs, config.capture.fps, focus, wide, said, imported && new Map(Object.entries(imported.durations)), config.director);
     const evidence = await scenario.run(director);
     await page.screenshot({ path: join(dir, 'poster.png') });
     const observed = await collectTimeline(page, startedAtMs);

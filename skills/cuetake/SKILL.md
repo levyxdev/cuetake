@@ -15,7 +15,7 @@ CueTake is a local execution engine for AI agents. You direct the story; CueTake
 4. Run `record` with the scenario path and a new Take directory. It captures, renders and verifies in the foreground, then prints the verification report; a failure exits non-zero. Capture lasts as long as the scenario and Render adds its own time, so run it in the background when your shell would time out.
 5. Read verification and application evidence. Inspect frames around clicks and camera transitions with `frame <take> <seconds>`, which saves a PNG you can view, and play the final MP4. Deliver the absolute final path and relevant limitations. Technical verification is not editorial approval or authorization to publish.
 
-Run `render` after changing a take's `edit.json`. This reuses source.webm. Cursor, click effect, camera and output all live in the Edit, so restyling never requires recording again. Preserve versions by copying a take before editing it.
+Run `render` after changing a take's `edit.json`. This reuses source.webm. Cursor, click effect, camera and output all live in the Edit, so restyling never requires recording again. How the cursor moves is decided at Capture: when the user finds it too fast, too slow or wants it to feel different, change `director.speed` or `director.seed` in the Scenario config and record again ([scenarios.md](scenarios.md)). Preserve versions by copying a take before editing it.
 
 ## Styling with the user
 

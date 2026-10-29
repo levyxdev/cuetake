@@ -5,6 +5,7 @@ import { scenarioSchema, summarizeFrames, narrationSchema } from '../src/pipelin
 import { fitZoom, cropAround, zoomSegments, cameraTrack } from '../src/camera.js';
 import { cameraTargets, createEdit, DEFAULT_STYLE, withDefaults } from '../src/edit.js';
 import { pointerAt, presses, sparksAt } from '../src/cursor.js';
+import { random, reachMs, reach, landing, typingDelays } from '../src/motion.js';
 import { atShortSide, layout, cameraView, brandHue, brandColor, previewSheet } from '../src/stage.js';
 import { lookFromEdit, applyLook, mergeLook, summarize, saveLook, loadLook, listLooks, removeLook, resolvedLook } from '../src/look.js';
 import { bundle, codeRefs, forRender, BUILTIN_DIR } from '../src/styles.js';
@@ -19,6 +20,9 @@ test('validates capture settings but passes styling through untouched', () => {
   expect(scenarioSchema.safeParse({ ...base, capture: { fps: 45 } }).success).toBe(false);
   expect(scenarioSchema.safeParse({ ...base, viewport: { width: 1441, height: 900 } }).success).toBe(false);
   expect(scenarioSchema.parse(base).capture.fps).toBe(60);
+  expect(scenarioSchema.parse(base).director).toEqual({ speed: 1, seed: 1 });
+  expect(scenarioSchema.safeParse({ ...base, director: { speed: 0 } }).success).toBe(false);
+  expect(scenarioSchema.safeParse({ ...base, director: { pace: 2 } }).success).toBe(false);
   const styling = { output: { width: 1234, height: 4 }, frame: { glow: 'anything' } };
   expect(scenarioSchema.parse({ ...base, ...styling })).toMatchObject(styling);
 });
@@ -120,6 +124,70 @@ test('clicks and drag starts spark for the click effect duration', () => {
   expect(sparksAt(list, effect, 1.2)).toEqual([{ x: 5, y: 6, progress: expect.closeTo(0.5, 6) }]);
   expect(sparksAt(list, effect, 1.5)).toEqual([]);
   expect(sparksAt(list, false, 1.2)).toEqual([]);
+});
+
+/** A move sampled the way the Director plays it: one point per frame at 60 fps. */
+function sampled(from, to, opts) {
+  const path = reach(from, to, { rand: random(1), ...opts }), frames = Math.max(1, Math.round(path.duration * 60 / 1000));
+  const points = Array.from({ length: frames + 1 }, (_, i) => path.at(i / frames));
+  const speeds = points.slice(1).map((p, i) => Math.hypot(p.x - points[i].x, p.y - points[i].y) * 60);
+  return { duration: path.duration, points, speeds, peak: Math.max(...speeds) };
+}
+
+test('moves take longer the farther and smaller the target, slower while dragging, scaled by speed', () => {
+  expect(reachMs(0)).toBe(0);
+  expect(reachMs(100, 40)).toBeLessThan(reachMs(400, 40));
+  expect(reachMs(400, 40)).toBeLessThan(reachMs(400, 10));
+  expect(reachMs(400, 40, { drag: true })).toBeGreaterThan(reachMs(400, 40));
+  expect(reachMs(400, 40, { speed: 2 })).toBeCloseTo(reachMs(400, 40) / 2);
+  for (const [distance, size] of [[60, 80], [300, 32], [1058, 32], [1600, 24]]) {
+    const ms = reachMs(distance, size);
+    expect(ms).toBeGreaterThan(250);
+    expect(ms).toBeLessThan(1600);
+  }
+});
+
+test('a move peaks at a human speed early, settles long into its target and arcs slightly', () => {
+  const from = { x: 100, y: 800 }, to = { x: 1158, y: 800 };
+  const move = sampled(from, to, { size: 32 });
+  expect(move.peak).toBeLessThan(2000);
+  expect(move.peak).toBeGreaterThan(1000);
+  const peakAt = move.speeds.indexOf(move.peak) / move.speeds.length;
+  expect(peakAt).toBeGreaterThan(0.2);
+  expect(peakAt).toBeLessThan(0.45);
+  expect(move.points.at(-1)).toEqual(to);
+  const sideways = Math.max(...move.points.map(p => Math.abs(p.y - 800)));
+  expect(sideways).toBeGreaterThan(10);
+  expect(sideways).toBeLessThanOrEqual(80);
+  const across = sampled({ x: 0, y: 0 }, { x: 1440, y: 900 }, { size: 24 });
+  expect(across.peak).toBeLessThan(2000);
+  expect(sampled(from, to, { size: 32, duration: 450 }).duration).toBe(450);
+});
+
+test('the same seed moves the same way; another seed moves differently', () => {
+  const run = seed => { const rand = random(seed); return [reach({ x: 0, y: 0 }, { x: 500, y: 300 }, { rand }).at(0.5), landing({ x: 0, y: 0, width: 100, height: 40 }, rand), typingDelays('hello', 70, rand)]; };
+  expect(run(1)).toEqual(run(1));
+  expect(run(2)).not.toEqual(run(1));
+});
+
+test('a click lands near the center of its box but never outside it', () => {
+  const rand = random(3), box = { x: 10, y: 20, width: 100, height: 30 };
+  const points = Array.from({ length: 200 }, () => landing(box, rand));
+  for (const p of points) {
+    expect(Math.abs(p.x - 60)).toBeLessThanOrEqual(15);
+    expect(Math.abs(p.y - 35)).toBeLessThanOrEqual(4.5);
+  }
+  expect(points.some(p => p.x !== 60)).toBe(true);
+});
+
+test('typing is uneven, pauses longer after a word, and keeps its average pace', () => {
+  const text = 'ada lovelace wrote the first program', delays = typingDelays(text, 70, random(1));
+  expect(delays).toHaveLength(text.length);
+  expect(delays.reduce((sum, d) => sum + d, 0) / delays.length).toBeCloseTo(70);
+  expect(new Set(delays.map(Math.round)).size).toBeGreaterThan(5);
+  const mean = list => list.reduce((sum, d) => sum + d, 0) / list.length;
+  const afterSpace = delays.filter((_, i) => text[i] === ' '), others = delays.filter((_, i) => text[i] !== ' ');
+  expect(mean(afterSpace)).toBeGreaterThan(mean(others));
 });
 
 test('the skill launcher pins the version being released', () => {
