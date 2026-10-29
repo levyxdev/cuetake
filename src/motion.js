@@ -5,12 +5,12 @@
  */
 
 const REACH_MS = 250, REACH_MS_PER_BIT = 150; // Fitts's law: REACH_MS + REACH_MS_PER_BIT * log2(distance / size + 1)
-const MAX_AVERAGE_SPEED = 1100; // CSS px/s; with the ease's 1.8× peak, a move never passes about 2000 px/s
+const MAX_AVERAGE_SPEED = 1100; // CSS px/s; with the ease's 1.8× peak, a move at speed 1 stays under about 2000 px/s
 const DRAG_SLOWDOWN = 1.5; // a held button makes people slower
 const POINT_SIZE = 24; // target size for moves to a bare point
 const BEND = 0.1, MAX_BEND = 80; // the arc's sideways offset, as a share of the distance and in CSS px
-const LANDING = 0.15; // a click lands this share of its box's size away from the center, at most
-export const PAUSES = { beforePress: 120, afterRelease: 150, afterGrab: 100, beforeDrop: 100 };
+const LANDING = 0.15, MAX_LANDING = 8; // a click lands at most this share of its box's size, and CSS px, from the center
+const PAUSES = { beforePress: 120, afterRelease: 150, afterGrab: 100, beforeDrop: 100 };
 const PAUSE_JITTER = 0.25, TYPING_JITTER = 0.4, WORD_BREAK = 1.5;
 
 /** A deterministic source of numbers in [0, 1) (mulberry32). */
@@ -32,7 +32,7 @@ export function reachMs(distance, size = POINT_SIZE, { speed = 1, drag = false }
 }
 
 /** Progress along a move at time share `t`: minimum-jerk, warped so it peaks early and settles long. */
-export const ease = t => { const u = t ** 0.75; return u * u * u * (10 - 15 * u + 6 * u * u); };
+const ease = t => { const u = t ** 0.75; return u * u * u * (10 - 15 * u + 6 * u * u); };
 
 /** A move from `from` to `to`: its duration and its point at time share `t`, along a slight arc. */
 export function reach(from, to, { size, duration, speed, drag, rand }) {
@@ -48,9 +48,9 @@ export function reach(from, to, { size, duration, speed, drag, rand }) {
   };
 }
 
-/** Where a click lands: near the center of its box, never at the exact center, always inside. */
+/** Where a click lands: a little off the center of its box, never more than a few pixels. */
 export function landing(box, rand) {
-  const off = size => (rand() * 2 - 1) * LANDING * size;
+  const off = size => (rand() * 2 - 1) * Math.min(LANDING * size, MAX_LANDING);
   return { x: box.x + box.width / 2 + off(box.width), y: box.y + box.height / 2 + off(box.height) };
 }
 
