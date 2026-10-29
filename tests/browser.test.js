@@ -166,9 +166,9 @@ test('Render draws the built-in cursor at the pointer and a spark around each cl
     await fs.writeFile(sourcePath, await syntheticSource(browser, 0.6));
     const timeline = { viewport: { width: 320, height: 240 }, duration: 1, pointer: [[0, 60, 60], [1, 60, 60]], events: [{ type: 'click', t: 0.2, x: 200, y: 60 }] };
     await renderFinal({ sourcePath, finalPath: outputPath, timeline, ...forRender(bare({ clickEffect: { draw: 'spark' } }), dir) });
-    // A spark ray sits ~26 px from the click along 22.5° at t=0.3; the arrow body lies just below-right of the tip.
+    // A spark ray sits ~26 px from the click along 22.5° at t=0.3; the arrow's body lies along the diagonal below-right of its tip.
     const ray = [Math.round(200 + 26 * Math.cos(Math.PI / 8)), Math.round(60 + 26 * Math.sin(Math.PI / 8))];
-    const [arrow, spark, clear] = await pixelsAt(browser, await extractFrame(outputPath, 0.3), [[64, 72], ray, [120, 200]]);
+    const [arrow, spark, clear] = await pixelsAt(browser, await extractFrame(outputPath, 0.3), [[67, 67], ray, [120, 200]]);
     expect(Math.min(...arrow)).toBeGreaterThan(180);
     expect(Math.min(...spark)).toBeGreaterThan(110);
     expect(Math.max(...clear)).toBeLessThan(40);
@@ -190,7 +190,7 @@ test('Render draws the Cursor in the shape the page asked for, pressed while hel
     await renderFinal({ sourcePath, finalPath: outputPath, timeline, ...forRender(bare({ cursor: { hideAfter: 1 } }), dir) });
     const frame = async (t, points) => (await pixelsAt(browser, await extractFrame(outputPath, t), points)).map(rgb => Math.min(...rgb));
     // The arrow's body is right of its tip; the hand's thumb is left of the fingertip, and its palm reaches lower.
-    const arrow = [64, 72], thumb = [56, 73], palm = [68, 80];
+    const arrow = [67, 67], thumb = [54, 74], palm = [64, 82];
     const [arrowBody, noThumb] = await frame(0.1, [arrow, thumb]);
     expect(arrowBody).toBeGreaterThan(180);
     expect(noThumb).toBeLessThan(60);

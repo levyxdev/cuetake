@@ -1,89 +1,102 @@
 // The arrow cursor and its family of shapes: filled with `color`, outlined in dark gray, with a soft shadow.
-// Each shape is drawn in its own box, in units where the 28×36 arrow has its tip at (2, 2); CueTake scales
-// the arrow's box to the cursor's size and the other shapes with it.
-export const shapes = {
-  default: { width: 28, height: 36, hotspot: [2, 2] },
-  pointer: { width: 26, height: 29, hotspot: [9.5, 2] },
-  text: { width: 10, height: 22, hotspot: [5, 11] },
-  crosshair: { width: 22, height: 22, hotspot: [11, 11] },
-  grab: { width: 26, height: 28, hotspot: [13, 15] },
-  grabbing: { width: 26, height: 27, hotspot: [13, 15] },
-  move: { width: 24, height: 24, hotspot: [12, 12] },
-  'not-allowed': { width: 22, height: 22, hotspot: [11, 11] },
-  'ew-resize': { width: 24, height: 24, hotspot: [12, 12] },
-  'ns-resize': { width: 24, height: 24, hotspot: [12, 12] },
-  'nwse-resize': { width: 24, height: 24, hotspot: [12, 12] },
-  'nesw-resize': { width: 24, height: 24, hotspot: [12, 12] },
-  wait: { width: 22, height: 22, hotspot: [11, 11] },
-  progress: { width: 34, height: 36, hotspot: [2, 2] },
+// The pictures are Phosphor icons (https://phosphoricons.com), drawn in their 256-unit grid; each shape's box
+// is the part of the grid it covers. CueTake scales the arrow's box to the cursor's size and the others with it.
+//
+// Phosphor Icons: Copyright (c) 2023 Phosphor Icons. Permission is hereby granted, free of charge, to any person
+// obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software
+// without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute,
+// sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so,
+// subject to the following conditions: The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE
+// AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+// SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+// Where each shape sits in the grid, as [x, y, width, height], and its hotspot in grid units.
+const GRID = {
+  default: [[28, 28, 200, 200], [37, 37]],
+  pointer: [[24, 10, 206, 236], [116, 18]],
+  text: [[56, 24, 144, 208], [128, 128]],
+  crosshair: [[22, 22, 212, 212], [128, 128]],
+  grab: [[16, 10, 206, 236], [128, 140]],
+  grabbing: [[36, 58, 186, 188], [128, 150]],
+  move: [[6, 6, 244, 244], [128, 128]],
+  'not-allowed': [[18, 18, 220, 220], [128, 128]],
+  'ew-resize': [[6, 84, 244, 88], [128, 128]],
+  'ns-resize': [[84, 6, 88, 244], [128, 128]],
+  'nwse-resize': [[30, 30, 196, 196], [128, 128]],
+  'nesw-resize': [[30, 30, 196, 196], [128, 128]],
+  wait: [[34, 26, 188, 204], [128, 128]],
+  progress: [[6, 28, 222, 220], [37, 37]],
 };
+export const shapes = Object.fromEntries(Object.entries(GRID).map(([name, [[x, y, width, height], [hx, hy]]]) =>
+  [name, { width, height, hotspot: [hx - x, hy - y] }]));
 
 const OUTLINE = '#171717';
-const ARROW = new Path2D('M2 2 L2 27 L8.5 21 L14 33 L19 30.5 L13.5 19 L23 19 Z');
-const rounded = (x, y, w, h, r) => { const p = new Path2D(); p.roundRect(x, y, w, h, r); return p; };
-const polygon = (...points) => new Path2D(`M${points.map(p => p.join(' ')).join(' L')} Z`);
-const ellipse = (x, y, rx, ry, angle) => { const p = new Path2D(); p.ellipse(x, y, rx, ry, angle, 0, 2 * Math.PI); return p; };
-const bar = (x, y, w, h) => { const p = new Path2D(); p.rect(x, y, w, h); return p; };
-// Solid shapes as overlapping parts; fingers sit a hair apart, so their outlines meet in a dark line between them.
-const SOLIDS = {
-  pointer: [rounded(7, 1.5, 5, 15.5, 2.5), rounded(12.3, 9, 4.2, 9, 2.1), rounded(16.8, 10, 4, 8.5, 2), rounded(21.1, 11.5, 3.6, 7.5, 1.8),
-    rounded(8, 14, 16.7, 13, [2, 3, 6, 6]), ellipse(5.2, 17.5, 2.4, 4.8, -0.6)],
-  grab: [rounded(6, 4.5, 3.9, 12, 1.95), rounded(10.3, 2.5, 4, 13, 2), rounded(14.7, 3.5, 3.9, 12, 1.95), rounded(19, 6.5, 3.6, 10, 1.8),
-    rounded(6, 12, 16.6, 14, [3, 3, 6, 6]), ellipse(4.2, 16.5, 2.3, 5, -0.7)],
-  grabbing: [rounded(6.5, 8.5, 3.9, 7, 1.95), rounded(10.8, 7.5, 4, 7, 2), rounded(15.2, 8, 3.9, 7, 1.95), rounded(19.5, 9.5, 3.6, 6, 1.8),
-    rounded(6, 11, 16.8, 14, [3, 3, 6, 6]), ellipse(5, 16.5, 2.3, 4.3, -0.4)],
-  move: [bar(10.8, 4, 2.4, 16), bar(4, 10.8, 16, 2.4), polygon([12, 0.5], [15.6, 5], [8.4, 5]), polygon([12, 23.5], [8.4, 19], [15.6, 19]),
-    polygon([0.5, 12], [5, 8.4], [5, 15.6]), polygon([23.5, 12], [19, 15.6], [19, 8.4])],
+const path = d => new Path2D(d);
+// Outlined pictures: the duotone weight's area, filled, under the regular weight's lines.
+const FRAMED = {
+  default: [
+    path('M213.66,201,201,213.66a8,8,0,0,1-11.31,0l-51.31-51.31a8,8,0,0,0-13,2.46l-17.82,46.41a8,8,0,0,1-14.85-.71L40.41,50.44a8,8,0,0,1,10-10L210.51,92.68a8,8,0,0,1,.71,14.85l-46.41,17.82a8,8,0,0,0-2.46,13l51.31,51.31A8,8,0,0,1,213.66,201Z'),
+    path('M168,132.69,214.08,115l.33-.13A16,16,0,0,0,213,85.07L52.92,32.8A15.95,15.95,0,0,0,32.8,52.92L85.07,213a15.82,15.82,0,0,0,14.41,11l.78,0a15.84,15.84,0,0,0,14.61-9.59l.13-.33L132.69,168,184,219.31a16,16,0,0,0,22.63,0l12.68-12.68a16,16,0,0,0,0-22.63ZM195.31,208,144,156.69a16,16,0,0,0-26,4.93c0,.11-.09.22-.13.32l-17.65,46L48,48l159.85,52.2-45.95,17.64-.32.13a16,16,0,0,0-4.93,26h0L208,195.31Z'),
+  ],
+  pointer: [
+    path('M216,116v36a80,80,0,0,1-80,80c-44.18,0-55.81-24-93.32-90a20,20,0,0,1,34.64-20L96,152V44a20,20,0,0,1,40,0v56a20,20,0,0,1,40,0v16a20,20,0,0,1,40,0Z'),
+    path('M196,88a27.86,27.86,0,0,0-13.35,3.39A28,28,0,0,0,144,74.7V44a28,28,0,0,0-56,0v80l-3.82-6.13A28,28,0,0,0,35.73,146l4.67,8.23C74.81,214.89,89.05,240,136,240a88.1,88.1,0,0,0,88-88V116A28,28,0,0,0,196,88Zm12,64a72.08,72.08,0,0,1-72,72c-37.63,0-47.84-18-81.68-77.68l-4.69-8.27,0-.05A12,12,0,0,1,54,121.61a11.88,11.88,0,0,1,6-1.6,12,12,0,0,1,10.41,6,1.76,1.76,0,0,0,.14.23l18.67,30A8,8,0,0,0,104,152V44a12,12,0,0,1,24,0v68a8,8,0,0,0,16,0V100a12,12,0,0,1,24,0v20a8,8,0,0,0,16,0v-4a12,12,0,0,1,24,0Z'),
+  ],
+  grab: [
+    path('M208,76v76a80,80,0,0,1-80,80c-44.18,0-60.75-21.28-93.32-90a20,20,0,0,1,34.64-20L88,152V60a20,20,0,0,1,40,0V44a20,20,0,0,1,40,0V76a20,20,0,0,1,40,0Z'),
+    path('M188,48a27.75,27.75,0,0,0-12,2.71V44a28,28,0,0,0-54.65-8.6A28,28,0,0,0,80,60v64l-3.82-6.13a28,28,0,0,0-48.6,27.82c16,33.77,28.93,57.72,43.72,72.69C86.24,233.54,103.2,240,128,240a88.1,88.1,0,0,0,88-88V76A28,28,0,0,0,188,48Zm12,104a72.08,72.08,0,0,1-72,72c-20.38,0-33.51-4.88-45.33-16.85C69.44,193.74,57.26,171,41.9,138.58a6.36,6.36,0,0,0-.3-.58,12,12,0,0,1,20.79-12,1.76,1.76,0,0,0,.14.23l18.67,30A8,8,0,0,0,96,152V60a12,12,0,0,1,24,0v60a8,8,0,0,0,16,0V44a12,12,0,0,1,24,0v76a8,8,0,0,0,16,0V76a12,12,0,0,1,24,0Z'),
+  ],
+  grabbing: [
+    path('M208,108v44a80,80,0,0,1-160,0V140a20,20,0,0,1,20-20H88V92a20,20,0,0,1,40,0,20,20,0,0,1,40,0v16a20,20,0,0,1,40,0Z'),
+    path('M188,80a27.79,27.79,0,0,0-13.36,3.4,28,28,0,0,0-46.64-11A28,28,0,0,0,80,92v20H68a28,28,0,0,0-28,28v12a88,88,0,0,0,176,0V108A28,28,0,0,0,188,80Zm12,72a72,72,0,0,1-144,0V140a12,12,0,0,1,12-12H80v24a8,8,0,0,0,16,0V92a12,12,0,0,1,24,0v28a8,8,0,0,0,16,0V92a12,12,0,0,1,24,0v28a8,8,0,0,0,16,0V108a12,12,0,0,1,24,0Z'),
+  ],
+  'not-allowed': [
+    path('M224,128a96,96,0,1,1-96-96A96,96,0,0,1,224,128Z'),
+    path('M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm88,104a87.56,87.56,0,0,1-20.41,56.28L71.72,60.4A88,88,0,0,1,216,128ZM40,128A87.56,87.56,0,0,1,60.41,71.72L184.28,195.6A88,88,0,0,1,40,128Z'),
+  ],
+  wait: [
+    path('M205.64,53.66,128,128,50.36,53.66A8,8,0,0,1,56,40H200A8,8,0,0,1,205.64,53.66ZM128,128,50.36,202.34A8,8,0,0,0,56,216H200a8,8,0,0,0,5.66-13.66Z'),
+    path('M211.18,196.56,139.57,128l71.61-68.56a1.59,1.59,0,0,1,.13-.13A16,16,0,0,0,200,32H56A16,16,0,0,0,44.69,59.31a1.59,1.59,0,0,1,.13.13L116.43,128,44.82,196.56a1.59,1.59,0,0,1-.13.13A16,16,0,0,0,56,224H200a16,16,0,0,0,11.32-27.31A1.59,1.59,0,0,1,211.18,196.56ZM56,48h0v0Zm144,0-72,68.92L56,48ZM56,208l72-68.92L200,208Z'),
+  ],
+};
+// Line pictures, filled and ringed with the outline: the I-beam and cross from the regular weight, arrows from the fill weight.
+const RINGED = {
+  text: path('M184,208a8,8,0,0,1-8,8H160a40,40,0,0,1-32-16,40,40,0,0,1-32,16H80a8,8,0,0,1,0-16H96a24,24,0,0,0,24-24V136H104a8,8,0,0,1,0-16h16V80A24,24,0,0,0,96,56H80a8,8,0,0,1,0-16H96a40,40,0,0,1,32,16,40,40,0,0,1,32-16h16a8,8,0,0,1,0,16H160a24,24,0,0,0-24,24v40h16a8,8,0,0,1,0,16H136v40a24,24,0,0,0,24,24h16A8,8,0,0,1,184,208Z'),
+  crosshair: path('M224,128a8,8,0,0,1-8,8H136v80a8,8,0,0,1-16,0V136H40a8,8,0,0,1,0-16h80V40a8,8,0,0,1,16,0v80h80A8,8,0,0,1,224,128Z'),
+  move: path('M96,136H64v24a8,8,0,0,1-13.66,5.66l-32-32a8,8,0,0,1,0-11.32l32-32A8,8,0,0,1,64,96v24H96a8,8,0,0,1,0,16Zm0-72h24V96a8,8,0,0,0,16,0V64h24a8,8,0,0,0,5.66-13.66l-32-32a8,8,0,0,0-11.32,0l-32,32A8,8,0,0,0,96,64Zm141.66,58.34-32-32A8,8,0,0,0,192,96v24H160a8,8,0,0,0,0,16h32v24a8,8,0,0,0,13.66,5.66l32-32A8,8,0,0,0,237.66,122.34ZM160,192H136V160a8,8,0,0,0-16,0v32H96a8,8,0,0,0-5.66,13.66l32,32a8,8,0,0,0,11.32,0l32-32A8,8,0,0,0,160,192Z'),
 };
 // The resize shapes are one double arrow, turned by degrees.
-const DOUBLE_ARROW = [bar(5, 10.8, 14, 2.4), polygon([0.5, 12], [6, 6.5], [6, 17.5]), polygon([23.5, 12], [18, 17.5], [18, 6.5])];
+const DOUBLE_ARROW = path('M237.66,133.66l-32,32A8,8,0,0,1,192,160V136H64v24a8,8,0,0,1-13.66,5.66l-32-32a8,8,0,0,1,0-11.32l32-32A8,8,0,0,1,64,96v24H192V96a8,8,0,0,1,13.66-5.66l32,32A8,8,0,0,1,237.66,133.66Z');
 const RESIZE = { 'ew-resize': 0, 'ns-resize': 90, 'nwse-resize': 45, 'nesw-resize': -45 };
-const I_BEAM = new Path2D('M2 2 Q5 2 5 5 V17 Q5 20 2 20 M8 2 Q5 2 5 5 M5 17 Q5 20 8 20');
-const CROSS = new Path2D('M11 1 V21 M1 11 H21');
 
 /** Paints `under` with a soft shadow, then `over` without; shadow sizes are device pixels, so they follow the box's scale on screen. */
-function outlined(ctx, under, over) {
-  const { a, b } = ctx.getTransform(), pixels = Math.hypot(a, b);
+function shadowed(ctx, under, over) {
+  const { a, b } = ctx.getTransform(), pixels = Math.hypot(a, b) * 8; // about one CSS pixel at the default size
   ctx.save();
-  ctx.lineJoin = 'round'; ctx.lineCap = 'round'; ctx.strokeStyle = OUTLINE;
+  ctx.lineJoin = 'round'; ctx.strokeStyle = OUTLINE;
   ctx.shadowColor = '#00000055'; ctx.shadowBlur = 2 * pixels; ctx.shadowOffsetY = pixels;
   under();
   ctx.shadowColor = 'transparent';
   over();
   ctx.restore();
 }
-/** A solid shape made of overlapping parts, outlined around the whole. */
-function solid(ctx, parts, color) {
-  outlined(ctx, () => { ctx.lineWidth = 3.4; parts.forEach(p => ctx.stroke(p)); }, () => { ctx.fillStyle = color; parts.forEach(p => ctx.fill(p)); });
-}
-/** A drawn line: a thin stroke in `color` inside a wider dark one. */
-function line(ctx, path, color, width = 1.6) {
-  outlined(ctx, () => { ctx.lineWidth = width + 2; ctx.stroke(path); }, () => { ctx.lineWidth = width; ctx.strokeStyle = color; ctx.stroke(path); });
-}
-function arrow(ctx, color) {
-  outlined(ctx, () => { ctx.fillStyle = color; ctx.fill(ARROW); }, () => { ctx.lineWidth = 1.7; ctx.stroke(ARROW); });
-}
-function ring(ctx, x, y, r, color) {
-  const whole = new Path2D(), arc = new Path2D();
-  whole.arc(x, y, r, 0, 2 * Math.PI); arc.arc(x, y, r, -Math.PI / 2, Math.PI);
-  outlined(ctx, () => { ctx.lineWidth = 5; ctx.stroke(whole); }, () => { ctx.lineWidth = 2.4; ctx.strokeStyle = color; ctx.stroke(arc); });
-}
+const framed = (ctx, [area, lines], color) => shadowed(ctx, () => { ctx.fillStyle = color; ctx.fill(area); }, () => { ctx.fillStyle = OUTLINE; ctx.fill(lines); });
+const ringed = (ctx, lines, color) => shadowed(ctx, () => { ctx.lineWidth = 20; ctx.stroke(lines); }, () => { ctx.fillStyle = color; ctx.fill(lines); });
 
 export function draw(ctx, { shape, params }) {
-  const color = params.color ?? '#ffffff';
-  if (shape in SOLIDS) return solid(ctx, SOLIDS[shape], color);
+  const color = params.color ?? '#ffffff', [[x, y]] = GRID[shape];
+  ctx.translate(-x, -y);
+  if (shape in FRAMED) return framed(ctx, FRAMED[shape], color);
+  if (shape in RINGED) return ringed(ctx, RINGED[shape], color);
   if (shape in RESIZE) {
-    ctx.translate(12, 12); ctx.rotate(RESIZE[shape] * Math.PI / 180); ctx.translate(-12, -12);
-    return solid(ctx, DOUBLE_ARROW, color);
+    ctx.translate(128, 128); ctx.rotate(RESIZE[shape] * Math.PI / 180); ctx.translate(-128, -128);
+    return ringed(ctx, DOUBLE_ARROW, color);
   }
-  if (shape === 'text') return line(ctx, I_BEAM, color);
-  if (shape === 'crosshair') return line(ctx, CROSS, color);
-  if (shape === 'not-allowed') {
-    const sign = new Path2D();
-    sign.arc(11, 11, 8, 0, 2 * Math.PI); sign.moveTo(5.4, 5.4); sign.lineTo(16.6, 16.6);
-    return line(ctx, sign, color, 2.4);
-  }
-  if (shape === 'wait') return ring(ctx, 11, 11, 8, color);
-  arrow(ctx, color);
-  if (shape === 'progress') ring(ctx, 26, 28, 5, color);
+  // progress: the arrow with a small hourglass below its left side.
+  framed(ctx, FRAMED.default, color);
+  ctx.translate(6, 140); ctx.scale(0.46, 0.46);
+  framed(ctx, FRAMED.wait, color);
 }
