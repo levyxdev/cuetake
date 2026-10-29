@@ -170,14 +170,14 @@ test('the same seed moves the same way; another seed moves differently', () => {
   expect(run(2)).not.toEqual(run(1));
 });
 
-test('a click lands near the center of its box but never outside it', () => {
-  const rand = random(3), box = { x: 10, y: 20, width: 100, height: 30 };
+test('a click lands a little off the center of its box, at most 8 px however large the box', () => {
+  const rand = random(3), box = { x: 10, y: 20, width: 1000, height: 30 };
   const points = Array.from({ length: 200 }, () => landing(box, rand));
   for (const p of points) {
-    expect(Math.abs(p.x - 60)).toBeLessThanOrEqual(15);
+    expect(Math.abs(p.x - 510)).toBeLessThanOrEqual(8);
     expect(Math.abs(p.y - 35)).toBeLessThanOrEqual(4.5);
   }
-  expect(points.some(p => p.x !== 60)).toBe(true);
+  expect(points.some(p => p.x !== 510)).toBe(true);
 });
 
 test('typing is uneven, pauses longer after a word, and keeps its average pace', () => {
