@@ -27,8 +27,8 @@ const GRID = {
   'ns-resize': [[84, 6, 88, 244], [128, 128]],
   'nwse-resize': [[30, 30, 196, 196], [128, 128]],
   'nesw-resize': [[30, 30, 196, 196], [128, 128]],
-  wait: [[34, 26, 188, 204], [128, 128]],
-  progress: [[6, 28, 222, 220], [37, 37]],
+  wait: [[26, 26, 204, 204], [128, 128]],
+  progress: [[28, 28, 236, 200], [37, 37]],
 };
 export const shapes = Object.fromEntries(Object.entries(GRID).map(([name, [[x, y, width, height], [hx, hy]]]) =>
   [name, { width, height, hotspot: [hx - x, hy - y] }]));
@@ -57,10 +57,6 @@ const FRAMED = {
     path('M224,128a96,96,0,1,1-96-96A96,96,0,0,1,224,128Z'),
     path('M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm88,104a87.56,87.56,0,0,1-20.41,56.28L71.72,60.4A88,88,0,0,1,216,128ZM40,128A87.56,87.56,0,0,1,60.41,71.72L184.28,195.6A88,88,0,0,1,40,128Z'),
   ],
-  wait: [
-    path('M205.64,53.66,128,128,50.36,53.66A8,8,0,0,1,56,40H200A8,8,0,0,1,205.64,53.66ZM128,128,50.36,202.34A8,8,0,0,0,56,216H200a8,8,0,0,0,5.66-13.66Z'),
-    path('M211.18,196.56,139.57,128l71.61-68.56a1.59,1.59,0,0,1,.13-.13A16,16,0,0,0,200,32H56A16,16,0,0,0,44.69,59.31a1.59,1.59,0,0,1,.13.13L116.43,128,44.82,196.56a1.59,1.59,0,0,1-.13.13A16,16,0,0,0,56,224H200a16,16,0,0,0,11.32-27.31A1.59,1.59,0,0,1,211.18,196.56ZM56,48h0v0Zm144,0-72,68.92L56,48ZM56,208l72-68.92L200,208Z'),
-  ],
 };
 // Line pictures, filled and ringed with the outline: the I-beam and cross from the regular weight, arrows from the fill weight.
 const RINGED = {
@@ -71,6 +67,8 @@ const RINGED = {
 // The resize shapes are one double arrow, turned by degrees.
 const DOUBLE_ARROW = path('M237.66,133.66l-32,32A8,8,0,0,1,192,160V136H64v24a8,8,0,0,1-13.66,5.66l-32-32a8,8,0,0,1,0-11.32l32-32A8,8,0,0,1,64,96v24H192V96a8,8,0,0,1,13.66-5.66l32,32A8,8,0,0,1,237.66,133.66Z');
 const RESIZE = { 'ew-resize': 0, 'ns-resize': 90, 'nwse-resize': 45, 'nesw-resize': -45 };
+// The busy shapes show a spinning ball, as macOS does, in its own colors whatever the cursor's `color`.
+const BALL = ['#f5c400', '#f7862a', '#e8374f', '#a144c4', '#2f80ed', '#3dba4e'];
 
 /** Paints `under` with a soft shadow, then `over` without; shadow sizes are device pixels, so they follow the box's scale on screen. */
 function shadowed(ctx, under, over) {
@@ -84,6 +82,26 @@ function shadowed(ctx, under, over) {
   ctx.restore();
 }
 const framed = (ctx, [area, lines], color) => shadowed(ctx, () => { ctx.fillStyle = color; ctx.fill(area); }, () => { ctx.fillStyle = OUTLINE; ctx.fill(lines); });
+/** The spinning ball at (x, y) with radius r: swirled wedges, a soft highlight, and an outline. */
+function ball(ctx, x, y, r) {
+  const swirl = 0.9, step = 2 * Math.PI / BALL.length, disc = new Path2D();
+  disc.arc(x, y, r, 0, 2 * Math.PI);
+  shadowed(ctx, () => { ctx.fillStyle = OUTLINE; ctx.fill(disc); }, () => {
+    ctx.save(); ctx.clip(disc);
+    BALL.forEach((fill, i) => {
+      const a = i * step, wedge = new Path2D(), bend = (angle) => [x + r * 0.6 * Math.cos(angle - swirl), y + r * 0.6 * Math.sin(angle - swirl)];
+      wedge.moveTo(x, y); wedge.quadraticCurveTo(...bend(a), x + r * Math.cos(a), y + r * Math.sin(a));
+      wedge.arc(x, y, r, a, a + step + 0.02);
+      wedge.quadraticCurveTo(...bend(a + step + 0.02), x, y);
+      ctx.fillStyle = fill; ctx.fill(wedge);
+    });
+    const shine = ctx.createRadialGradient(x - r * 0.35, y - r * 0.45, 0, x - r * 0.35, y - r * 0.45, r * 1.1);
+    shine.addColorStop(0, '#ffffff99'); shine.addColorStop(1, '#ffffff00');
+    ctx.fillStyle = shine; ctx.fill(disc);
+    ctx.restore();
+    ctx.lineWidth = r / 6; ctx.stroke(disc);
+  });
+}
 const ringed = (ctx, lines, color) => shadowed(ctx, () => { ctx.lineWidth = 20; ctx.stroke(lines); }, () => { ctx.fillStyle = color; ctx.fill(lines); });
 
 export function draw(ctx, { shape, params }) {
@@ -95,8 +113,8 @@ export function draw(ctx, { shape, params }) {
     ctx.translate(128, 128); ctx.rotate(RESIZE[shape] * Math.PI / 180); ctx.translate(-128, -128);
     return ringed(ctx, DOUBLE_ARROW, color);
   }
-  // progress: the arrow with a small hourglass below its left side.
+  if (shape === 'wait') return ball(ctx, 128, 128, 92);
+  // progress: the arrow with a small ball beside its tail, as macOS shows it.
   framed(ctx, FRAMED.default, color);
-  ctx.translate(6, 140); ctx.scale(0.46, 0.46);
-  framed(ctx, FRAMED.wait, color);
+  ball(ctx, 226, 178, 36);
 }
