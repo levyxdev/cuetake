@@ -317,9 +317,10 @@ async function loadChrome(item, width, url) {
 
 /**
  * The cursor: drawing code exporting `shapes` (each shape's { width, height, hotspot: [x, y] } in the
- * code's own units, `default` among them) and `draw(ctx, { shape, params, files })` in those units, or
- * an image of the default shape whose `hotspot` the item names. The default shape is `size` CSS px wide
- * and the others share its scale; each sprite has a margin of a quarter box around it for shadows.
+ * code's own units, `default` among them, with `frames` for one that loops each second) and
+ * `draw(ctx, { shape, phase, params, files })` in those units, or an image of the default shape whose
+ * `hotspot` the item names. The default shape is `size` CSS px wide and the others share its scale;
+ * each sprite has a margin of a quarter box around it for shadows.
  */
 async function loadCursor(item) {
   let boxes, paint;
@@ -331,7 +332,7 @@ async function loadCursor(item) {
     const module = await loadModule(item), files = await loadFiles(item), params = paramsOf(item);
     boxes = module.shapes;
     if (!boxes?.default) throw fail(item, 'a cursor exports `shapes` with a `default` box');
-    paint = (ctx, shape) => module.draw(ctx, { shape, params, files });
+    paint = (ctx, shape, phase) => module.draw(ctx, { shape, phase, params, files });
   }
   const k = (item.size ?? 24) / boxes.default.width;
   return Object.fromEntries(Object.entries(boxes).map(([shape, box]) => {
@@ -340,11 +341,14 @@ async function loadCursor(item) {
       /** Where the sprite's top-left sits relative to the pointer, and its size, in CSS px. */
       offset: { x: -(box.hotspot[0] + margin) * k, y: -(box.hotspot[1] + margin) * k },
       size: { w: (box.width + 2 * margin) * k, h: (box.height + 2 * margin) * k },
-      canvas(scale) {
-        const ctx = canvas2d((box.width + 2 * margin) * k * scale, (box.height + 2 * margin) * k * scale);
-        ctx.scale(k * scale, k * scale); ctx.translate(margin, margin);
-        try { paint(ctx, shape); } catch (error) { throw fail(item, error); }
-        return ctx.canvas;
+      /** The shape's pictures through one second, or its only one. */
+      canvases(scale) {
+        return Array.from({ length: Math.max(1, Math.round(box.frames ?? 1)) }, (_, frame, frames = box.frames ?? 1) => {
+          const ctx = canvas2d((box.width + 2 * margin) * k * scale, (box.height + 2 * margin) * k * scale);
+          ctx.scale(k * scale, k * scale); ctx.translate(margin, margin);
+          try { paint(ctx, shape, frame / frames); } catch (error) { throw fail(item, error); }
+          return ctx.canvas;
+        });
       },
     }];
   }));
@@ -489,7 +493,7 @@ async function createScene(edit, viewport, { pointer, shapes, events }, firstFra
   const sharpest = stage.scale * camera.maxZoom * 2;
   const chromeTexture = chrome ? compositor.sprite(chrome.canvas(sharpest, stage.radius / stage.scale)) : null;
   const cursorSprites = cursor ? await loadCursor(cursor) : {};
-  const cursorTextures = Object.fromEntries(Object.entries(cursorSprites).map(([shape, sprite]) => [shape, compositor.sprite(sprite.canvas(sharpest))]));
+  const cursorTextures = Object.fromEntries(Object.entries(cursorSprites).map(([shape, sprite]) => [shape, sprite.canvases(sharpest).map(canvas => compositor.sprite(canvas))]));
   const drawn = new Set(Object.keys(cursorSprites)), track = cursor && cursorTrack({ pointer, shapes, events }, cursor);
   const effect = clickEffect ? await loadClickEffect(clickEffect, cursor ? Object.fromEntries(Object.entries(cursor).filter(([key]) => !['ref', 'kind', 'url', 'files'].includes(key))) : {}) : null;
   const pressList = presses(events);
@@ -516,8 +520,8 @@ async function createScene(edit, viewport, { pointer, shapes, events }, firstFra
         // The Cursor scales around its hotspot, so a press keeps its tip on the target.
         const now = track && track.at(t);
         if (now && now.opacity > 0) {
-          const shape = drawnShape(now.shape, drawn), sprite = cursorSprites[shape], k = now.scale;
-          draw(cursorTextures[shape], [...at(now.x + sprite.offset.x * k, now.y + sprite.offset.y * k), sprite.size.w * k * stage.scale, sprite.size.h * k * stage.scale], now.opacity);
+          const shape = drawnShape(now.shape, drawn), sprite = cursorSprites[shape], k = now.scale, frames = cursorTextures[shape];
+          draw(frames[Math.floor(t * frames.length) % frames.length], [...at(now.x + sprite.offset.x * k, now.y + sprite.offset.y * k), sprite.size.w * k * stage.scale, sprite.size.h * k * stage.scale], now.opacity);
         }
       }, cue >= 0 ? draw => draw(subtitleTexture, [0, 0, stage.width, stage.height]) : null);
       return cue;

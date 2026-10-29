@@ -206,6 +206,23 @@ test('Render draws the Cursor in the shape the page asked for, pressed while hel
   } finally { await browser.close(); await fs.rm(dir, { recursive: true, force: true }); }
 }, 60_000);
 
+test('Render turns the busy ball once a second', async () => {
+  const dir = await fs.mkdtemp(join(tmpdir(), 'cuetake-cursor-'));
+  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
+  try {
+    const sourcePath = join(dir, 'source.webm'), outputPath = join(dir, 'final.mp4');
+    await fs.writeFile(sourcePath, await syntheticSource(browser, 0.6));
+    const timeline = { viewport: { width: 320, height: 240 }, duration: 1.2, pointer: [[0, 160, 120]], shapes: [[0, 'wait']], events: [] };
+    await renderFinal({ sourcePath, finalPath: outputPath, timeline, ...forRender(bare({ cursor: { hideAfter: false } }), dir) });
+    // A point on the ball changes color as it turns, and comes back a second later.
+    const colorAt = async t => (await pixelsAt(browser, await extractFrame(outputPath, t), [[166, 120]]))[0];
+    const [first, turned, again] = [await colorAt(0.15), await colorAt(0.4), await colorAt(1.15)];
+    const apart = (a, b) => Math.max(...a.map((v, i) => Math.abs(v - b[i])));
+    expect(apart(first, turned)).toBeGreaterThan(60);
+    expect(apart(first, again)).toBeLessThan(30);
+  } finally { await browser.close(); await fs.rm(dir, { recursive: true, force: true }); }
+}, 60_000);
+
 test('Render frames the page in the built-in chrome over an agent shader Background, with its parameters', async () => {
   const dir = await fs.mkdtemp(join(tmpdir(), 'cuetake-frame-'));
   const browser = await chromium.launch({ headless: true, channel: 'chromium' });
