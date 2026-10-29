@@ -16,6 +16,7 @@ A Narration is voiced before Capture by a separate speech tool (ADR 0006). The D
 
 - `pipeline.js`: scenario validation, artifact lifecycle, render and verification.
 - `director.js`: timed interactions, focus targets and said Lines.
+- `motion.js`: how the Director moves like a person (durations, path, pauses, typing rhythm); pure and seeded.
 - `recorder.js` / `tab-capture.js`: supported HD capture only.
 - `cursor.js`: cursor position and click-effect timing; shared by Node and the render page.
 - `camera.js`: camera chains and the crop at any time; shared by Node and the render page.
