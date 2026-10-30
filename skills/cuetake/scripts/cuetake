@@ -1,4 +1,4 @@
 #!/bin/sh
 # Runs the CueTake CLI pinned to the version this skill was released with.
 # CUETAKE_BIN overrides the command, e.g. CUETAKE_BIN="node /path/to/cuetake/src/cli.js" for a source checkout.
-exec ${CUETAKE_BIN:-npx -y cuetake@0.3.0} "$@"
+exec ${CUETAKE_BIN:-npx -y cuetake@0.4.0} "$@"
