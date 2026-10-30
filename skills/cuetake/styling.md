@@ -30,7 +30,7 @@ Everything drawn around the page is code or images you write: CueTake fills in d
 
 An **item** names what draws it, `shader`, `draw` or `image`, as a built-in name or a file path with its extension, relative to the Look or Take. Every other key is a parameter for its code. Images also go in `files: { "photo": "photo.jpg" }`. Changing an item's parameters keeps the rest; naming a new drawing replaces the whole item.
 
-Built-ins are ordinary files: `styles` lists their paths and starting parameters. Copy one to start your own. They are `fluted` and `shadow` (shaders), `browser`, `browser-dark`, `macos` and `macos-dark` (chrome), `arrow` (cursors drawn from Phosphor icons: default, pointer, text, crosshair, grab, grabbing, move, not-allowed, the resize shapes, and wait and progress as a spinning ball) and `dot` (a dot whatever the page asks for), `spark` (click effect) and `subtitles`.
+Built-ins are ordinary files: `styles` lists their paths and starting parameters. Copy one to start your own. They are `fluted` and `shadow` (shaders), `browser`, `browser-dark`, `macos` and `macos-dark` (chrome), `arrow` and `arrow-thin` (cursors drawn from Phosphor icons, with a bold or thin dark edge: default, pointer, text, crosshair, grab, grabbing, move, not-allowed, the resize shapes, and wait and progress as a spinning ball) and `dot` (a dot whatever the page asks for), `spark` (click effect) and `subtitles`.
 
 ## Shaders: `background` and `effects`
 
