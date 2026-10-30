@@ -201,14 +201,14 @@ test('Render plays a fast-forward faster, with the Cursor in step with the page,
     // 0.3 s as recorded, 0.6 s easing over 1.5 s of Source, 0.9 s at 4×, 0.3 s as recorded: 1.425 s.
     expect(await inspectFinal(outputPath)).toMatchObject({ fps: 30, packets: 43, decodedFrames: 43 });
     // At 0.95 s of the Final the Source is at about 2.4 s: the square has turned green and the Cursor is near x = 232.
-    const [square, cursor, behind, badge] = await pixelsAt(browser, await extractFrame(outputPath, 0.95), [[250, 110], [239, 207], [123, 207], [282, 22]]);
+    const [square, cursor, behind, badge] = await pixelsAt(browser, await extractFrame(outputPath, 0.95), [[250, 110], [239, 207], [123, 207], [160, 120]]);
     expect(Math.min(...badge)).toBeGreaterThan(200);
     expect(square[1]).toBeGreaterThan(180);
     expect(square[0]).toBeLessThan(60);
     expect(Math.min(...cursor)).toBeGreaterThan(180);
     expect(Math.max(...behind)).toBeLessThan(40);
     // Before the span the Final plays as recorded: still red, the Cursor near x = 56.
-    const [early, start, noBadge] = await pixelsAt(browser, await extractFrame(outputPath, 0.2), [[250, 110], [63, 207], [282, 22]]);
+    const [early, start, noBadge] = await pixelsAt(browser, await extractFrame(outputPath, 0.2), [[250, 110], [63, 207], [160, 120]]);
     expect(Math.max(...noBadge)).toBeLessThan(40);
     expect(early[0]).toBeGreaterThan(180);
     expect(Math.min(...start)).toBeGreaterThan(180);

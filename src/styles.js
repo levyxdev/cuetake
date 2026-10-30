@@ -21,7 +21,7 @@ export const BUILTINS = {
   spark: { file: 'spark.js', params: { radius: 32, length: 16, count: 8 } },
   keycaps: { file: 'keycaps.js', params: { symbols: true, fontSize: 34, color: '#ffffff', cap: '#1f1f23e6', edge: '#ffffff40', right: 80, bottom: 80 } },
   subtitles: { file: 'subtitles.js', params: { fontSize: 40, weight: 600, color: '#ffffff', band: '#000000b3', bottom: 72, padding: 14 } },
-  'fast-forward': { file: 'fast-forward.js', params: { fontSize: 30, color: '#ffffff', band: '#000000a6', right: 80, top: 72 } },
+  'fast-forward': { file: 'fast-forward.js', params: { fontSize: 44, color: '#ffffff', band: '#000000a6', x: 0.5, y: 0.5 } },
 };
 export const KINDS = ['shader', 'draw', 'image'];
 export const isFile = ref => typeof ref === 'string' && extname(ref) !== '';

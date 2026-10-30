@@ -231,8 +231,8 @@ test('a fast-forward badge shows only while the Final fast-forwards, fading in a
 
 test('the fast-forward badge is off by default; Render reads the built-in with its parameters, and a Look keeps it', () => {
   expect(withDefaults({}).fastForwardBadge).toBe(false);
-  const { edit } = forRender(withDefaults({ fastForwardBadge: { draw: 'fast-forward', top: 40 } }), tmpdir());
-  expect(edit.fastForwardBadge).toMatchObject({ kind: 'draw', ref: 'fast-forward', top: 40, right: 80, fontSize: 30, url: expect.stringMatching(/^\/files\//) });
+  const { edit } = forRender(withDefaults({ fastForwardBadge: { draw: 'fast-forward', y: 0.2 } }), tmpdir());
+  expect(edit.fastForwardBadge).toMatchObject({ kind: 'draw', ref: 'fast-forward', x: 0.5, y: 0.2, fontSize: 44, url: expect.stringMatching(/^\/files\//) });
   const take = withDefaults({ fastForwardBadge: { draw: 'fast-forward' }, fastForward: [{ start: 1, end: 2, rate: 4 }] });
   expect(lookFromEdit(take).fastForwardBadge).toEqual({ draw: 'fast-forward' });
   expect(applyLook(withDefaults({}), lookFromEdit(take)).fastForwardBadge).toEqual({ draw: 'fast-forward' });
