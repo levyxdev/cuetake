@@ -12,7 +12,7 @@ import { bundle, codeRefs, forRender, BUILTIN_DIR } from '../src/styles.js';
 import { npxFolders, uninstall } from '../src/uninstall.js';
 import { subtitleRows, subtitleCues, lineProblems, toSrt, toVtt } from '../src/narration.js';
 import { shortcutKeys, keycapShows, keycapTrack } from '../src/shortcuts.js';
-import { timeMap, fastForwardProblems, retimed, linesInFinal } from '../src/time-map.js';
+import { timeMap, fastForwardProblems, retimed, linesInFinal, badgeAt } from '../src/time-map.js';
 import fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -217,6 +217,25 @@ test('Lines move to Final time, and one spoken while the Final fast-forwards is 
     expect.stringMatching(/^Line 'late' is spoken from 1\.50 s to 2\.50 s of the Final, while it fast-forwards from 2\.00 s to 3\.\d\d s; move the Line out of it or shorten the fast-forward$/),
   ]);
   expect(linesInFinal([{ id: 'inside', start: 4, duration: 0.1 }], map).problems).toHaveLength(1);
+});
+
+test('a fast-forward badge shows only while the Final fast-forwards, fading in and out with its span', () => {
+  const map = timeMap([{ start: 2, end: 6, rate: 4 }], 10), [span] = map.spans;
+  expect(badgeAt(map, 1.9)).toBeNull();
+  expect(badgeAt(map, span.end)).toBeNull();
+  expect(badgeAt(map, 2.075)).toEqual({ index: 0, rate: 4, opacity: expect.closeTo(0.5, 6) });
+  expect(badgeAt(map, 2.5).opacity).toBe(1);
+  expect(badgeAt(map, span.end - 0.1).opacity).toBeCloseTo(0.5, 6);
+  expect(badgeAt(timeMap([], 10), 3)).toBeNull();
+});
+
+test('the fast-forward badge is off by default; Render reads the built-in with its parameters, and a Look keeps it', () => {
+  expect(withDefaults({}).fastForwardBadge).toBe(false);
+  const { edit } = forRender(withDefaults({ fastForwardBadge: { draw: 'fast-forward', top: 40 } }), tmpdir());
+  expect(edit.fastForwardBadge).toMatchObject({ kind: 'draw', ref: 'fast-forward', top: 40, right: 80, fontSize: 30, url: expect.stringMatching(/^\/files\//) });
+  const take = withDefaults({ fastForwardBadge: { draw: 'fast-forward' }, fastForward: [{ start: 1, end: 2, rate: 4 }] });
+  expect(lookFromEdit(take).fastForwardBadge).toEqual({ draw: 'fast-forward' });
+  expect(applyLook(withDefaults({}), lookFromEdit(take)).fastForwardBadge).toEqual({ draw: 'fast-forward' });
 });
 
 test('the first Edit fast-forwards the waits the Scenario marked, and a Look keeps them out', () => {

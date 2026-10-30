@@ -21,14 +21,15 @@ export const BUILTINS = {
   spark: { file: 'spark.js', params: { radius: 32, length: 16, count: 8 } },
   keycaps: { file: 'keycaps.js', params: { symbols: true, fontSize: 34, color: '#ffffff', cap: '#1f1f23e6', edge: '#ffffff40', right: 80, bottom: 80 } },
   subtitles: { file: 'subtitles.js', params: { fontSize: 40, weight: 600, color: '#ffffff', band: '#000000b3', bottom: 72, padding: 14 } },
+  'fast-forward': { file: 'fast-forward.js', params: { fontSize: 30, color: '#ffffff', band: '#000000a6', right: 80, top: 72 } },
 };
 export const KINDS = ['shader', 'draw', 'image'];
 export const isFile = ref => typeof ref === 'string' && extname(ref) !== '';
 
 /** Every drawn item an Edit or (partial) Look holds. */
 function items(style) {
-  const { frame, cursor, clickEffect, keycaps, subtitles } = style ?? {};
-  return [...(Array.isArray(frame?.background) ? frame.background : []), ...(Array.isArray(frame?.effects) ? frame.effects : []), frame?.chrome, cursor, clickEffect, keycaps, subtitles]
+  const { frame, cursor, clickEffect, keycaps, subtitles, fastForwardBadge } = style ?? {};
+  return [...(Array.isArray(frame?.background) ? frame.background : []), ...(Array.isArray(frame?.effects) ? frame.effects : []), frame?.chrome, cursor, clickEffect, keycaps, subtitles, fastForwardBadge]
     .filter(item => item && typeof item === 'object');
 }
 

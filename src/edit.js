@@ -33,6 +33,9 @@ export const DEFAULT_STYLE = {
   // subtitle files. Rows hold up to `maxChars` (about 16 in Chinese, 42 otherwise), `maxRows` to a cue,
   // each shown at least `minDuration`.
   subtitles: { draw: 'subtitles', burn: true },
+  // Drawn over the Final, outside the camera, while it fast-forwards, such as { draw: 'fast-forward' };
+  // `false` shows none.
+  fastForwardBadge: false,
 };
 
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -82,7 +85,7 @@ export function cameraTargets(timeline, focus, wide = [], camera = {}) {
  */
 export function createEdit(config, timeline, focus, wide = []) {
   return withDefaults({
-    cursor: config.cursor, clickEffect: config.clickEffect, keycaps: config.keycaps, subtitles: config.subtitles, output: { ...config.output, fps: config.capture.fps },
+    cursor: config.cursor, clickEffect: config.clickEffect, keycaps: config.keycaps, subtitles: config.subtitles, fastForwardBadge: config.fastForwardBadge, output: { ...config.output, fps: config.capture.fps },
     // The browser chrome shows the Scenario's host unless the config names something else.
     frame: { url: new URL(config.url).host, ...config.frame },
     camera: { ...config.camera, targets: cameraTargets(timeline, focus, wide, config.camera) },

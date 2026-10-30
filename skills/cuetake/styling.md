@@ -16,7 +16,8 @@ Everything drawn around the page is code or images you write: CueTake fills in d
   "cursor": { "draw": "arrow", "size": 24, "color": "#ffffff", "press": 0.8 },
   "clickEffect": false,
   "keycaps": { "draw": "keycaps", "duration": 1.5, "singleKeys": false, "symbols": true, "fontSize": 34, "color": "#ffffff", "cap": "#1f1f23e6", "edge": "#ffffff40", "right": 80, "bottom": 80 },
-  "subtitles": { "draw": "subtitles", "burn": true, "fontSize": 40, "weight": 600, "color": "#ffffff", "band": "#000000b3", "bottom": 72, "padding": 14 }
+  "subtitles": { "draw": "subtitles", "burn": true, "fontSize": 40, "weight": 600, "color": "#ffffff", "band": "#000000b3", "bottom": 72, "padding": 14 },
+  "fastForwardBadge": false
 }
 ```
 
@@ -28,11 +29,12 @@ Everything drawn around the page is code or images you write: CueTake fills in d
 - The Cursor takes the shape the page asked for at each moment, as the Timeline recorded it. CueTake reads `press` (the scale it shrinks to around its hotspot while a button is held, springing back on release) itself; `false` turns it off. The Cursor stays shown from its first move to the last frame; to clear it from a result, move it aside in the Scenario.
 - A click shows on the Cursor, so there is no click effect by default. Name one, such as `{ "draw": "spark", "duration": 420, "radius": 32, "length": 16, "count": 8 }`, to add one.
 - `keycaps` draws each Shortcut the Edit lists ([scenarios.md](scenarios.md)) over the Final, outside the camera. CueTake reads `duration` (seconds shown after the last press; pressing the same keys again meanwhile counts up) itself, fades the keycaps in and out and lifts them into place; a new Shortcut replaces the one showing. A key pressed without Control, Alt, Shift or Meta, such as Escape or Enter, shows only with `singleKeys: true`. The built-in draws the keycaps at the bottom right, level with the Subtitles, and shows `⌘ ⇧ ⌥ ⌃` and symbols for keys like Enter and Escape; `symbols: false` writes Cmd, Shift, Alt, Ctrl instead. `false` shows none.
+- `fastForwardBadge` is off by default. Name one, such as `{ "draw": "fast-forward", "fontSize": 30, "color": "#ffffff", "band": "#000000a6", "right": 80, "top": 72 }`, to show the rate (`⏩ 4×`) at the top right of the Final, outside the camera, while it fast-forwards ([scenarios.md](scenarios.md)); CueTake fades it in and out with each span.
 - `subtitles` draws a Narration's Subtitles ([narration.md](narration.md)) over the Final, outside the camera. `burn: false` keeps them to the subtitle files. CueTake reads `maxChars` (characters per row), `maxRows` (rows per cue, 2) and `minDuration` (seconds, 1) itself. `files: { "font": "brand.woff2" }` sets the font, which burned-in Chinese, Japanese or Korean needs outside macOS.
 
 An **item** names what draws it, `shader`, `draw` or `image`, as a built-in name or a file path with its extension, relative to the Look or Take. Every other key is a parameter for its code. Images also go in `files: { "photo": "photo.jpg" }`. Changing an item's parameters keeps the rest; naming a new drawing replaces the whole item.
 
-Built-ins are ordinary files: `styles` lists their paths and starting parameters. Copy one to start your own. They are `fluted` and `shadow` (shaders), `browser`, `browser-dark`, `macos` and `macos-dark` (chrome), `arrow` and `arrow-thin` (cursors drawn from Phosphor icons, with a bold or thin dark edge: default, pointer, text, crosshair, grab, grabbing, move, not-allowed, the resize shapes, and wait and progress as a spinning ball) and `dot` (a dot whatever the page asks for), `spark` (click effect), `keycaps` and `subtitles`.
+Built-ins are ordinary files: `styles` lists their paths and starting parameters. Copy one to start your own. They are `fluted` and `shadow` (shaders), `browser`, `browser-dark`, `macos` and `macos-dark` (chrome), `arrow` and `arrow-thin` (cursors drawn from Phosphor icons, with a bold or thin dark edge: default, pointer, text, crosshair, grab, grabbing, move, not-allowed, the resize shapes, and wait and progress as a spinning ball) and `dot` (a dot whatever the page asks for), `spark` (click effect), `keycaps`, `subtitles` and `fast-forward` (the fast-forward badge).
 
 ## Shaders: `background` and `effects`
 
@@ -56,7 +58,7 @@ void main() {
 }
 ```
 
-## Drawing code: `chrome`, `cursor`, `clickEffect`, `keycaps`, `subtitles`
+## Drawing code: `chrome`, `cursor`, `clickEffect`, `keycaps`, `subtitles`, `fastForwardBadge`
 
 An ES module drawing on a 2D canvas in CSS pixels. `params` holds the item's parameters, and `files` its images (as `<img>`) and fonts (`.woff2`, `.ttf`…, registered under their key as a font family).
 
@@ -65,6 +67,7 @@ An ES module drawing on a 2D canvas in CSS pixels. `params` holds the item's par
 - Click effect: `export const reach` (CSS px around the click, or a function of `params`), `export function draw(ctx, { progress, params, files, cursor })` with the origin at the click and `progress` from 0 to 1 over `duration` ms.
 - Keycaps: `export function draw(ctx, { width, height, keys, count, params, files })` over the whole Final in 1080p pixels, once per Shortcut and again when `count` (how many times its keys were pressed in a row) goes up. `keys` are the held modifiers in macOS order, `Control`, `Alt`, `Shift`, `Meta`, then the key as the DOM names it: a capital letter or digit, `Enter`, `Escape`, `ArrowUp`, `Space`.
 - Subtitles: `export function draw(ctx, { width, height, rows, params, files })` over the whole Final in 1080p pixels (1920×1080 for a 16:9 Final), once per cue; `rows` are the cue's lines of text. A font in `files` is its key: the built-in uses `files.font` when given.
+- Fast-forward badge: `export function draw(ctx, { width, height, rate, params, files })` over the whole Final in 1080p pixels, once per rate; `rate` is the span's rate.
 
 An image works in place of code: chrome as wide as the window (`height` optional), a cursor with `hotspot` and `size` (its only shape, shown whatever the page asks for), a click effect that fades out.
 

@@ -10,6 +10,7 @@
  */
 
 const EASE = 0.3; // seconds of the Final a span takes to reach its rate, and to leave it
+const BADGE_IN = 0.15, BADGE_OUT = 0.2; // seconds of the Final a fast-forward badge takes to appear and to go
 const EPSILON = 0.005;
 
 // A ramp's speed rises from 1 to `rate` as smoothstep(u); `rise(u)` is that share integrated over u.
@@ -72,6 +73,14 @@ export function timeMap(spans = [], duration) {
       return piece.t + (low + high) / 2;
     },
   };
+}
+
+/** The fast-forward badge at Final time `t`: the index of the span showing, its rate and the badge's opacity, or null. */
+export function badgeAt(map, t) {
+  const index = map.spans.findIndex(span => t >= span.start && t < span.end);
+  if (index < 0) return null;
+  const { start, end, rate } = map.spans[index];
+  return { index, rate, opacity: Math.max(0, Math.min(1, (t - start) / BADGE_IN, (end - t) / BADGE_OUT)) };
 }
 
 /** `items` with the times named by `keys` moved from the Source to the Final, as Shortcuts and camera targets are. */

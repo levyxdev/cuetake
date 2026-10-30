@@ -194,18 +194,22 @@ test('Render plays a fast-forward faster, with the Cursor in step with the page,
     await fs.writeFile(sourcePath, await syntheticSource(browser, 3.1, 1.5));
     // The pointer sweeps right at 80 CSS px a second of Source time.
     const timeline = { viewport: { width: 320, height: 240 }, duration: 3, pointer: [[0, 40, 200], [3, 280, 200]], events: [] };
-    const edit = bare({ fastForward: [{ start: 0.3, end: 2.7, rate: 4 }] });
-    await renderFinal({ sourcePath, finalPath: outputPath, timeline, ...forRender(edit, dir) });
+    // A white badge band, so it shows against the black page.
+    const edit = bare({ fastForward: [{ start: 0.3, end: 2.7, rate: 4 }], fastForwardBadge: { draw: 'fast-forward', band: '#ffffff' } });
+    const render = await renderFinal({ sourcePath, finalPath: outputPath, timeline, ...forRender(edit, dir) });
+    expect(render.fastForwards).toEqual([{ start: 0.3, end: expect.closeTo(1.125, 6), rate: 4, frames: [9, 33] }]);
     // 0.3 s as recorded, 0.6 s easing over 1.5 s of Source, 0.9 s at 4×, 0.3 s as recorded: 1.425 s.
     expect(await inspectFinal(outputPath)).toMatchObject({ fps: 30, packets: 43, decodedFrames: 43 });
     // At 0.95 s of the Final the Source is at about 2.4 s: the square has turned green and the Cursor is near x = 232.
-    const [square, cursor, behind] = await pixelsAt(browser, await extractFrame(outputPath, 0.95), [[250, 110], [239, 207], [123, 207]]);
+    const [square, cursor, behind, badge] = await pixelsAt(browser, await extractFrame(outputPath, 0.95), [[250, 110], [239, 207], [123, 207], [282, 22]]);
+    expect(Math.min(...badge)).toBeGreaterThan(200);
     expect(square[1]).toBeGreaterThan(180);
     expect(square[0]).toBeLessThan(60);
     expect(Math.min(...cursor)).toBeGreaterThan(180);
     expect(Math.max(...behind)).toBeLessThan(40);
     // Before the span the Final plays as recorded: still red, the Cursor near x = 56.
-    const [early, start] = await pixelsAt(browser, await extractFrame(outputPath, 0.2), [[250, 110], [63, 207]]);
+    const [early, start, noBadge] = await pixelsAt(browser, await extractFrame(outputPath, 0.2), [[250, 110], [63, 207], [282, 22]]);
+    expect(Math.max(...noBadge)).toBeLessThan(40);
     expect(early[0]).toBeGreaterThan(180);
     expect(Math.min(...start)).toBeGreaterThan(180);
   } finally { await browser.close(); await fs.rm(dir, { recursive: true, force: true }); }
