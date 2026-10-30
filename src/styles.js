@@ -19,7 +19,7 @@ export const BUILTINS = {
   'arrow-thin': { file: 'arrow.js', params: { thin: true } },
   dot: { file: 'dot.js', params: {} },
   spark: { file: 'spark.js', params: { radius: 32, length: 16, count: 8 } },
-  keycaps: { file: 'keycaps.js', params: { symbols: true, fontSize: 34, color: '#ffffff', cap: '#1f1f23e6', edge: '#ffffff40', bottom: 220 } },
+  keycaps: { file: 'keycaps.js', params: { symbols: true, fontSize: 34, color: '#ffffff', cap: '#1f1f23e6', edge: '#ffffff40', right: 80, bottom: 80 } },
   subtitles: { file: 'subtitles.js', params: { fontSize: 40, weight: 600, color: '#ffffff', band: '#000000b3', bottom: 72, padding: 14 } },
 };
 export const KINDS = ['shader', 'draw', 'image'];

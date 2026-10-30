@@ -55,10 +55,11 @@ const easeOut = u => 1 - (1 - u) ** 3;
 /**
  * The keycaps through a Take: `at(t)` gives the index of the show on screen, its keys, how many times
  * they have been pressed, its opacity and how far below its place it is (1080p pixels), or null.
- * `keycaps` is the Edit's keycaps item; `false` shows none.
+ * `keycaps` is the Edit's keycaps item; `false` shows none, and a key pressed alone shows only with `singleKeys`.
  */
 export function keycapTrack(shortcuts, keycaps) {
-  const shows = keycaps ? keycapShows(shortcuts ?? [], keycaps.duration ?? 1.5) : [];
+  const shown = (shortcuts ?? []).filter(shortcut => keycaps?.singleKeys || shortcut.keys.length > 1);
+  const shows = keycaps ? keycapShows(shown, keycaps.duration ?? 1.5) : [];
   return {
     shows,
     at(t) {

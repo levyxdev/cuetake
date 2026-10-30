@@ -204,7 +204,7 @@ test('Render draws the built-in cursor at the pointer and a spark around each cl
   } finally { await browser.close(); await fs.rm(dir, { recursive: true, force: true }); }
 }, 60_000);
 
-test('Render draws the Cursor in the shape the page asked for, pressed while held, and fades it when idle', async () => {
+test('Render draws the Cursor in the shape the page asked for, pressed while held, and shown while still', async () => {
   const dir = await fs.mkdtemp(join(tmpdir(), 'cuetake-cursor-'));
   const browser = await chromium.launch({ headless: true, channel: 'chromium' });
   try {
@@ -214,7 +214,7 @@ test('Render draws the Cursor in the shape the page asked for, pressed while hel
       viewport: { width: 320, height: 240 }, duration: 2.6, pointer: [[0, 60, 60]], shapes: [[0, 'default'], [0.4, 'pointer']],
       events: [{ type: 'click', t: 0.8, end: 0.9, x: 60, y: 60 }],
     };
-    await renderFinal({ sourcePath, finalPath: outputPath, timeline, ...forRender(bare({ cursor: { hideAfter: 1 } }), dir) });
+    await renderFinal({ sourcePath, finalPath: outputPath, timeline, ...forRender(bare(), dir) });
     const frame = async (t, points) => (await pixelsAt(browser, await extractFrame(outputPath, t), points)).map(rgb => Math.min(...rgb));
     // The arrow's body is right of its tip; the hand's thumb is left of the fingertip, and its palm reaches lower.
     const arrow = [67, 67], thumb = [54, 74], palm = [64, 82];
@@ -227,9 +227,9 @@ test('Render draws the Cursor in the shape the page asked for, pressed while hel
     // Held, the hand shrinks toward its fingertip; released, it springs back.
     expect((await frame(0.9, [palm]))[0]).toBeLessThan(60);
     expect((await frame(1.3, [palm]))[0]).toBeGreaterThan(180);
-    // Still for a second after the release, it fades out.
-    const gone = await frame(2.4, [thumb, palm]);
-    expect(Math.max(...gone)).toBeLessThan(40);
+    // Still to the end, it stays shown.
+    const still = await frame(2.4, [thumb, palm]);
+    expect(Math.min(...still)).toBeGreaterThan(180);
   } finally { await browser.close(); await fs.rm(dir, { recursive: true, force: true }); }
 }, 60_000);
 
@@ -246,9 +246,10 @@ test('Render shows keycaps for each Shortcut outside the camera, fading in and o
     });
     const render = await renderFinal({ sourcePath, finalPath: outputPath, timeline: { viewport: { width: 320, height: 240 }, duration: 2.4 }, ...forRender(edit, dir) });
     expect(render.keycaps).toEqual([{ t: 0.5, keys: ['Meta', 'K'], presses: 1, frames: [15, 59] }]);
-    // On a 320×240 Final a 1080p pixel is 2/9 of an output pixel: the ⌘ cap spans about 144 to 159 px across
-    // and 159 to 173 px down, 300 above the bottom; this point is inside it, left of the symbol.
-    const cap = [146, 168];
+    // On a 320×240 Final a 1080p pixel is 2/9 of an output pixel: the row ends 80 from the right, so the ⌘ cap
+    // spans about 271 to 286 px across and 159 to 173 px down, 300 above the bottom; this point is inside it,
+    // left of the symbol.
+    const cap = [273, 168];
     const red = rgb => rgb[0] > 180 && rgb[1] < 80;
     expect(red((await pixelsAt(browser, await extractFrame(outputPath, 0.4), [cap]))[0])).toBe(false);
     expect(red((await pixelsAt(browser, await extractFrame(outputPath, 1), [cap]))[0])).toBe(true);
@@ -263,7 +264,7 @@ test('Render turns the busy ball once a second', async () => {
     const sourcePath = join(dir, 'source.webm'), outputPath = join(dir, 'final.mp4');
     await fs.writeFile(sourcePath, await syntheticSource(browser, 0.6));
     const timeline = { viewport: { width: 320, height: 240 }, duration: 1.2, pointer: [[0, 160, 120]], shapes: [[0, 'wait']], events: [] };
-    await renderFinal({ sourcePath, finalPath: outputPath, timeline, ...forRender(bare({ cursor: { hideAfter: false } }), dir) });
+    await renderFinal({ sourcePath, finalPath: outputPath, timeline, ...forRender(bare(), dir) });
     // A point on the ball changes color as it turns, and comes back a second later.
     const colorAt = async t => (await pixelsAt(browser, await extractFrame(outputPath, t), [[166, 120]]))[0];
     const [first, turned, again] = [await colorAt(0.15), await colorAt(0.4), await colorAt(1.15)];

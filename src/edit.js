@@ -13,9 +13,9 @@ export const evenSize = z.number().int().min(240).max(7680).refine(n => n % 2 ==
 
 /** Times are seconds except clickEffect.duration, which is milliseconds; geometry is CSS pixels. */
 export const DEFAULT_STYLE = {
-  // The Cursor shrinks to `press` while a button is held and fades out after `hideAfter` seconds still;
-  // `false` turns either off. A click shows on the Cursor, so no click effect is drawn unless named.
-  cursor: { draw: 'arrow', size: 24, color: '#ffffff', press: 0.8, hideAfter: 2.5 },
+  // The Cursor shrinks to `press` while a button is held; `false` turns that off. A click shows on the
+  // Cursor, so no click effect is drawn unless named.
+  cursor: { draw: 'arrow', size: 24, color: '#ffffff', press: 0.8 },
   clickEffect: false,
   // quality is the H.264 quantizer (lower is sharper and larger).
   output: { width: 3840, height: 2160, quality: 22 },
@@ -26,8 +26,9 @@ export const DEFAULT_STYLE = {
   // last one in a segment, settles in about `response`, and returns wide `endWide` before the end.
   camera: { maxZoom: 2, minZoom: 1.2, padding: 48, lead: 0.6, hold: 1.5, chainGap: 2, response: 0.6, follow: true, endWide: 1.5 },
   // Shortcuts show as keycaps over the Final, outside the camera, for `duration` seconds after each
-  // press; presses of the same keys meanwhile count up. `false` shows none.
-  keycaps: { draw: 'keycaps', duration: 1.5 },
+  // press; presses of the same keys meanwhile count up. A key pressed without Control, Alt, Shift or
+  // Meta shows only with `singleKeys`. `false` shows none.
+  keycaps: { draw: 'keycaps', duration: 1.5, singleKeys: false },
   // Drawn over the Final, outside the camera, while a Line is spoken; `burn: false` keeps them to the
   // subtitle files. Rows hold up to `maxChars` (about 16 in Chinese, 42 otherwise), `maxRows` to a cue,
   // each shown at least `minDuration`.

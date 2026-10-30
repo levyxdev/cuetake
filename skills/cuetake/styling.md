@@ -13,9 +13,9 @@ Everything drawn around the page is code or images you write: CueTake fills in d
     "background": [{ "shader": "fluted", "count": 36, "strength": 0.09, "angle": 0 }],
     "effects": [{ "shader": "shadow", "blur": 60, "offset": 24, "opacity": 0.5, "rim": 0.12 }]
   },
-  "cursor": { "draw": "arrow", "size": 24, "color": "#ffffff", "press": 0.8, "hideAfter": 2.5 },
+  "cursor": { "draw": "arrow", "size": 24, "color": "#ffffff", "press": 0.8 },
   "clickEffect": false,
-  "keycaps": { "draw": "keycaps", "duration": 1.5, "symbols": true, "fontSize": 34, "color": "#ffffff", "cap": "#1f1f23e6", "edge": "#ffffff40", "bottom": 220 },
+  "keycaps": { "draw": "keycaps", "duration": 1.5, "singleKeys": false, "symbols": true, "fontSize": 34, "color": "#ffffff", "cap": "#1f1f23e6", "edge": "#ffffff40", "right": 80, "bottom": 80 },
   "subtitles": { "draw": "subtitles", "burn": true, "fontSize": 40, "weight": 600, "color": "#ffffff", "band": "#000000b3", "bottom": 72, "padding": 14 }
 }
 ```
@@ -25,9 +25,9 @@ Everything drawn around the page is code or images you write: CueTake fills in d
 - `background` is a list of layers, each drawn over the one before. It stays still while the camera moves the window.
 - `effects` are drawn around the window every frame and follow it as the camera zooms and moves.
 - `chrome`, `cursor` and `clickEffect` take `false` to show nothing.
-- The Cursor takes the shape the page asked for at each moment, as the Timeline recorded it. CueTake reads `press` (the scale it shrinks to around its hotspot while a button is held, springing back on release) and `hideAfter` (seconds still before it fades out; it fades back in before it next moves) itself; `false` turns either off.
+- The Cursor takes the shape the page asked for at each moment, as the Timeline recorded it. CueTake reads `press` (the scale it shrinks to around its hotspot while a button is held, springing back on release) itself; `false` turns it off. The Cursor stays shown from its first move to the last frame; to clear it from a result, move it aside in the Scenario.
 - A click shows on the Cursor, so there is no click effect by default. Name one, such as `{ "draw": "spark", "duration": 420, "radius": 32, "length": 16, "count": 8 }`, to add one.
-- `keycaps` draws each Shortcut the Edit lists ([scenarios.md](scenarios.md)) over the Final, outside the camera. CueTake reads `duration` (seconds shown after the last press; pressing the same keys again meanwhile counts up) itself, fades the keycaps in and out and lifts them into place; a new Shortcut replaces the one showing. The built-in shows `⌘ ⇧ ⌥ ⌃` and symbols for keys like Enter and Escape; `symbols: false` writes Cmd, Shift, Alt, Ctrl instead. `false` shows none.
+- `keycaps` draws each Shortcut the Edit lists ([scenarios.md](scenarios.md)) over the Final, outside the camera. CueTake reads `duration` (seconds shown after the last press; pressing the same keys again meanwhile counts up) itself, fades the keycaps in and out and lifts them into place; a new Shortcut replaces the one showing. A key pressed without Control, Alt, Shift or Meta, such as Escape or Enter, shows only with `singleKeys: true`. The built-in draws the keycaps at the bottom right, level with the Subtitles, and shows `⌘ ⇧ ⌥ ⌃` and symbols for keys like Enter and Escape; `symbols: false` writes Cmd, Shift, Alt, Ctrl instead. `false` shows none.
 - `subtitles` draws a Narration's Subtitles ([narration.md](narration.md)) over the Final, outside the camera. `burn: false` keeps them to the subtitle files. CueTake reads `maxChars` (characters per row), `maxRows` (rows per cue, 2) and `minDuration` (seconds, 1) itself. `files: { "font": "brand.woff2" }` sets the font, which burned-in Chinese, Japanese or Korean needs outside macOS.
 
 An **item** names what draws it, `shader`, `draw` or `image`, as a built-in name or a file path with its extension, relative to the Look or Take. Every other key is a parameter for its code. Images also go in `files: { "photo": "photo.jpg" }`. Changing an item's parameters keeps the rest; naming a new drawing replaces the whole item.
