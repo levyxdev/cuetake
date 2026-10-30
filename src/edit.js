@@ -36,6 +36,9 @@ export const DEFAULT_STYLE = {
   // Drawn over the Final, outside the camera, while it fast-forwards, such as { draw: 'fast-forward' };
   // `false` shows none.
   fastForwardBadge: false,
+  // While it fast-forwards, each frame averages the Source frames it skips and the Cursor leaves a
+  // trail, as a time-lapse blurs; `false` keeps every frame sharp.
+  fastForwardBlur: true,
 };
 
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -85,7 +88,7 @@ export function cameraTargets(timeline, focus, wide = [], camera = {}) {
  */
 export function createEdit(config, timeline, focus, wide = []) {
   return withDefaults({
-    cursor: config.cursor, clickEffect: config.clickEffect, keycaps: config.keycaps, subtitles: config.subtitles, fastForwardBadge: config.fastForwardBadge, output: { ...config.output, fps: config.capture.fps },
+    cursor: config.cursor, clickEffect: config.clickEffect, keycaps: config.keycaps, subtitles: config.subtitles, fastForwardBadge: config.fastForwardBadge, fastForwardBlur: config.fastForwardBlur, output: { ...config.output, fps: config.capture.fps },
     // The browser chrome shows the Scenario's host unless the config names something else.
     frame: { url: new URL(config.url).host, ...config.frame },
     camera: { ...config.camera, targets: cameraTargets(timeline, focus, wide, config.camera) },

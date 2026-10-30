@@ -17,7 +17,8 @@ Everything drawn around the page is code or images you write: CueTake fills in d
   "clickEffect": false,
   "keycaps": { "draw": "keycaps", "duration": 1.5, "singleKeys": false, "symbols": true, "fontSize": 34, "color": "#ffffff", "cap": "#1f1f23e6", "edge": "#ffffff40", "right": 80, "bottom": 80 },
   "subtitles": { "draw": "subtitles", "burn": true, "fontSize": 40, "weight": 600, "color": "#ffffff", "band": "#000000b3", "bottom": 72, "padding": 14 },
-  "fastForwardBadge": false
+  "fastForwardBadge": false,
+  "fastForwardBlur": true
 }
 ```
 
@@ -30,6 +31,7 @@ Everything drawn around the page is code or images you write: CueTake fills in d
 - A click shows on the Cursor, so there is no click effect by default. Name one, such as `{ "draw": "spark", "duration": 420, "radius": 32, "length": 16, "count": 8 }`, to add one.
 - `keycaps` draws each Shortcut the Edit lists ([scenarios.md](scenarios.md)) over the Final, outside the camera. CueTake reads `duration` (seconds shown after the last press; pressing the same keys again meanwhile counts up) itself, fades the keycaps in and out and lifts them into place; a new Shortcut replaces the one showing. A key pressed without Control, Alt, Shift or Meta, such as Escape or Enter, shows only with `singleKeys: true`. The built-in draws the keycaps at the bottom right, level with the Subtitles, and shows `⌘ ⇧ ⌥ ⌃` and symbols for keys like Enter and Escape; `symbols: false` writes Cmd, Shift, Alt, Ctrl instead. `false` shows none.
 - `fastForwardBadge` is off by default. Name one, such as `{ "draw": "fast-forward", "fontSize": 44, "color": "#ffffff", "band": "#000000a6", "x": 0.5, "y": 0.5 }`, to show the rate (`⏩ 4×`) in the middle of the Final (`x` and `y` place its center as fractions of the Final), outside the camera, while it fast-forwards ([scenarios.md](scenarios.md)); CueTake fades it in and out with each span.
+- `fastForwardBlur` is on by default: while the Final fast-forwards, each frame averages the Source frames it skips, so moving content smears as in a time-lapse, and the Cursor leaves a fading trail. `false` keeps every frame sharp. A page that does not move looks the same either way.
 - `subtitles` draws a Narration's Subtitles ([narration.md](narration.md)) over the Final, outside the camera. `burn: false` keeps them to the subtitle files. CueTake reads `maxChars` (characters per row), `maxRows` (rows per cue, 2) and `minDuration` (seconds, 1) itself. `files: { "font": "brand.woff2" }` sets the font, which burned-in Chinese, Japanese or Korean needs outside macOS.
 
 An **item** names what draws it, `shader`, `draw` or `image`, as a built-in name or a file path with its extension, relative to the Look or Take. Every other key is a parameter for its code. Images also go in `files: { "photo": "photo.jpg" }`. Changing an item's parameters keeps the rest; naming a new drawing replaces the whole item.
