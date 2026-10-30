@@ -4,9 +4,6 @@
  */
 
 const PRESS_IN = 0.08, PRESS_OUT = 0.3; // seconds to shrink when a button goes down and to spring back after it is released
-const FADE = 0.3; // seconds the idle Cursor takes to fade out, and to fade back in before it moves
-const MOVED = 0.5; // CSS px a pointer sample must differ from the one before to count as a move
-const STEP = 0.05; // seconds before a moved sample that the move shows, however long the pointer rested before it
 
 /** The index of the last entry of `list` (sorted by `time(entry)`) at or before `t`, or -1. */
 function lastAt(list, t, time) {
@@ -55,28 +52,6 @@ export function pressScale(spans, press, t) {
   return u >= 1 ? 1 : from + (1 - from) * springBack(u);
 }
 
-/** Times the Cursor shows activity: its first sample, the start and end of each move, and each press and release. */
-export function activityTimes(pointer, spans) {
-  const moves = pointer.flatMap(([t, x, y], i) => {
-    if (i === 0) return [t];
-    const [t0, x0, y0] = pointer[i - 1];
-    return Math.hypot(x - x0, y - y0) > MOVED ? [Math.max(t0, t - STEP), t] : [];
-  });
-  return [...moves, ...spans.flatMap(s => [s.t, s.end])].sort((a, b) => a - b);
-}
-
-/**
- * The Cursor's opacity at `t`: it fades out once it has been still `hideAfter` seconds, and fades back
- * in to be fully shown when it next moves; `hideAfter: false` keeps it shown.
- */
-export function idleOpacity(activity, hideAfter, t) {
-  if (typeof hideAfter !== 'number' || !activity.length) return 1;
-  const i = lastAt(activity, t, time => time), last = activity[i], next = activity[i + 1];
-  const fading = i < 0 ? 0 : 1 - (t - last - hideAfter) / FADE;
-  const returning = next === undefined ? 0 : 1 - (next - t) / FADE;
-  return Math.min(1, Math.max(0, fading, returning));
-}
-
 /** The cursor shape the page asked for at `t`, as a CSS keyword; `default` before the first. */
 export function shapeAt(shapes, t) {
   return shapes[lastAt(shapes, t, entry => entry[0])]?.[1] ?? 'default';
@@ -94,16 +69,16 @@ const ALIASES = {
 export const drawnShape = (keyword, drawn) => drawn.has(keyword) ? keyword : drawn.has(ALIASES[keyword]) ? ALIASES[keyword] : 'default';
 
 /**
- * The Cursor through a Take: `at(t)` gives its point, scale, opacity and the shape the page asked for,
+ * The Cursor through a Take: `at(t)` gives its point, scale and the shape the page asked for,
  * or null before the first pointer sample. `cursor` is the Edit's cursor item.
  */
 export function cursorTrack({ pointer, shapes = [], events }, cursor) {
-  const spans = heldSpans(events), activity = activityTimes(pointer, spans);
+  const spans = heldSpans(events);
   return {
     at(t) {
       const point = pointerAt(pointer, t);
       if (!point) return null;
-      return { ...point, scale: pressScale(spans, cursor.press, t), opacity: idleOpacity(activity, cursor.hideAfter, t), shape: shapeAt(shapes, t) };
+      return { ...point, scale: pressScale(spans, cursor.press, t), shape: shapeAt(shapes, t) };
     },
   };
 }

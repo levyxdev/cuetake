@@ -11,7 +11,7 @@ Built entirely for AI agents, CueTake turns browser interactions into sharp prod
 - Retina tab capture at 30 or 60 fps and a 2× pixel scale, headless by default.
 - An automatic camera in the style of Screen Studio: it arrives just before each click, field and drag, follows the cursor on a spring, and ends on the wide shot.
 - The page framed in a browser or macOS window over fluted glass lit in the product's brand color, at any output size; backgrounds, chrome, cursors and click effects are shaders or drawing code the agent can write.
-- A Cursor drawn at Render time in the shape the page asks for, pressing on each click and fading out when still, so a Take can be restyled without recording again.
+- A Cursor drawn at Render time in the shape the page asks for, pressing on each click, so a Take can be restyled without recording again.
 - Keyboard shortcuts shown as keycaps, so a demo of a command palette or an editor teaches the keys it presses.
 - Styling chosen in conversation: the agent shows Previews of candidate Looks side by side in about a second, and the Look you pick is saved for later Takes.
 - Rendering in Chromium with WebGL and WebCodecs: no FFmpeg, 4K60 by default.

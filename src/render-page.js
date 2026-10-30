@@ -81,7 +81,7 @@ void main() { color = texture(uSprite, uv) * uAlpha; }`;
 
 // Item keys CueTake reads itself; every other key is a parameter for the item's shader or drawing code.
 const OWN_KEYS = new Set(['shader', 'draw', 'image', 'files', 'ref', 'kind', 'url']);
-const SLOT_KEYS = new Set(['size', 'hotspot', 'press', 'hideAfter', 'duration', 'reach', 'height', 'burn', 'maxChars', 'maxRows', 'minDuration']);
+const SLOT_KEYS = new Set(['size', 'hotspot', 'press', 'duration', 'singleKeys', 'reach', 'height', 'burn', 'maxChars', 'maxRows', 'minDuration']);
 const paramsOf = item => Object.fromEntries(Object.entries(item).filter(([key]) => !OWN_KEYS.has(key) && (item.kind === 'shader' || !SLOT_KEYS.has(key))));
 const fail = (item, error) => new Error(`${item.ref}: ${error?.message ?? error}`);
 
@@ -530,9 +530,9 @@ async function createScene(edit, viewport, { pointer, shapes, events }, firstFra
         }
         // The Cursor scales around its hotspot, so a press keeps its tip on the target.
         const now = track && track.at(t);
-        if (now && now.opacity > 0) {
+        if (now) {
           const shape = drawnShape(now.shape, drawn), sprite = cursorSprites[shape], k = now.scale, frames = cursorTextures[shape];
-          draw(frames[Math.floor(t * frames.length) % frames.length], [...at(now.x + sprite.offset.x * k, now.y + sprite.offset.y * k), sprite.size.w * k * stage.scale, sprite.size.h * k * stage.scale], now.opacity);
+          draw(frames[Math.floor(t * frames.length) % frames.length], [...at(now.x + sprite.offset.x * k, now.y + sprite.offset.y * k), sprite.size.w * k * stage.scale, sprite.size.h * k * stage.scale]);
         }
       }, cue >= 0 || keycap ? draw => {
         if (cue >= 0) draw(subtitleTexture, [0, 0, stage.width, stage.height]);

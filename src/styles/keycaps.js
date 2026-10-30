@@ -1,5 +1,5 @@
-// Keycaps: one rounded cap per key of a Shortcut, in a row centered near the bottom of the Final.
-// Parameters: symbols (macOS symbols such as ⌘ ⇧ ⌥ ⌃, or words such as Ctrl), fontSize, color, cap, edge, bottom.
+// Keycaps: one rounded cap per key of a Shortcut, in a row at the bottom right of the Final, level with the Subtitles.
+// Parameters: symbols (macOS symbols such as ⌘ ⇧ ⌥ ⌃, or words such as Ctrl), fontSize, color, cap, edge, right, bottom.
 // Drawn in 1080p pixels over the whole Final, outside the camera; `count` is how many times the keys were pressed.
 const SYMBOLS = {
   Meta: '⌘', Control: '⌃', Alt: '⌥', Shift: '⇧', Enter: '↩', Escape: 'esc', Backspace: '⌫', Delete: '⌦', Tab: '⇥', CapsLock: '⇪',
@@ -11,7 +11,7 @@ const WORDS = {
 };
 
 export function draw(ctx, { width, height, keys, count, params, files }) {
-  const { symbols = true, fontSize: size = 34, color = '#ffffff', cap = '#1f1f23e6', edge = '#ffffff40', bottom = 220 } = params;
+  const { symbols = true, fontSize: size = 34, color = '#ffffff', cap = '#1f1f23e6', edge = '#ffffff40', right = 80, bottom = 80 } = params;
   const family = files.font ? `"${files.font}"` : '-apple-system, "SF Pro Text", "Helvetica Neue", "DejaVu Sans", system-ui, sans-serif';
   const labels = keys.map(key => (symbols ? SYMBOLS : WORDS)[key] ?? key);
   ctx.font = `600 ${size}px ${family}`;
@@ -20,7 +20,7 @@ export function draw(ctx, { width, height, keys, count, params, files }) {
   const widths = labels.map(label => Math.max(h, ctx.measureText(label).width + 2 * padding));
   const times = count > 1 ? `×${count}` : '';
   const total = widths.reduce((sum, w) => sum + w, 0) + gap * (labels.length - 1) + (times ? gap + ctx.measureText(times).width : 0);
-  let x = (width - total) / 2;
+  let x = width - right - total;
   const y = height - bottom - h;
   labels.forEach((label, i) => {
     ctx.beginPath(); ctx.roundRect(x, y, widths[i], h, size * 0.35);

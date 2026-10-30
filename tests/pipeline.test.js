@@ -4,7 +4,7 @@ import pkg from '../package.json' with { type: 'json' };
 import { scenarioSchema, summarizeFrames, narrationSchema } from '../src/pipeline.js';
 import { fitZoom, cropAround, zoomSegments, cameraTrack } from '../src/camera.js';
 import { cameraTargets, createEdit, DEFAULT_STYLE, withDefaults } from '../src/edit.js';
-import { pointerAt, presses, sparksAt, heldSpans, pressScale, activityTimes, idleOpacity, shapeAt, drawnShape, cursorTrack } from '../src/cursor.js';
+import { pointerAt, presses, sparksAt, heldSpans, pressScale, shapeAt, drawnShape, cursorTrack } from '../src/cursor.js';
 import { random, reachMs, reach, landing, pauseMs, typingDelays } from '../src/motion.js';
 import { atShortSide, layout, cameraView, brandHue, brandColor, previewSheet } from '../src/stage.js';
 import { lookFromEdit, applyLook, mergeLook, summarize, saveLook, loadLook, listLooks, removeLook, resolvedLook } from '../src/look.js';
@@ -138,22 +138,6 @@ test('a press shrinks the Cursor while the button is held and springs back after
   expect(pressScale([], 0.8, 1.1)).toBe(1);
 });
 
-test('the Cursor fades out after resting hideAfter seconds and is fully shown again when it next moves', () => {
-  // Still from 1 s (a click at 1–1.1 s) until it moves again just before 6.1 s.
-  const pointer = [[0, 0, 0], [0.5, 50, 50], [1, 100, 100], [1, 100, 100], [6.1, 140, 120]];
-  const activity = activityTimes(pointer, heldSpans([{ type: 'click', t: 1, end: 1.1 }]));
-  expect(activity).toEqual([0, 0.45, 0.5, 0.95, 1, 1, 1.1, 6.05, 6.1]);
-  const opacity = t => idleOpacity(activity, 2.5, t);
-  expect(opacity(3.5)).toBe(1);
-  expect(opacity(3.75)).toBeCloseTo(0.5);
-  expect(opacity(4)).toBe(0);
-  expect(opacity(5.9)).toBeCloseTo(0.5);
-  expect(opacity(6.05)).toBe(1);
-  // Still to the end, it stays hidden; hideAfter: false keeps it shown.
-  expect(opacity(30)).toBe(0);
-  expect(idleOpacity(activity, false, 30)).toBe(1);
-});
-
 test('the Cursor takes the shape the page asked for, its alias, or default', () => {
   const shapes = [[0, 'default'], [1, 'pointer'], [2, 'col-resize'], [3, 'zoom-in']];
   expect(shapeAt(shapes, 0.5)).toBe('default');
@@ -167,17 +151,17 @@ test('the Cursor takes the shape the page asked for, its alias, or default', () 
   expect(drawnShape('pointer', dot)).toBe('default');
 });
 
-test('the Cursor track puts point, press, fade and shape together, and is hidden before the first sample', () => {
-  const track = cursorTrack({ pointer: [[1, 10, 20], [2, 30, 40]], shapes: [[1.5, 'text']], events: [{ type: 'click', t: 2, end: 2.1 }] }, { press: 0.8, hideAfter: 2.5 });
+test('the Cursor track puts point, press and shape together, is hidden before the first sample and shown to the end', () => {
+  const track = cursorTrack({ pointer: [[1, 10, 20], [2, 30, 40]], shapes: [[1.5, 'text']], events: [{ type: 'click', t: 2, end: 2.1 }] }, { press: 0.8 });
   expect(track.at(0.5)).toBeNull();
-  expect(track.at(1)).toEqual({ x: 10, y: 20, scale: 1, opacity: 1, shape: 'default' });
-  expect(track.at(2.1)).toMatchObject({ x: 30, y: 40, scale: expect.closeTo(0.8, 6), opacity: 1, shape: 'text' });
-  expect(track.at(9).opacity).toBe(0);
+  expect(track.at(1)).toEqual({ x: 10, y: 20, scale: 1, shape: 'default' });
+  expect(track.at(2.1)).toMatchObject({ x: 30, y: 40, scale: expect.closeTo(0.8, 6), shape: 'text' });
+  expect(track.at(30)).toEqual({ x: 30, y: 40, scale: 1, shape: 'text' });
 });
 
 test('the default Edit shows clicks on the Cursor, without a click effect', () => {
   expect(DEFAULT_STYLE.clickEffect).toBe(false);
-  expect(DEFAULT_STYLE.cursor).toMatchObject({ press: 0.8, hideAfter: 2.5 });
+  expect(DEFAULT_STYLE.cursor).toEqual({ draw: 'arrow', size: 24, color: '#ffffff', press: 0.8 });
 });
 
 test('clicks and drag starts spark for the click effect duration', () => {
@@ -220,7 +204,7 @@ test('keycaps show for their duration, count repeated presses, and a new Shortcu
     { t: 1, end: 1.5, replacing: false, replaced: true }, { t: 1.5, end: 3, replacing: true, replaced: false },
   ]);
 
-  const track = keycapTrack([{ t: 1, keys: z }, { t: 1.4, keys: z }, { t: 3, keys: k }, { t: 3.5, keys: ['Escape'] }], { duration: 1.5 });
+  const track = keycapTrack([{ t: 1, keys: z }, { t: 1.4, keys: z }, { t: 3, keys: k }, { t: 3.5, keys: ['Escape'] }], { duration: 1.5, singleKeys: true });
   expect(track.at(0.9)).toBeNull();
   // Easing in, it fades up and rises into place.
   expect(track.at(1.06)).toMatchObject({ index: 0, keys: z, count: 1, opacity: expect.closeTo(0.5, 6) });
@@ -238,11 +222,20 @@ test('keycaps show for their duration, count repeated presses, and a new Shortcu
   expect(keycapTrack([{ t: 1, keys: k }], {}).at(2.4)).not.toBeNull();
 });
 
+test('keycaps leave out a key pressed alone unless singleKeys is set', () => {
+  const shortcuts = [{ t: 1, keys: ['Meta', 'K'] }, { t: 3, keys: ['Escape'] }, { t: 5, keys: ['Shift', 'Tab'] }];
+  expect(DEFAULT_STYLE.keycaps.singleKeys).toBe(false);
+  const track = keycapTrack(shortcuts, DEFAULT_STYLE.keycaps);
+  expect(track.shows.map(show => show.keys)).toEqual([['Meta', 'K'], ['Shift', 'Tab']]);
+  expect(track.at(3.2)).toBeNull();
+  expect(keycapTrack(shortcuts, { ...DEFAULT_STYLE.keycaps, singleKeys: true }).at(3.2)).toMatchObject({ keys: ['Escape'] });
+});
+
 test('the first Edit shows the Shortcuts the Timeline recorded, and a Look keeps the keycap styling but not them', () => {
   const timeline = { events: [{ type: 'click', t: 1, x: 0, y: 0, box }, { type: 'shortcut', t: 2, keys: ['Meta', 'K'] }, { type: 'type', t: 2, end: 2, box }] };
   const edit = createEdit(scenarioSchema.parse({ name: 'demo', url: 'https://example.com', keycaps: { symbols: false } }), timeline, []);
   expect(edit.shortcuts).toEqual([{ t: 2, keys: ['Meta', 'K'] }]);
-  expect(edit.keycaps).toEqual({ draw: 'keycaps', duration: 1.5, symbols: false });
+  expect(edit.keycaps).toEqual({ draw: 'keycaps', duration: 1.5, singleKeys: false, symbols: false });
   expect(withDefaults({}).shortcuts).toEqual([]);
   const look = lookFromEdit(edit);
   expect(look).not.toHaveProperty('shortcuts');
@@ -393,7 +386,7 @@ test('adopting a Look keeps camera targets, the frame rate and the address bar',
   expect(next.output).toMatchObject({ width: 1080, height: 1920, fps: 30, quality: 22 });
   expect(next.camera.targets).toEqual(edit.camera.targets);
   // Changing an item's parameters merges; naming a new drawing replaces the item.
-  expect(applyLook(edit, { cursor: { size: 40 } }).cursor).toEqual({ draw: 'arrow', size: 40, color: '#ffffff', press: 0.8, hideAfter: 2.5 });
+  expect(applyLook(edit, { cursor: { size: 40 } }).cursor).toEqual({ draw: 'arrow', size: 40, color: '#ffffff', press: 0.8 });
   expect(applyLook(edit, { cursor: { image: 'hand.png', hotspot: [4, 2] } }).cursor).toEqual({ image: 'hand.png', hotspot: [4, 2] });
   expect(edit.clickEffect).toBe(false);
   expect(applyLook(edit, { clickEffect: { draw: 'spark' } }).clickEffect).toEqual({ draw: 'spark' });
