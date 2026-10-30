@@ -69,6 +69,33 @@ test('probe records the pointer path, clicks with their target box and release, 
   } finally { await browser.close(); }
 }, 30_000);
 
+test('probe records right clicks, and Shortcuts but not typing', async () => {
+  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
+  try {
+    const page = await browser.newPage({ viewport: { width: 640, height: 480 } });
+    await page.setContent('<div id="board" tabindex="0" style="position:fixed;left:20px;top:20px;width:200px;height:200px"></div><input style="position:fixed;left:300px;top:100px;width:200px;height:30px">');
+    const startedAtMs = Date.now();
+    await installProbe(page);
+    await page.mouse.click(100, 100, { button: 'right', delay: 50 });
+    await page.keyboard.press('Meta+K');
+    await page.keyboard.press('r');
+    await page.mouse.click(400, 115);
+    await page.keyboard.type('Hi there', { delay: 20 });
+    await page.keyboard.press('Control+a');
+    await page.keyboard.press('Enter');
+    const timeline = await collectTimeline(page, startedAtMs);
+    const [rightClick] = timeline.events;
+    expect(rightClick).toMatchObject({ type: 'click', button: 'right', x: 100, y: 100 });
+    expect(rightClick.end - rightClick.t).toBeGreaterThanOrEqual(0.04);
+    expect(timeline.events.filter(e => e.type === 'click').map(e => e.button)).toEqual(['right', undefined]);
+    const shortcuts = timeline.events.filter(e => e.type === 'shortcut');
+    expect(shortcuts.map(e => e.keys)).toEqual([['Meta', 'K'], ['R'], ['Control', 'A']]);
+    expect(shortcuts.every((e, i) => e.t >= 0 && (i === 0 || e.t >= shortcuts[i - 1].t))).toBe(true);
+    // Typed text never reaches the Timeline.
+    expect(JSON.stringify(timeline)).not.toContain('there');
+  } finally { await browser.close(); }
+}, 30_000);
+
 test('probe records the cursor shape the page asks for, as the browser resolves it', async () => {
   const browser = await chromium.launch({ headless: true, channel: 'chromium' });
   try {
@@ -203,6 +230,29 @@ test('Render draws the Cursor in the shape the page asked for, pressed while hel
     // Still for a second after the release, it fades out.
     const gone = await frame(2.4, [thumb, palm]);
     expect(Math.max(...gone)).toBeLessThan(40);
+  } finally { await browser.close(); await fs.rm(dir, { recursive: true, force: true }); }
+}, 60_000);
+
+test('Render shows keycaps for each Shortcut outside the camera, fading in and out', async () => {
+  const dir = await fs.mkdtemp(join(tmpdir(), 'cuetake-keycaps-'));
+  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
+  try {
+    const sourcePath = join(dir, 'source.webm'), outputPath = join(dir, 'final.mp4');
+    await fs.writeFile(sourcePath, await syntheticSource(browser, 0.6));
+    // An opaque red cap shows where the built-in draws; zoomed in, it must stay put.
+    const edit = bare({
+      keycaps: { cap: '#ff0000', edge: '#ff0000', bottom: 300 }, shortcuts: [{ t: 0.5, keys: ['Meta', 'K'] }],
+      camera: { maxZoom: 2, padding: 0, lead: 0.1, response: 0.1, hold: 2, endWide: 0, follow: false, targets: [{ t: 0.2, box: { x: 240, y: 100, width: 20, height: 20 } }] },
+    });
+    const render = await renderFinal({ sourcePath, finalPath: outputPath, timeline: { viewport: { width: 320, height: 240 }, duration: 2.4 }, ...forRender(edit, dir) });
+    expect(render.keycaps).toEqual([{ t: 0.5, keys: ['Meta', 'K'], presses: 1, frames: [15, 59] }]);
+    // On a 320×240 Final a 1080p pixel is 2/9 of an output pixel: the ⌘ cap spans about 144 to 159 px across
+    // and 159 to 173 px down, 300 above the bottom; this point is inside it, left of the symbol.
+    const cap = [146, 168];
+    const red = rgb => rgb[0] > 180 && rgb[1] < 80;
+    expect(red((await pixelsAt(browser, await extractFrame(outputPath, 0.4), [cap]))[0])).toBe(false);
+    expect(red((await pixelsAt(browser, await extractFrame(outputPath, 1), [cap]))[0])).toBe(true);
+    expect(red((await pixelsAt(browser, await extractFrame(outputPath, 2.2), [cap]))[0])).toBe(false);
   } finally { await browser.close(); await fs.rm(dir, { recursive: true, force: true }); }
 }, 60_000);
 

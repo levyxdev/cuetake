@@ -49,7 +49,8 @@ Only `name` and `url` are required in config. Other fields use the shown default
 | `wait(ms)` | Hold the current state. |
 | `move(x, y, durationMs?)` | Move along a slight arc using viewport CSS coordinates. `0` jumps there. |
 | `hover(locator, { duration })` | Move onto a visible locator and rest there without pressing, so the page shows its hover state. It adds no camera target; use `focus` to frame what it reveals. |
-| `click(locator, { duration, focus })` | Move to a visible locator, pause, press near its center for about a tenth of a second, release, pause. A CSS selector also works. |
+| `click(locator, { duration, button, focus })` | Move to a visible locator, pause, press near its center for about a tenth of a second, release, pause. A CSS selector also works. `button: 'right'` opens the page's context menu. |
+| `press(keys, { focus })` | Pause, press a key or combination on whatever has focus, such as `'Meta+K'`, `'ControlOrMeta+Z'` or `'Escape'`, hold it for a moment, pause. The Final shows it as keycaps (see below). |
 | `type(locator, text, { msPerChar=70, focus })` | Click a field, then type with uneven per-character delays averaging `msPerChar`, longer after a word. |
 | `drag({x,y}, {x,y}, { duration, focus })` | Move to the start, press, move more slowly than an empty-handed move, then release. |
 | `focus({x,y,width,height}, seconds?)` | Add a camera target; defaults to the current time. |
@@ -59,6 +60,8 @@ Only `name` and `url` are required in config. Other fields use the shown default
 The Director moves like a person. A move takes longer the farther and smaller its target is (Fitts's law), starts quickly and settles slowly, and at the default speed stays under about 2000 CSS px/s; it pauses briefly before pressing and after releasing, and holds a click's button for a moment, so the Cursor's press shows. A `duration` fixes one move's length in ms and `msPerChar` one field's typing pace; the arc, pauses and uneven typing stay. The same Scenario and `seed` move the same way on every recording. Changing any of this needs a new recording.
 
 `move` starts from (0,0). If preparation positioned the cursor elsewhere, initialize it with `await d.move(x, y, 0)` at the start of `run`.
+
+Capture records each Shortcut, a key pressed outside a text field or with Control, Alt or Meta held inside one, whether it came from `press` or from Playwright input directly, and the Final shows its keycaps for a moment, outside the camera, with platform symbols (`⌃ ⌥ ⇧ ⌘`). Typing into a field shows nothing extra, since the page shows it, and the typed text never reaches the Timeline. A Shortcut is shown as pressed, so press `Meta` for a macOS demo; `ControlOrMeta` presses the one the recording platform uses. The Shortcuts are copied into `edit.json`, where one can be relabeled or removed without recording again.
 
 Capture records the cursor shape the page asks for (a hand over links, an I-beam over text, whatever a canvas app sets), and Render draws the Cursor in that shape; the page's own cursor never appears in the Source.
 
@@ -83,8 +86,8 @@ Use actual locators for clicks. Canvas drags often require coordinates; derive o
   scenario.mjs       Snapshot of the original scenario module
   source.webm        Source: original high-resolution VP9 capture
   capture.json       Track settings and video frame callback observations
-  timeline.json      Timeline: pointer path, cursor shapes, clicks and drags with their release, typing, focus and said Lines, in seconds and CSS pixels
-  edit.json          Edit: camera targets and settings, cursor, click effect, frame, Line starts and volumes, Subtitles, output
+  timeline.json      Timeline: pointer path, cursor shapes, clicks and drags with their release, typing, Shortcuts, focus and said Lines, in seconds and CSS pixels
+  edit.json          Edit: camera targets and settings, cursor, click effect, Shortcuts and keycaps, frame, Line starts and volumes, Subtitles, output
   narration/         The Narration: narration.json (text, word timings) and each Line's audio, named by its id
   subtitles.srt/.vtt Subtitles of the placed Lines, from the last Render
   styles/            Shaders, drawing code and images the Edit names
@@ -97,7 +100,7 @@ Use actual locators for clicks. Canvas drags often require coordinates; derive o
 
 A copied scenario snapshot may import helper modules from its original project. It is a record of the scenario, not a bundled runnable archive. Keep business scenarios in their application repository.
 
-To edit a completed take, change `edit.json` (camera settings, target boxes and times, and the styling in [styling.md](styling.md)), then run `cuetake render <take>`. To compare styling first, run `cuetake preview <take> --look <name|file.json>...`, which composes stills without touching `edit.json` or the Final. A Look is a partial Edit holding any styling and camera settings, but not camera targets, `frame.url` or `output.fps`. `cuetake look apply` merges one into `edit.json`, and `cuetake record --look` seeds a new take's Edit with it under the Scenario config. The Scenario config only seeds the first Edit. Changing what happens on the page requires recording again. `render` automatically runs verification; `verify` checks without rendering.
+To edit a completed take, change `edit.json` (camera settings, target boxes and times, the Shortcuts shown as `shortcuts: [{ "t": 2.4, "keys": ["Meta", "K"] }]`, and the styling in [styling.md](styling.md)), then run `cuetake render <take>`. To compare styling first, run `cuetake preview <take> --look <name|file.json>...`, which composes stills without touching `edit.json` or the Final. A Look is a partial Edit holding any styling and camera settings, but not camera targets, Shortcuts, `frame.url` or `output.fps`. `cuetake look apply` merges one into `edit.json`, and `cuetake record --look` seeds a new take's Edit with it under the Scenario config. The Scenario config only seeds the first Edit. Changing what happens on the page requires recording again. `render` automatically runs verification; `verify` checks without rendering.
 
 `edit.json` also carries `output.fps`, the Final's frame rate, which a new Take takes from `capture.fps`, and `frame.url`, the address bar's text, which defaults to the Scenario's host. Encoders without a quantizer mode fall back to a bitrate, recorded in `render.json`.
 

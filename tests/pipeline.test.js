@@ -11,6 +11,7 @@ import { lookFromEdit, applyLook, mergeLook, summarize, saveLook, loadLook, list
 import { bundle, codeRefs, forRender, BUILTIN_DIR } from '../src/styles.js';
 import { npxFolders, uninstall } from '../src/uninstall.js';
 import { subtitleRows, subtitleCues, lineProblems, toSrt, toVtt } from '../src/narration.js';
+import { shortcutKeys, keycapShows, keycapTrack } from '../src/shortcuts.js';
 import fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -186,6 +187,69 @@ test('clicks and drag starts spark for the click effect duration', () => {
   expect(sparksAt(list, effect, 1.2)).toEqual([{ x: 5, y: 6, progress: expect.closeTo(0.5, 6) }]);
   expect(sparksAt(list, effect, 1.5)).toEqual([]);
   expect(sparksAt(list, false, 1.2)).toEqual([]);
+});
+
+test('a key shows outside a text field, or with Control, Alt or Meta inside one; typing, lone modifiers and repeats do not', () => {
+  const down = (key, code, more = {}) => ({ key, code, ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, repeat: false, field: false, ...more });
+  expect(shortcutKeys(down('k', 'KeyK', { metaKey: true }))).toEqual(['Meta', 'K']);
+  expect(shortcutKeys(down('r', 'KeyR'))).toEqual(['R']);
+  expect(shortcutKeys(down('Escape', 'Escape'))).toEqual(['Escape']);
+  expect(shortcutKeys(down(' ', 'Space'))).toEqual(['Space']);
+  // Modifiers come in macOS order, and a letter is named by its key whatever the modifiers made of it.
+  expect(shortcutKeys(down('Π', 'KeyP', { metaKey: true, shiftKey: true, altKey: true, ctrlKey: true }))).toEqual(['Control', 'Alt', 'Shift', 'Meta', 'P']);
+  expect(shortcutKeys(down('!', 'Digit1', { shiftKey: true }))).toEqual(['Shift', '1']);
+  // In a text field only Control, Alt or Meta make a key a Shortcut; Shift is typing a capital.
+  expect(shortcutKeys(down('a', 'KeyA', { field: true }))).toBeNull();
+  expect(shortcutKeys(down('A', 'KeyA', { field: true, shiftKey: true }))).toBeNull();
+  expect(shortcutKeys(down('Enter', 'Enter', { field: true }))).toBeNull();
+  expect(shortcutKeys(down('a', 'KeyA', { field: true, metaKey: true }))).toEqual(['Meta', 'A']);
+  expect(shortcutKeys(down('z', 'KeyZ', { field: true, ctrlKey: true }))).toEqual(['Control', 'Z']);
+  expect(shortcutKeys(down('Meta', 'MetaLeft', { metaKey: true }))).toBeNull();
+  expect(shortcutKeys(down('Shift', 'ShiftLeft', { shiftKey: true }))).toBeNull();
+  expect(shortcutKeys(down('k', 'KeyK', { metaKey: true, repeat: true }))).toBeNull();
+  expect(shortcutKeys(down('Process', ''))).toBeNull();
+});
+
+test('keycaps show for their duration, count repeated presses, and a new Shortcut replaces the one showing', () => {
+  const k = ['Meta', 'K'], z = ['Meta', 'Z'];
+  expect(keycapShows([{ t: 1, keys: k }, { t: 4, keys: k }], 1.5).map(show => [show.t, show.end])).toEqual([[1, 2.5], [4, 5.5]]);
+  const repeats = keycapShows([{ t: 1, keys: z }, { t: 1.4, keys: z }, { t: 1.8, keys: z }], 1.5);
+  expect(repeats).toEqual([{ t: 1, end: 3.3, keys: z, presses: [1, 1.4, 1.8], replacing: false, replaced: false }]);
+  const swapped = keycapShows([{ t: 1, keys: k }, { t: 1.5, keys: z }], 1.5);
+  expect(swapped.map(({ t, end, replacing, replaced }) => ({ t, end, replacing, replaced }))).toEqual([
+    { t: 1, end: 1.5, replacing: false, replaced: true }, { t: 1.5, end: 3, replacing: true, replaced: false },
+  ]);
+
+  const track = keycapTrack([{ t: 1, keys: z }, { t: 1.4, keys: z }, { t: 3, keys: k }, { t: 3.5, keys: ['Escape'] }], { duration: 1.5 });
+  expect(track.at(0.9)).toBeNull();
+  // Easing in, it fades up and rises into place.
+  expect(track.at(1.06)).toMatchObject({ index: 0, keys: z, count: 1, opacity: expect.closeTo(0.5, 6) });
+  expect(track.at(1.06).rise).toBeGreaterThan(0);
+  expect(track.at(1.2)).toEqual({ index: 0, keys: z, count: 1, opacity: 1, rise: 0 });
+  expect(track.at(1.5)).toMatchObject({ count: 2, opacity: 1 });
+  // It fades out over the end of its duration, from the last press.
+  expect(track.at(2.775).opacity).toBeCloseTo(0.5);
+  expect(track.at(2.95)).toBeNull();
+  // A replacement appears at once, without fading the one before out.
+  expect(track.at(3.49)).toMatchObject({ index: 1, opacity: 1 });
+  expect(track.at(3.5)).toEqual({ index: 2, keys: ['Escape'], count: 1, opacity: 1, rise: 0 });
+  expect(track.at(5.1)).toBeNull();
+  expect(keycapTrack([{ t: 1, keys: k }], false).at(1.2)).toBeNull();
+  expect(keycapTrack([{ t: 1, keys: k }], {}).at(2.4)).not.toBeNull();
+});
+
+test('the first Edit shows the Shortcuts the Timeline recorded, and a Look keeps the keycap styling but not them', () => {
+  const timeline = { events: [{ type: 'click', t: 1, x: 0, y: 0, box }, { type: 'shortcut', t: 2, keys: ['Meta', 'K'] }, { type: 'type', t: 2, end: 2, box }] };
+  const edit = createEdit(scenarioSchema.parse({ name: 'demo', url: 'https://example.com', keycaps: { symbols: false } }), timeline, []);
+  expect(edit.shortcuts).toEqual([{ t: 2, keys: ['Meta', 'K'] }]);
+  expect(edit.keycaps).toEqual({ draw: 'keycaps', duration: 1.5, symbols: false });
+  expect(withDefaults({}).shortcuts).toEqual([]);
+  const look = lookFromEdit(edit);
+  expect(look).not.toHaveProperty('shortcuts');
+  expect(look.keycaps).toEqual(edit.keycaps);
+  expect(applyLook(edit, { keycaps: false })).toMatchObject({ keycaps: false, shortcuts: edit.shortcuts });
+  const { edit: served } = forRender(edit, '/take');
+  expect(served.keycaps).toMatchObject({ kind: 'draw', ref: 'keycaps', symbols: false, fontSize: 34, duration: 1.5, url: expect.stringMatching(/^\/files\//) });
 });
 
 /** A move sampled the way the Director plays it: one point per frame at 60 fps. */

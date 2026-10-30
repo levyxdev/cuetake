@@ -4,7 +4,8 @@
  *
  * Each output frame is the Background (drawn once, still in output pixels), the window effects (drawn
  * every frame around the window as the camera moves it), the page, then the chrome, click effects and
- * Cursor. Everything but the page is agent-written shaders, drawing code or images (ADR 0005).
+ * Cursor, and outside the camera the Subtitles and keycaps. Everything but the page is agent-written
+ * shaders, drawing code or images (ADR 0005).
  *
  * Spaces: camera crops are CSS pixels of the viewport; the Source texture is sampled by UV only;
  * "stage" is the Final's pixels at camera zoom 1, laid out by stage.js.
@@ -14,6 +15,7 @@ import { cameraTrack } from '/camera.js';
 import { cursorTrack, drawnShape, pointerAt, presses, sparksAt } from '/cursor.js';
 import { layout, outputSize, cameraView, previewSheet, brandColor } from '/stage.js';
 import { burnsIn, cuesFor, lineProblems } from '/narration.js';
+import { keycapTrack } from '/shortcuts.js';
 
 const VERTEX = `#version 300 es
 in vec2 p; void main() { gl_Position = vec4(p, 0, 1); }`;
@@ -370,17 +372,17 @@ async function loadClickEffect(item, cursor) {
 }
 
 /**
- * Subtitles: drawing code exporting `draw(ctx, { width, height, rows, params, files })` in 1080p
- * pixels over the whole Final. `canvas(width, height, rows)` rasterizes one cue at output size.
+ * Drawing code over the whole Final in 1080p pixels, outside the camera, such as Subtitles and keycaps:
+ * `draw(ctx, { width, height, ...what, params, files })`. `canvas(width, height, what)` rasterizes it at output size.
  */
-async function loadSubtitles(item) {
-  if (item.kind !== 'draw') throw fail(item, 'Subtitles are drawing code');
+async function loadScreenDrawing(item, name) {
+  if (item.kind !== 'draw') throw fail(item, `${name} are drawing code`);
   const module = await loadModule(item), files = await loadFiles(item), params = paramsOf(item);
   return {
-    canvas(width, height, rows) {
+    canvas(width, height, what) {
       const unit = Math.min(width, height) / 1080, ctx = canvas2d(width, height);
       ctx.scale(unit, unit);
-      try { module.draw(ctx, { width: width / unit, height: height / unit, rows, params, files }); } catch (error) { throw fail(item, error); }
+      try { module.draw(ctx, { width: width / unit, height: height / unit, ...what, params, files }); } catch (error) { throw fail(item, error); }
       return ctx.canvas;
     },
   };
@@ -481,7 +483,7 @@ async function encoderConfig(width, height, fps, quality) {
  * Source's first frame: Background layers see it, and it picks the brand color.
  */
 async function createScene(edit, viewport, { pointer, shapes, events }, firstFrame, sourceWidth, sourceHeight, cues = []) {
-  const { camera, cursor, clickEffect, frame, subtitles } = edit;
+  const { camera, cursor, clickEffect, keycaps, shortcuts, frame, subtitles } = edit;
   const chrome = frame.chrome ? await loadChrome(frame.chrome, viewport.width, frame.url ?? '') : null;
   const stage = layout(edit, viewport, chrome?.height ?? 0);
   const compositor = createCompositor(stage, sourceWidth, sourceHeight, brandOf(firstFrame));
@@ -497,16 +499,25 @@ async function createScene(edit, viewport, { pointer, shapes, events }, firstFra
   const drawn = new Set(Object.keys(cursorSprites)), track = cursor && cursorTrack({ pointer, shapes, events }, cursor);
   const effect = clickEffect ? await loadClickEffect(clickEffect, cursor ? Object.fromEntries(Object.entries(cursor).filter(([key]) => !['ref', 'kind', 'url', 'files'].includes(key))) : {}) : null;
   const pressList = presses(events);
-  const subtitleDrawing = burnsIn(subtitles) && cues.length ? await loadSubtitles(subtitles) : null;
-  let effectTexture = null, subtitleTexture = null, shown = -1;
+  const subtitleDrawing = burnsIn(subtitles) && cues.length ? await loadScreenDrawing(subtitles, 'Subtitles') : null;
+  const keys = keycapTrack(shortcuts, keycaps), keycapDrawing = keys.shows.length ? await loadScreenDrawing(keycaps, 'Keycaps') : null;
+  const unit = Math.min(stage.width, stage.height) / 1080;
+  let effectTexture = null, subtitleTexture = null, shown = -1, keycapTexture = null, keycapsShown = null;
   return {
-    stage, compositor,
-    /** Draws output time `t` with the camera showing `crop`, a viewport rectangle in CSS pixels; returns the index of the cue it shows, or -1. */
+    stage, compositor, keycapShows: keys.shows,
+    /**
+     * Draws output time `t` with the camera showing `crop`, a viewport rectangle in CSS pixels; returns
+     * the index of the cue it shows, or -1, and the keycap show, or null.
+     */
     draw(t, crop) {
       const view = cameraView(crop, stage, viewport);
       const cue = subtitleDrawing ? cues.findIndex(c => t >= c.start && t < c.end) : -1;
-      if (cue >= 0 && cue !== shown) subtitleTexture = compositor.sprite(subtitleDrawing.canvas(stage.width, stage.height, cues[cue].rows), subtitleTexture, false);
+      if (cue >= 0 && cue !== shown) subtitleTexture = compositor.sprite(subtitleDrawing.canvas(stage.width, stage.height, { rows: cues[cue].rows }), subtitleTexture, false);
       shown = cue;
+      // Each show is drawn once, and again when its count goes up; CueTake fades it and lifts it into place.
+      const keycap = keycapDrawing && keys.at(t), drawnAs = keycap && `${keycap.index}×${keycap.count}`;
+      if (keycap && drawnAs !== keycapsShown) keycapTexture = compositor.sprite(keycapDrawing.canvas(stage.width, stage.height, { keys: keycap.keys, count: keycap.count }), keycapTexture, false);
+      keycapsShown = drawnAs ?? keycapsShown;
       compositor.frame(view.x, view.y, view.zoom, draw => {
         if (chromeTexture) draw(chromeTexture, [stage.window.x, stage.window.y, stage.window.w, stage.chrome]);
         for (const press of effect ? sparksAt(pressList, clickEffect, t) : []) {
@@ -523,8 +534,11 @@ async function createScene(edit, viewport, { pointer, shapes, events }, firstFra
           const shape = drawnShape(now.shape, drawn), sprite = cursorSprites[shape], k = now.scale, frames = cursorTextures[shape];
           draw(frames[Math.floor(t * frames.length) % frames.length], [...at(now.x + sprite.offset.x * k, now.y + sprite.offset.y * k), sprite.size.w * k * stage.scale, sprite.size.h * k * stage.scale], now.opacity);
         }
-      }, cue >= 0 ? draw => draw(subtitleTexture, [0, 0, stage.width, stage.height]) : null);
-      return cue;
+      }, cue >= 0 || keycap ? draw => {
+        if (cue >= 0) draw(subtitleTexture, [0, 0, stage.width, stage.height]);
+        if (keycap) draw(keycapTexture, [0, keycap.rise * unit, stage.width, stage.height], keycap.opacity);
+      } : null);
+      return { cue, keycap };
     },
   };
 }
@@ -584,7 +598,7 @@ window.cuetakeRender = async ({ sourceUrl, finalUrl, duration, viewport, pointer
 
   let current = await reader.next(), next = await reader.next(), uploaded = null;
   if (!current) throw new Error('Source has no video frames');
-  const cues = voice?.cues ?? [], shownFrames = cues.map(() => null);
+  const cues = voice?.cues ?? [], shownFrames = cues.map(() => null), keycapFrames = [];
   const scene = await createScene(edit, viewport, { pointer, shapes, events }, current, track.codedWidth, track.codedHeight, cues), { compositor } = scene;
   const cameraPath = cameraTrack({ targets: camera.targets, viewport, camera, duration, fps, pointerAt: t => pointerAt(pointer, t) });
   const origin = current.timestamp;
@@ -596,8 +610,9 @@ window.cuetakeRender = async ({ sourceUrl, finalUrl, duration, viewport, pointer
       while (next && next.timestamp <= due) { current.close(); current = next; next = await reader.next(); }
       if (uploaded !== current) { compositor.upload(current); uploaded = current; }
       if (audio && i % fps === 0) await feedAudio(i / fps + 1);
-      const cue = scene.draw(i / fps, cameraPath[i]);
+      const { cue, keycap } = scene.draw(i / fps, cameraPath[i]);
       if (cue >= 0) shownFrames[cue] = [shownFrames[cue]?.[0] ?? i, i];
+      if (keycap) keycapFrames[keycap.index] = [keycapFrames[keycap.index]?.[0] ?? i, i];
       const videoFrame = new VideoFrame(compositor.canvas, { timestamp: Math.round(i * 1e6 / fps), duration: Math.round(1e6 / fps) });
       encoder.encode(videoFrame, { keyFrame: i % (fps * 2) === 0, ...(quantizer ? { avc: { quantizer } } : {}) });
       videoFrame.close();
@@ -616,6 +631,8 @@ window.cuetakeRender = async ({ sourceUrl, finalUrl, duration, viewport, pointer
     width, height, frames: frameCount, sourceFrames: reader.stats().decoded, codec: config.codec,
     rateControl: quantizer ? `quantizer ${quantizer}` : `variable ${config.bitrate} bps`, gpu: compositor.gpu,
     seconds: +((performance.now() - started) / 1000).toFixed(2),
+    // Each keycap show with the first and last output frame it was drawn on.
+    ...(scene.keycapShows.length && { keycaps: scene.keycapShows.map((show, i) => ({ t: show.t, keys: show.keys, presses: show.presses.length, frames: keycapFrames[i] ?? null })) }),
     ...(voice && {
       audio: { codec: audio.codec, sampleRate: SAMPLE_RATE, channels: 1, bitrate: AUDIO_BITRATE },
       lines: voice.placed.map(({ id, start, duration }) => ({ id, start, duration })),

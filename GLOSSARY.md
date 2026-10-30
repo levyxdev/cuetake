@@ -27,8 +27,12 @@ The unedited picture of the page produced by Capture, in device pixels.
 _Avoid_: raw video, recording
 
 **Timeline**:
-Every interaction observed during Capture (pointer path, presses and releases, the cursor shape the page asked for, typing, focus targets, where each Line was said), timed from the start of Capture and positioned in CSS pixels.
+Every interaction observed during Capture (pointer path, presses and releases, the cursor shape the page asked for, typing, Shortcuts, focus targets, where each Line was said), timed from the start of Capture and positioned in CSS pixels.
 _Avoid_: event log, camera events
+
+**Shortcut**:
+A key or combination pressed outside a text field, or with Control, Alt or Meta held inside one, which the Final shows as keycaps; typing into a field is not one, since the page already shows it.
+_Avoid_: hotkey, keystroke, key event
 
 **Auth profile**:
 A saved, named login state that a Take can start from, so login never happens on camera.
@@ -37,7 +41,7 @@ _Avoid_: session, cookies, login state
 ### Rendering
 
 **Edit**:
-The editable choices that turn a Source and Timeline into a Final: camera, cursor, click effects, frame styling, Line timing, Subtitles, and output, together with the shader, drawing-code and image files those choices name, kept in the Take.
+The editable choices that turn a Source and Timeline into a Final: camera, cursor, click effects, the Shortcuts shown and their keycaps, frame styling, Line timing, Subtitles, and output, together with the shader, drawing-code and image files those choices name, kept in the Take.
 _Avoid_: camera edit, render config, project settings
 
 **Background**:
@@ -49,7 +53,7 @@ The pointer Render draws over the page, following the Timeline's pointer path, i
 _Avoid_: mouse, pointer sprite
 
 **Look**:
-A named, reusable set of the Edit choices that do not depend on one Take (frame styling, cursor, click effects, Subtitle styling, output size and quality, camera behavior), with the files they name, that a new or existing Take can adopt. A Look is saved locally, for the directory CueTake runs in, or globally, for every directory; a local Look hides a global one with the same name.
+A named, reusable set of the Edit choices that do not depend on one Take (frame styling, cursor, click effects, keycap styling, Subtitle styling, output size and quality, camera behavior), with the files they name, that a new or existing Take can adopt. A Look is saved locally, for the directory CueTake runs in, or globally, for every directory; a local Look hides a global one with the same name.
 _Avoid_: style, theme, preset
 
 **Preview**:

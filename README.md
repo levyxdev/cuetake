@@ -12,6 +12,7 @@ Built entirely for AI agents, CueTake turns browser interactions into sharp prod
 - An automatic camera in the style of Screen Studio: it arrives just before each click, field and drag, follows the cursor on a spring, and ends on the wide shot.
 - The page framed in a browser or macOS window over fluted glass lit in the product's brand color, at any output size; backgrounds, chrome, cursors and click effects are shaders or drawing code the agent can write.
 - A Cursor drawn at Render time in the shape the page asks for, pressing on each click and fading out when still, so a Take can be restyled without recording again.
+- Keyboard shortcuts shown as keycaps, so a demo of a command palette or an editor teaches the keys it presses.
 - Styling chosen in conversation: the agent shows Previews of candidate Looks side by side in about a second, and the Look you pick is saved for later Takes.
 - Rendering in Chromium with WebGL and WebCodecs: no FFmpeg, 4K60 by default.
 - A separate folder for every Take: Source, Timeline, Edit, Final MP4, and verification.
@@ -61,7 +62,7 @@ A successful command is a technical check, not an editorial approval. Watch the 
 
 ## How it works
 
-Playwright drives an isolated Chromium tab. Chromium captures the tab at device-pixel resolution using `getDisplayMedia`; a VP9 `MediaRecorder` saves the source. An in-page probe records the pointer path, clicks, drags and typing into the Timeline. Render then composes the camera path in a headless Chromium page with WebGL and encodes H.264 with WebCodecs; see [ADR 0001](docs/adr/0001-render-in-browser-with-webgl-and-webcodecs.md).
+Playwright drives an isolated Chromium tab. Chromium captures the tab at device-pixel resolution using `getDisplayMedia`; a VP9 `MediaRecorder` saves the source. An in-page probe records the pointer path, clicks, drags, typing and shortcuts into the Timeline. Render then composes the camera path in a headless Chromium page with WebGL and encodes H.264 with WebCodecs; see [ADR 0001](docs/adr/0001-render-in-browser-with-webgl-and-webcodecs.md).
 
 Source capture is variable frame rate. Static scenes may drop to approximately one captured frame per second, and busy scenes can drop frames. A 60 fps output does not imply 60 unique source frames every second. Capture callback statistics and output metadata are retained in each take. No motion interpolation is used.
 

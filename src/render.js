@@ -21,6 +21,7 @@ const pageFiles = {
   '/cursor.js': { path: fileURLToPath(new URL('./cursor.js', import.meta.url)), type: 'text/javascript' },
   '/stage.js': { path: fileURLToPath(new URL('./stage.js', import.meta.url)), type: 'text/javascript' },
   '/narration.js': { path: fileURLToPath(new URL('./narration.js', import.meta.url)), type: 'text/javascript' },
+  '/shortcuts.js': { path: fileURLToPath(new URL('./shortcuts.js', import.meta.url)), type: 'text/javascript' },
   '/mediabunny.js': { path: mediabunnyBundle, type: 'text/javascript' },
 };
 

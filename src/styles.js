@@ -19,6 +19,7 @@ export const BUILTINS = {
   'arrow-thin': { file: 'arrow.js', params: { thin: true } },
   dot: { file: 'dot.js', params: {} },
   spark: { file: 'spark.js', params: { radius: 32, length: 16, count: 8 } },
+  keycaps: { file: 'keycaps.js', params: { symbols: true, fontSize: 34, color: '#ffffff', cap: '#1f1f23e6', edge: '#ffffff40', bottom: 220 } },
   subtitles: { file: 'subtitles.js', params: { fontSize: 40, weight: 600, color: '#ffffff', band: '#000000b3', bottom: 72, padding: 14 } },
 };
 export const KINDS = ['shader', 'draw', 'image'];
@@ -26,8 +27,8 @@ export const isFile = ref => typeof ref === 'string' && extname(ref) !== '';
 
 /** Every drawn item an Edit or (partial) Look holds. */
 function items(style) {
-  const { frame, cursor, clickEffect, subtitles } = style ?? {};
-  return [...(Array.isArray(frame?.background) ? frame.background : []), ...(Array.isArray(frame?.effects) ? frame.effects : []), frame?.chrome, cursor, clickEffect, subtitles]
+  const { frame, cursor, clickEffect, keycaps, subtitles } = style ?? {};
+  return [...(Array.isArray(frame?.background) ? frame.background : []), ...(Array.isArray(frame?.effects) ? frame.effects : []), frame?.chrome, cursor, clickEffect, keycaps, subtitles]
     .filter(item => item && typeof item === 'object');
 }
 

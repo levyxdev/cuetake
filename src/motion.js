@@ -1,7 +1,7 @@
 /**
  * How the Director's hand moves: durations from Fitts's law, a quick start and a long settle, a
- * slight arc, pauses around presses, a held click and uneven typing. Pure and seeded, so a Scenario moves the
- * same way on every recording. CSS pixels and milliseconds throughout.
+ * slight arc, pauses around presses and Shortcuts, a held click or key and uneven typing. Pure and
+ * seeded, so a Scenario moves the same way on every recording. CSS pixels and milliseconds throughout.
  */
 
 const REACH_MS = 250, REACH_MS_PER_BIT = 150; // Fitts's law: REACH_MS + REACH_MS_PER_BIT * log2(distance / size + 1)
@@ -10,7 +10,7 @@ const DRAG_SLOWDOWN = 1.5; // a held button makes people slower
 const POINT_SIZE = 24; // target size for moves to a bare point
 const BEND = 0.1, MAX_BEND = 80; // the arc's sideways offset, as a share of the distance and in CSS px
 const LANDING = 0.15, MAX_LANDING = 8; // a click lands at most this share of its box's size, and CSS px, from the center
-const PAUSES = { beforePress: 120, press: 100, afterRelease: 150, afterGrab: 100, beforeDrop: 100 }; // press: how long a click holds the button
+const PAUSES = { beforePress: 120, press: 100, afterRelease: 150, afterGrab: 100, beforeDrop: 100, beforeKey: 150, afterKey: 250 }; // press: how long a click or key is held
 const PAUSE_JITTER = 0.25, TYPING_JITTER = 0.4, WORD_BREAK = 1.5;
 
 /** A deterministic source of numbers in [0, 1) (mulberry32). */

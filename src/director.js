@@ -43,14 +43,23 @@ export function createDirector(page, startedAt, fps, focusTargets, wideWindows, 
     await glide(point, { size: Math.min(box.width, box.height), duration });
     return { target, position: { x: point.x - box.x, y: point.y - box.y } };
   }
+  /** `button: 'right'` opens the page's context menu instead. */
   function click(locator, opts) {
-    const { duration, ...rest } = options(opts, 'duration');
+    const { duration, button = 'left', ...rest } = options(opts, 'duration');
     return act(rest, async () => {
       const { target, position } = await approach(locator, duration, 'Click');
       await pause('beforePress');
       // A person holds the button for a moment, so the Cursor's press shows.
-      await target.click({ position, delay: pauseMs('press', speed, rand) });
+      await target.click({ position, button, delay: pauseMs('press', speed, rand) });
       await pause('afterRelease');
+    });
+  }
+  /** Presses a key or combination, such as 'Meta+K', on whatever has focus; the Final shows it as keycaps. */
+  function press(keys, opts) {
+    return act(options(opts), async () => {
+      await pause('beforeKey');
+      await page.keyboard.press(keys, { delay: pauseMs('press', speed, rand) });
+      await pause('afterKey');
     });
   }
   /** Rests the cursor on a target without pressing, so the page shows its hover state. */
@@ -96,5 +105,5 @@ export function createDirector(page, startedAt, fps, focusTargets, wideWindows, 
       said.push({ t, id, text });
     }
   }
-  return { page, wait, time, at: seconds => wait(seconds * 1000 - (Date.now() - startedAt)), move, hover, click, type, drag, focus, say };
+  return { page, wait, time, at: seconds => wait(seconds * 1000 - (Date.now() - startedAt)), move, hover, click, press, type, drag, focus, say };
 }
