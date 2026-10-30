@@ -13,5 +13,4 @@ What the page itself does plays at the Final moment's Source time: the Source fr
 ## Consequences
 
 - `render.json` reports times in the Final; `subtitles.srt` and `.vtt` are timed to the Final; `preview --at` takes seconds of the Final.
-- A Fast-forward can show the Source time it skips: each frame of the Final averages the Source frames in its interval, and the Cursor trails across it. This blurs only the page's own motion, which ADR 0001 noted needs more than one Source frame per output frame; a Fast-forward already decodes them.
 - While the camera follows the Cursor during a Fast-forward, the Cursor can briefly move faster than the camera follows it and leave the view.

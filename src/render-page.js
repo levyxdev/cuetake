@@ -21,7 +21,7 @@ import { cursorTrack, drawnShape, pointerAt, presses, sparksAt } from '/cursor.j
 import { layout, outputSize, cameraView, previewSheet, brandColor } from '/stage.js';
 import { burnsIn, cuesFor, lineProblems } from '/narration.js';
 import { keycapTrack } from '/shortcuts.js';
-import { badgeAt, forwarding, linesInFinal, retimed, shutter, timeMap, trailAt } from '/time-map.js';
+import { badgeAt, linesInFinal, retimed, timeMap } from '/time-map.js';
 
 const VERTEX = `#version 300 es
 in vec2 p; void main() { gl_Position = vec4(p, 0, 1); }`;
@@ -182,9 +182,7 @@ function createCompositor(stage, sourceWidth, sourceHeight, brand) {
   gl.uniform4f(pageProgram.uniform('uPage'), stage.page.x, stage.page.y, stage.page.w, stage.page.h);
   gl.uniform4f(pageProgram.uniform('uWindow'), stage.window.x, stage.window.y, stage.window.w, stage.window.h);
   gl.uniform1f(pageProgram.uniform('uRadius'), stage.radius);
-  const blitProgram = program(VERTEX, BLIT), blitSize = blitProgram.uniform('uRes');
-  // A fast-forward's Source frames are averaged into the page through this texture.
-  let frameTexture = null;
+  const blitProgram = program(VERTEX, BLIT);
   const spriteProgram = program(SPRITE_VERTEX, SPRITE_FRAGMENT), spriteRect = spriteProgram.uniform('uRect'), spriteAlpha = spriteProgram.uniform('uAlpha');
 
   /** An agent shader with its parameters declared and set, and its `files` bound from texture unit 2. */
@@ -235,24 +233,6 @@ function createCompositor(stage, sourceWidth, sourceHeight, brand) {
       gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, frame);
       gl.generateMipmap(gl.TEXTURE_2D);
     },
-    /**
-     * Mixes `frame` into the page, `share` of it over what is there (1 replaces it), so a running
-     * average of several frames builds up; call `blended()` after the last.
-     */
-    blend(frame, share) {
-      if (!frameTexture) { frameTexture = texture(gl.LINEAR); gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, sourceWidth, sourceHeight); }
-      gl.bindTexture(gl.TEXTURE_2D, frameTexture);
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, frame);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
-      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, pageTexture, 0);
-      gl.viewport(0, 0, sourceWidth, sourceHeight);
-      gl.useProgram(blitProgram.p); gl.uniform2f(blitSize, sourceWidth, sourceHeight);
-      gl.enable(gl.BLEND); gl.blendColor(0, 0, 0, share); gl.blendFunc(gl.CONSTANT_ALPHA, gl.ONE_MINUS_CONSTANT_ALPHA);
-      bind(0, frameTexture); gl.bindVertexArray(fullScreen); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA); gl.uniform2f(blitSize, width, height);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, width, height);
-    },
-    blended() { gl.bindTexture(gl.TEXTURE_2D, pageTexture); gl.generateMipmap(gl.TEXTURE_2D); },
     /** Draws the Background layers in order, each over the result so far, starting from black. */
     async drawBackground(layers) {
       let other = target();
@@ -514,7 +494,7 @@ function cameraPath(edit, viewport, pointer, map) {
  * Source's first frame: Background layers see it, and it picks the brand color. `map` is the Take's time map.
  */
 async function createScene(edit, viewport, { pointer, shapes, events }, firstFrame, sourceWidth, sourceHeight, cues, map) {
-  const { camera, cursor, clickEffect, keycaps, shortcuts, frame, subtitles, fastForwardBadge, fastForwardBlur } = edit;
+  const { camera, cursor, clickEffect, keycaps, shortcuts, frame, subtitles, fastForwardBadge } = edit;
   const chrome = frame.chrome ? await loadChrome(frame.chrome, viewport.width, frame.url ?? '') : null;
   const stage = layout(edit, viewport, chrome?.height ?? 0);
   const compositor = createCompositor(stage, sourceWidth, sourceHeight, brandOf(firstFrame));
@@ -564,18 +544,11 @@ async function createScene(edit, viewport, { pointer, shapes, events }, firstFra
           effectTexture = compositor.sprite(ctx.canvas, effectTexture, false);
           draw(effectTexture, [...at(press.x - effect.reach, press.y - effect.reach), 2 * effect.reach * stage.scale, 2 * effect.reach * stage.scale]);
         }
-        // The Cursor scales around its hotspot, so a press keeps its tip on the target. While the
-        // Final fast-forwards, fainter copies trail it along the path it covered since the last frame.
+        // The Cursor scales around its hotspot, so a press keeps its tip on the target.
         const now = track && track.at(source);
         if (now) {
           const shape = drawnShape(now.shape, drawn), sprite = cursorSprites[shape], k = now.scale, frames = cursorTextures[shape];
-          const picture = frames[Math.floor(t * frames.length) % frames.length];
-          const place = (point, opacity) => draw(picture, [...at(point.x + sprite.offset.x * k, point.y + sprite.offset.y * k), sprite.size.w * k * stage.scale, sprite.size.h * k * stage.scale], opacity);
-          for (const ghost of fastForwardBlur ? trailAt(map, t, edit.output.fps) : []) {
-            const point = track.at(ghost.source);
-            if (point && Math.hypot(point.x - now.x, point.y - now.y) >= 1) place(point, ghost.opacity);
-          }
-          place(now, 1);
+          draw(frames[Math.floor(t * frames.length) % frames.length], [...at(now.x + sprite.offset.x * k, now.y + sprite.offset.y * k), sprite.size.w * k * stage.scale, sprite.size.h * k * stage.scale]);
         }
       }, cue >= 0 || keycap || badge ? draw => {
         if (cue >= 0) draw(subtitleTexture, [0, 0, stage.width, stage.height]);
@@ -652,18 +625,8 @@ window.cuetakeRender = async ({ sourceUrl, finalUrl, duration, viewport, pointer
       if (failure) throw failure;
       // Sample and hold: show the latest Source frame at or before this moment's Source time (VFR → CFR).
       const due = origin + Math.round(map.sourceAt(i / fps) * 1e6);
-      let blurred = false;
-      if (edit.fastForwardBlur && forwarding(map, i / fps)) {
-        // Fast-forwarding: average every Source frame in this frame's interval, each for as long as it shows.
-        let from = origin + Math.round(shutter(map, i / fps, fps)[0] * 1e6), total = 0;
-        const add = (frame, until) => { const w = until - from; if (w > 0) { total += w; compositor.blend(frame, w / total); } from = until; };
-        while (next && next.timestamp <= due) { add(current, next.timestamp); current.close(); current = next; next = await reader.next(); }
-        add(current, due);
-        if (total) { compositor.blended(); blurred = true; }
-      } else while (next && next.timestamp <= due) { current.close(); current = next; next = await reader.next(); }
-      // A blend is no single frame, so the next sharp frame uploads again.
-      if (blurred) uploaded = null;
-      else if (uploaded !== current) { compositor.upload(current); uploaded = current; }
+      while (next && next.timestamp <= due) { current.close(); current = next; next = await reader.next(); }
+      if (uploaded !== current) { compositor.upload(current); uploaded = current; }
       if (audio && i % fps === 0) await feedAudio(i / fps + 1);
       const { cue, keycap, badge } = scene.draw(i / fps, crops[i]);
       if (cue >= 0) shownFrames[cue] = [shownFrames[cue]?.[0] ?? i, i];
@@ -760,17 +723,6 @@ window.cuetakePreview = async ({ sourceUrl, duration, viewport, pointer, shapes,
   const firstSample = await sink.getSample(origin), sample = await sink.getSample(origin + map.sourceAt(t));
   if (!firstSample || !sample) throw new Error('Source has no video frames');
   const firstFrame = firstSample.toVideoFrame(), frame = sample.toVideoFrame();
-  // While it fast-forwards, the Final averages the Source frames each of its frames covers, each for as
-  // long as it shows; the Preview averages the same ones.
-  const covered = [];
-  if (forwarding(map, t)) {
-    const [from, until] = shutter(map, t, tiles[0].edit.output.fps).map(s => origin + s), first = await sink.getSample(from);
-    const samples = first ? [first] : [];
-    for await (const later of sink.samples(from, until + 1e-6)) {
-      if (first && later.timestamp > first.timestamp && later.timestamp <= until) samples.push(later); else later.close();
-    }
-    samples.forEach((one, j) => covered.push({ sample: one, frame: one.toVideoFrame(), weight: (samples[j + 1]?.timestamp ?? until) - Math.max(from, one.timestamp) }));
-  }
   try {
     const sheet = previewSheet(tiles.map(({ edit }) => outputSize(edit)));
     const ctx = new OffscreenCanvas(sheet.width, sheet.height).getContext('2d');
@@ -785,9 +737,7 @@ window.cuetakePreview = async ({ sourceUrl, duration, viewport, pointer, shapes,
         const path = cameraPath(edit, viewport, pointer, map);
         crop = path[Math.min(Math.round(at * edit.output.fps), path.length - 1)] ?? crop;
       }
-      let total = 0;
-      for (const { frame: one, weight } of edit.fastForwardBlur ? covered : []) if (weight > 0) { total += weight; scene.compositor.blend(one, weight / total); }
-      if (total) scene.compositor.blended(); else scene.compositor.upload(frame);
+      scene.compositor.upload(frame);
       scene.draw(t, crop);
       // Copy before yielding: the WebGL canvas does not keep its drawing buffer.
       const tile = sheet.tiles[i];
@@ -796,10 +746,7 @@ window.cuetakePreview = async ({ sourceUrl, duration, viewport, pointer, shapes,
       scene.compositor.dispose();
     }
     return await pngBase64(ctx.canvas);
-  } finally {
-    firstFrame.close(); frame.close(); firstSample.close(); sample.close();
-    for (const one of covered) { one.frame.close(); one.sample.close(); }
-  }
+  } finally { firstFrame.close(); frame.close(); firstSample.close(); sample.close(); }
 };
 
 async function pngBase64(canvas) {

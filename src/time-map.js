@@ -11,7 +11,6 @@
 
 const EASE = 0.3; // seconds of the Final a span takes to reach its rate, and to leave it
 const BADGE_IN = 0.15, BADGE_OUT = 0.2; // seconds of the Final a fast-forward badge takes to appear and to go
-const TRAIL = [0.1, 0.18, 0.28, 0.4]; // opacities of the Cursor's ghosts while fast-forwarding, oldest first
 const EPSILON = 0.005;
 
 // A ramp's speed rises from 1 to `rate` as smoothstep(u); `rise(u)` is that share integrated over u.
@@ -82,25 +81,6 @@ export function badgeAt(map, t) {
   if (index < 0) return null;
   const { start, end, rate } = map.spans[index];
   return { index, rate, opacity: Math.max(0, Math.min(1, (t - start) / BADGE_IN, (end - t) / BADGE_OUT)) };
-}
-
-/** Whether Final time `t` is inside a fast-forward. */
-export const forwarding = (map, t) => map.spans.some(span => t >= span.start && t < span.end);
-
-/**
- * The Source interval a frame of the Final at `t` covers, `[from, until]` in Source seconds, `fps`
- * frames a second: while it fast-forwards, the frame shows every Source frame in it, averaged.
- */
-export const shutter = (map, t, fps) => [map.sourceAt(Math.max(0, t - 1 / fps)), map.sourceAt(t)];
-
-/**
- * The Cursor's trail at Final time `t` while it fast-forwards: earlier Source times across the frame's
- * interval, oldest first, each with the opacity of the ghost drawn there; empty elsewhere.
- */
-export function trailAt(map, t, fps) {
-  if (!forwarding(map, t)) return [];
-  const [from, until] = shutter(map, t, fps);
-  return TRAIL.map((opacity, i) => ({ source: from + (until - from) * i / TRAIL.length, opacity }));
 }
 
 /** `items` with the times named by `keys` moved from the Source to the Final, as Shortcuts and camera targets are. */

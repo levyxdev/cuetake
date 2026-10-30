@@ -129,20 +129,13 @@ test('probe records the cursor shape the page asks for, as the browser resolves 
   } finally { await browser.close(); }
 }, 30_000);
 
-/**
- * A VP9 WebM of a black 640×480 stage with a red square, recorded like a real Source; the square turns
- * green `greenAt` seconds in, and with `sweep` a white bar crosses the stage at 480 px a second.
- */
-async function syntheticSource(browser, seconds, { greenAt = Infinity, sweep = false } = {}) {
+/** A VP9 WebM of a black 640×480 stage with a red square, recorded like a real Source; the square turns green `greenAt` seconds in. */
+async function syntheticSource(browser, seconds, greenAt = Infinity) {
   const page = await browser.newPage();
-  const base64 = await page.evaluate(async ([ms, greenMs, sweep]) => {
+  const base64 = await page.evaluate(async ([ms, greenMs]) => {
     const canvas = Object.assign(document.createElement('canvas'), { width: 640, height: 480 });
     const ctx = canvas.getContext('2d'), started = performance.now();
-    const paint = () => {
-      const elapsed = performance.now() - started;
-      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 640, 480); ctx.fillStyle = elapsed >= greenMs ? '#0f0' : '#f00'; ctx.fillRect(480, 200, 40, 40);
-      if (sweep) { ctx.fillStyle = '#fff'; ctx.fillRect((elapsed * 0.48) % 600, 300, 12, 100); }
-    };
+    const paint = () => { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 640, 480); ctx.fillStyle = performance.now() - started >= greenMs ? '#0f0' : '#f00'; ctx.fillRect(480, 200, 40, 40); };
     paint();
     const recorder = new MediaRecorder(canvas.captureStream(30), { mimeType: 'video/webm;codecs=vp9' });
     const chunks = [];
@@ -157,7 +150,7 @@ async function syntheticSource(browser, seconds, { greenAt = Infinity, sweep = f
     let binary = '';
     for (const b of bytes) binary += String.fromCharCode(b);
     return btoa(binary);
-  }, [seconds * 1000, greenAt * 1000, sweep]);
+  }, [seconds * 1000, greenAt * 1000]);
   await page.close();
   return Buffer.from(base64, 'base64');
 }
@@ -198,7 +191,7 @@ test('Render plays a fast-forward faster, with the Cursor in step with the page,
   const browser = await chromium.launch({ headless: true, channel: 'chromium' });
   try {
     const sourcePath = join(dir, 'source.webm'), outputPath = join(dir, 'final.mp4');
-    await fs.writeFile(sourcePath, await syntheticSource(browser, 3.1, { greenAt: 1.5 }));
+    await fs.writeFile(sourcePath, await syntheticSource(browser, 3.1, 1.5));
     // The pointer sweeps right at 80 CSS px a second of Source time.
     const timeline = { viewport: { width: 320, height: 240 }, duration: 3, pointer: [[0, 40, 200], [3, 280, 200]], events: [] };
     // A white badge band, so it shows against the black page.
@@ -219,37 +212,6 @@ test('Render plays a fast-forward faster, with the Cursor in step with the page,
     expect(Math.max(...noBadge)).toBeLessThan(40);
     expect(early[0]).toBeGreaterThan(180);
     expect(Math.min(...start)).toBeGreaterThan(180);
-  } finally { await browser.close(); await fs.rm(dir, { recursive: true, force: true }); }
-}, 60_000);
-
-test('Render blurs a fast-forward by averaging the Source frames it skips, and a Preview shows the same; fastForwardBlur: false keeps it sharp', async () => {
-  const dir = await fs.mkdtemp(join(tmpdir(), 'cuetake-blur-'));
-  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
-  try {
-    const sourcePath = join(dir, 'source.webm');
-    await fs.writeFile(sourcePath, await syntheticSource(browser, 3.1, { sweep: true }));
-    const timeline = { viewport: { width: 320, height: 240 }, duration: 3, pointer: [], events: [] };
-    const fast = { fastForward: [{ start: 0.3, end: 2.7, rate: 4 }] };
-    // The bar's row across the stage, 5 CSS px apart, in the middle of the span (Final 0.7 s, Source about 1.5 s).
-    const row = Array.from({ length: 60 }, (_, i) => [5 * i + 2, 175]);
-    const brightness = async png => (await pixelsAt(browser, png, row)).map(([r, g, b]) => (r + g + b) / 3);
-    const finalRow = async edit => {
-      const finalPath = join(dir, 'final.mp4');
-      await renderFinal({ sourcePath, finalPath, timeline, ...forRender(edit, dir) });
-      return brightness(await extractFrame(finalPath, 0.7));
-    };
-    // Sharp: one full-white bar. Blurred: the bar's positions across the frame, each faint.
-    const sharp = await finalRow(bare({ ...fast, fastForwardBlur: false }));
-    expect(Math.max(...sharp)).toBeGreaterThan(200);
-    expect(sharp.filter(v => v > 20).length).toBeLessThanOrEqual(4);
-    const blurred = await finalRow(bare(fast));
-    expect(Math.max(...blurred)).toBeLessThan(160);
-    expect(blurred.filter(v => v > 20).length).toBeGreaterThanOrEqual(4);
-    // The Preview at the same moment blends the same frames.
-    const preview = await composePreview({ sourcePath, timeline, at: 0.7, ...previewOf(dir, [['current', bare(fast)]]) });
-    const previewed = await brightness(preview);
-    expect(Math.max(...previewed)).toBeLessThan(160);
-    expect(previewed.filter(v => v > 20).length).toBeGreaterThanOrEqual(4);
   } finally { await browser.close(); await fs.rm(dir, { recursive: true, force: true }); }
 }, 60_000);
 

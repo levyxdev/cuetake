@@ -12,7 +12,7 @@ import { bundle, codeRefs, forRender, BUILTIN_DIR } from '../src/styles.js';
 import { npxFolders, uninstall } from '../src/uninstall.js';
 import { subtitleRows, subtitleCues, lineProblems, toSrt, toVtt } from '../src/narration.js';
 import { shortcutKeys, keycapShows, keycapTrack } from '../src/shortcuts.js';
-import { timeMap, fastForwardProblems, retimed, linesInFinal, badgeAt, forwarding, shutter, trailAt } from '../src/time-map.js';
+import { timeMap, fastForwardProblems, retimed, linesInFinal, badgeAt } from '../src/time-map.js';
 import fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -236,25 +236,6 @@ test('the fast-forward badge is off by default; Render reads the built-in with i
   const take = withDefaults({ fastForwardBadge: { draw: 'fast-forward' }, fastForward: [{ start: 1, end: 2, rate: 4 }] });
   expect(lookFromEdit(take).fastForwardBadge).toEqual({ draw: 'fast-forward' });
   expect(applyLook(withDefaults({}), lookFromEdit(take)).fastForwardBadge).toEqual({ draw: 'fast-forward' });
-});
-
-test('while fast-forwarding, a frame covers the Source since the last frame, and the Cursor trails across it', () => {
-  const map = timeMap([{ start: 2, end: 6, rate: 4 }], 10), t = 2.6;
-  expect(forwarding(map, t)).toBe(true);
-  expect(forwarding(map, 1)).toBe(false);
-  const [from, until] = shutter(map, t, 30);
-  expect(until - from).toBeCloseTo(4 / 30, 6);
-  const trail = trailAt(map, t, 30);
-  expect(trail.map(ghost => ghost.opacity)).toEqual([0.1, 0.18, 0.28, 0.4]);
-  expect(trail[0].source).toBeCloseTo(from, 9);
-  expect(trail.every((ghost, i) => ghost.source < until && (i === 0 || ghost.source > trail[i - 1].source))).toBe(true);
-  expect(trailAt(map, 1, 30)).toEqual([]);
-});
-
-test('fast-forward blur is on by default, and a Look keeps the choice', () => {
-  expect(withDefaults({}).fastForwardBlur).toBe(true);
-  expect(lookFromEdit(withDefaults({ fastForwardBlur: false })).fastForwardBlur).toBe(false);
-  expect(applyLook(withDefaults({}), { fastForwardBlur: false }).fastForwardBlur).toBe(false);
 });
 
 test('the first Edit fast-forwards the waits the Scenario marked, and a Look keeps them out', () => {
