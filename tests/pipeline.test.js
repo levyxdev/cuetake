@@ -111,6 +111,43 @@ test('while zoomed the camera follows the cursor to keep it in view', () => {
   expect(centerAt(still, 4).x).toBeLessThan(100);
 });
 
+test('a segment holds one zoom, the closest that fits all its targets', () => {
+  const targets = [{ t: 1, box: small(40, 100) }, { t: 2.5, box: { x: 150, y: 100, width: 60, height: 20 }, zoom: 1.5 }];
+  expect(zoomSegments(targets, viewport, camera, 10)[0].zoom).toBe(1.5);
+  const track = cameraTrack({ targets, viewport, camera, duration: 8, fps: 60 });
+  expect(zoomAt(track, 1.5)).toBeCloseTo(1.5, 2);
+  expect(zoomAt(track, 3)).toBeCloseTo(1.5, 2);
+});
+
+test('the camera stays still for a target already in view and moves only as far as one outside needs', () => {
+  const inView = cameraTrack({ targets: [{ t: 1, box: small(100, 100) }, { t: 2.5, box: small(150, 120) }], viewport, camera, duration: 8, fps: 60 });
+  for (const t of [2.5, 3, 4]) {
+    expect(centerAt(inView, t).x).toBeCloseTo(centerAt(inView, 2).x, 1);
+    expect(centerAt(inView, t).y).toBeCloseTo(centerAt(inView, 2).y, 1);
+  }
+  // Centered on x 110 at 2×, the view spans 30 to 190; reaching 200 to 220 brings its edge to 220, not its center to 210.
+  const outside = cameraTrack({ targets: [{ t: 1, box: small(100, 100) }, { t: 2.5, box: small(200, 100) }], viewport, camera, duration: 8, fps: 60 });
+  expect(centerAt(outside, 3.5).x).toBeCloseTo(140, 0);
+});
+
+test('the camera follows the cursor only near the edge of the view, and stays where it left off', () => {
+  const pointerAt = edge => t => ({ x: t < 2.5 ? 30 : t < 3.5 ? edge : 60, y: 120 });
+  const target = [{ t: 2, box: small(20, 110), until: 5 }];
+  // The view spans 0 to 160; the cursor at 130 stays inside its central 80%, at 150 it does not.
+  expect(centerAt(cameraTrack({ targets: target, viewport, camera, duration: 9, fps: 60, pointerAt: pointerAt(130) }), 3.4).x).toBeCloseTo(80, 0);
+  const pushed = cameraTrack({ targets: target, viewport, camera, duration: 9, fps: 60, pointerAt: pointerAt(150) });
+  expect(centerAt(pushed, 3.4).x).toBeGreaterThan(85);
+  expect(centerAt(pushed, 4.5).x).toBeCloseTo(centerAt(pushed, 3.5).x, 0);
+});
+
+test('the camera eases into each move', () => {
+  const track = cameraTrack({ targets: [{ t: 2, box: small(240, 100) }], viewport, camera, duration: 8, fps: 60 });
+  // The move starts `lead` before the action, at 1.4 s; a lone spring would already be at 1.05×.
+  expect(zoomAt(track, 1.45)).toBeLessThan(1.01);
+  const speeds = track.slice(84, 96).map((c, i, all) => i ? Math.abs(c.w - all[i - 1].w) : 0).slice(1);
+  for (let i = 1; i < speeds.length; i++) expect(speeds[i]).toBeGreaterThan(speeds[i - 1]);
+});
+
 test('the cursor interpolates the pointer path and is hidden before the first sample', () => {
   const pointer = [[1, 0, 0], [2, 100, 50], [3, 100, 50]];
   expect(pointerAt(pointer, 0.5)).toBeNull();

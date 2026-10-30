@@ -68,13 +68,14 @@ Capture records the cursor shape the page asks for (a hand over links, an I-beam
 The camera works like Screen Studio's auto zoom. It follows the clicks, typing and drags the page observed, whether they came from the director or from Playwright input directly:
 
 - It arrives `lead` seconds before each action, so the zoom is in place when the action happens.
-- Actions whose zoom windows sit within `chainGap` seconds share one zoom segment: the camera stays zoomed and moves between them instead of zooming out and back in.
+- Actions whose zoom windows sit within `chainGap` seconds share one zoom segment: the camera stays zoomed and moves between them instead of zooming out and back in. A segment holds one zoom, the closest that fits every target in it.
+- Within a segment the camera centers on the first target, then stays still while later targets are already in view (with `padding`) and otherwise moves only far enough to bring them in.
 - It holds `hold` seconds after the segment's last action (after typing ends, for typing), then returns to the wide shot.
-- While zoomed it follows the cursor, keeping it in the central 70% of the view (`follow: false` turns this off).
-- Movement is a critically damped spring that settles in about `response` seconds and never overshoots.
+- While zoomed it follows the cursor only when it nears the edge, keeping it in the central 80% of the view, and stays where the cursor left it (`follow: false` turns this off).
+- Movement eases in and out, settles in about `response` seconds and never overshoots.
 - Every Final ends wide: the camera heads back `endWide` seconds before the end, so leave at least 2 seconds after the last action for the result to be seen in context.
 
-Each target is framed with `padding` CSS px around its box, zooming at most `maxZoom`; boxes too large to reach `minZoom` stay wide. Set `zoom` on a target in `edit.json` to fix it. Pass `focus: false` to an action to keep the camera wide for it; a bare number still works as the action's timing. `d.focus(box)` adds a deliberate target and, like a manual zoom in Screen Studio, replaces only the automatic targets within its own span; the rest of the Take keeps following actions. Focus boxes always use CSS pixels, even when the source is captured at 2× scale.
+Each target is framed with `padding` CSS px around its box, zooming at most `maxZoom`; boxes too large to reach `minZoom` stay wide. Set `zoom` on a target in `edit.json` to fix it; its segment then zooms no further. Pass `focus: false` to an action to keep the camera wide for it; a bare number still works as the action's timing. `d.focus(box)` adds a deliberate target and, like a manual zoom in Screen Studio, replaces only the automatic targets within its own span; the rest of the Take keeps following actions. Focus boxes always use CSS pixels, even when the source is captured at 2× scale.
 
 Use actual locators for clicks. Canvas drags often require coordinates; derive or validate them for the configured viewport. Keep setup outside capture, hold important states, and assert meaningful application changes. An exception marks the take failed and closes the isolated browser.
 
