@@ -4,7 +4,7 @@
   "description": "Local recording runtime for AI agents: plan a browser demo, capture it, and render a finished take.",
   "type": "module",
   "bin": {
-    "cuetake": "./src/cli.js"
+    "cuetake": "src/cli.js"
   },
   "files": [
     "src",
