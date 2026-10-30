@@ -1,7 +1,8 @@
 import { test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import pkg from '../package.json' with { type: 'json' };
-import { scenarioSchema, summarizeFrames, narrationSchema } from '../src/pipeline.js';
+import { scenarioSchema, summarizeFrames, captureWarnings, captureScale, narrationSchema } from '../src/pipeline.js';
+import { drawsWithGpu } from '../src/environment.js';
 import { fitZoom, cropAround, zoomSegments, cameraTrack } from '../src/camera.js';
 import { cameraTargets, createEdit, DEFAULT_STYLE, withDefaults } from '../src/edit.js';
 import { pointerAt, presses, sparksAt, heldSpans, pressScale, shapeAt, drawnShape, cursorTrack } from '../src/cursor.js';
@@ -33,6 +34,39 @@ test('reports sparse static capture honestly rather than labeling it 60 unique f
   const stats = summarizeFrames([{ timeMs: 0 }, { timeMs: 17 }, { timeMs: 34 }, { timeMs: 1034 }], 2);
   expect(stats.maxIntervalMs).toBe(1000);
   expect(stats.perSecond.map(s => s.callbacks)).toEqual([3, 1]);
+});
+
+test('warns when the page got too few animation frames during Capture, not when it merely sat still', () => {
+  // A still page sends few Source frames but keeps its animation frames at the display rate.
+  expect(captureWarnings({ duration: 4.5, frames: [{ timeMs: 0 }], pageFrames: [60, 59, 60, 58, 20] }, 2)).toEqual([]);
+  // One slow second, such as the last partial one or a single hitch, is not enough.
+  expect(captureWarnings({ duration: 4.5, pageFrames: [60, 12, 60, 60, 3] }, 2)).toEqual([]);
+  const [behind] = captureWarnings({ duration: 5.2, pageFrames: [55, 9, 11, 6, 40, 2] }, 2);
+  expect(behind).toContain('for 3 of 5 s (lowest 6)');
+  expect(behind).toContain('resolutionScale: 1');
+  const [atOne] = captureWarnings({ duration: 3, pageFrames: [9, 8, 7] }, 1);
+  expect(atOne).toContain('already used resolutionScale 1');
+  expect(atOne).toContain('GPU');
+  // Takes recorded before the page's frames were counted are not judged.
+  expect(captureWarnings({ duration: 3, frames: [] }, 2)).toEqual([]);
+});
+
+test('tells a software renderer from a GPU by the name Chromium reports', () => {
+  expect(drawsWithGpu('ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)')).toBe(false);
+  expect(drawsWithGpu('ANGLE (Mesa, llvmpipe (LLVM 15.0.7, 256 bits), OpenGL 4.5)')).toBe(false);
+  expect(drawsWithGpu('ANGLE (Microsoft, Microsoft Basic Render Driver Direct3D11 vs_5_0 ps_5_0, D3D11)')).toBe(false);
+  expect(drawsWithGpu('ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)')).toBe(true);
+  expect(drawsWithGpu('ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 3060/PCIe/SSE2, OpenGL 4.5.0)')).toBe(true);
+  expect(drawsWithGpu(null)).toBe(null);
+});
+
+test('lowers the resolution scale only when Chromium has no GPU and nothing chose a scale', () => {
+  const software = { name: 'gpu', ok: true, accelerated: false, renderer: 'SwiftShader' };
+  expect(captureScale(undefined, software)).toEqual({ resolutionScale: 1, lowered: true });
+  expect(captureScale(2, software)).toEqual({ resolutionScale: 2, lowered: false });
+  expect(captureScale(undefined, { ...software, accelerated: true })).toEqual({ resolutionScale: 2, lowered: false });
+  expect(captureScale(undefined, { ...software, accelerated: null })).toEqual({ resolutionScale: 2, lowered: false });
+  expect(captureScale(1, undefined)).toEqual({ resolutionScale: 1, lowered: false });
 });
 
 const viewport = { width: 320, height: 240 };

@@ -37,18 +37,26 @@ export async function startTabCapture(page, options) {
       const mimeType = 'video/webm;codecs=vp9';
       if (!MediaRecorder.isTypeSupported(mimeType)) throw new Error('VP9 tab capture unavailable');
       const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: bitrate });
-      const state = { stream, video, recorder, chunks: [], frames: [], settings: track.getSettings(), error: null };
+      const state = { stream, video, recorder, chunks: [], frames: [], pageFrames: [], settings: track.getSettings(), error: null };
       window.__cuetakeCapture = state;
       const tick = (now, metadata) => {
         if (recorder.state !== 'recording') return;
         state.frames.push({ timeMs: performance.timeOrigin + now - state.startedAtMs, mediaTime: metadata.mediaTime, presentedFrames: metadata.presentedFrames });
         video.requestVideoFrameCallback(tick);
       };
+      // Animation frames per second of Capture. A still page sends few Source frames, but its animation
+      // frames keep the display rate while the browser keeps up, so a shortfall means the machine fell behind.
+      const animate = now => {
+        if (recorder.state !== 'recording') return;
+        const second = Math.floor((performance.timeOrigin + now - state.startedAtMs) / 1000);
+        if (second >= 0) state.pageFrames[second] = (state.pageFrames[second] ?? 0) + 1;
+        requestAnimationFrame(animate);
+      };
       recorder.ondataavailable = event => { if (event.data.size) state.chunks.push(event.data); };
       recorder.onerror = event => { state.error = event.error?.message || 'MediaRecorder error'; };
       window.__cuetakeCaptureStage = 'MediaRecorder start';
       await new Promise(resolve => {
-        recorder.onstart = () => { state.startedAtMs = Date.now(); stopNudging(); video.requestVideoFrameCallback(tick); resolve(); };
+        recorder.onstart = () => { state.startedAtMs = Date.now(); stopNudging(); video.requestVideoFrameCallback(tick); requestAnimationFrame(animate); resolve(); };
         recorder.start(1000);
       });
       return { startedAt: new Date(state.startedAtMs).toISOString(), settings: state.settings };
@@ -78,7 +86,7 @@ export async function stopTabCapture(page, outputPath) {
     const bytes = new Uint8Array(await new Blob(state.chunks).arrayBuffer());
     let binary = '';
     for (let i = 0; i < bytes.length; i += 32768) binary += String.fromCharCode(...bytes.subarray(i, i + 32768));
-    const stats = { settings: state.settings, duration: (stoppedAtMs - state.startedAtMs) / 1000, frames: state.frames };
+    const stats = { settings: state.settings, duration: (stoppedAtMs - state.startedAtMs) / 1000, frames: state.frames, pageFrames: Array.from(state.pageFrames, n => n ?? 0) };
     delete window.__cuetakeCapture;
     return { data: btoa(binary), stats };
   });

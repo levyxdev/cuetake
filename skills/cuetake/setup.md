@@ -25,7 +25,7 @@ Run `cuetake install-browser` (about 150 MB into Playwright's cache in the user'
 
 ## Check
 
-Run `cuetake doctor` again. Every check must report `ok`; a `platform` note means that platform is not yet verified.
+Run `cuetake doctor` again. Every check must report `ok`; a `platform` note means that platform is not yet verified. A `gpu` check with `accelerated: false` still passes: Chromium draws on the CPU there, so `record` captures at resolution scale 1 unless the Scenario sets one.
 
 ## Uninstall
 

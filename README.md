@@ -64,7 +64,7 @@ A successful command is a technical check, not an editorial approval. Watch the 
 
 Playwright drives an isolated Chromium tab. Chromium captures the tab at device-pixel resolution using `getDisplayMedia`; a VP9 `MediaRecorder` saves the source. An in-page probe records the pointer path, clicks, drags, typing and shortcuts into the Timeline. Render then composes the camera path in a headless Chromium page with WebGL and encodes H.264 with WebCodecs; see [ADR 0001](docs/adr/0001-render-in-browser-with-webgl-and-webcodecs.md).
 
-Source capture is variable frame rate. Static scenes may drop to approximately one captured frame per second, and busy scenes can drop frames. A 60 fps output does not imply 60 unique source frames every second. Capture callback statistics and output metadata are retained in each take. No motion interpolation is used.
+Source capture is variable frame rate. Static scenes may drop to approximately one captured frame per second, and busy scenes can drop frames. A 60 fps output does not imply 60 unique source frames every second. Capture callback statistics and output metadata are retained in each take. No motion interpolation is used. Without a GPU, Chromium rasterizes and encodes on the CPU, so a busy page at resolution scale 2 can get only a few frames per second: `record` then defaults to scale 1, and `verify` warns when the page got too few animation frames during Capture.
 
 ## Current scope
 

@@ -38,7 +38,7 @@ export async function run(d) {
 }
 ```
 
-Only `name` and `url` are required in config. Other fields use the shown defaults. `director.speed` scales how fast the Director moves, pauses and types (`1.25` is a quarter faster); `director.seed` picks another, equally human way to move. Capture FPS accepts 30 or 60. Resolution scale accepts 1 or 2. Widths and heights must be even. Page audio is not captured; a voiced Narration is added with `record --narration` ([narration.md](narration.md)).
+Only `name` and `url` are required in config. Other fields use the shown defaults. `director.speed` scales how fast the Director moves, pauses and types (`1.25` is a quarter faster); `director.seed` picks another, equally human way to move. Capture FPS accepts 30 or 60. Resolution scale accepts 1 or 2; left unset, it is 2, or 1 when `doctor` finds Chromium drawing without a GPU, which `record` reports under `capture`. Widths and heights must be even. Page audio is not captured; a voiced Narration is added with `record --narration` ([narration.md](narration.md)).
 
 ## Director
 
@@ -89,7 +89,7 @@ Use actual locators for clicks. Canvas drags often require coordinates; derive o
   project.json       Scenario config, status, application evidence, duration
   scenario.mjs       Snapshot of the original scenario module
   source.webm        Source: original high-resolution VP9 capture
-  capture.json       Track settings and video frame callback observations
+  capture.json       Track settings, video frame callback observations and the page's animation frames per second
   timeline.json      Timeline: pointer path, cursor shapes, clicks and drags with their release, typing, Shortcuts, focus, said Lines and fast-forwards, in seconds and CSS pixels
   edit.json          Edit: camera targets and settings, cursor, click effect, Shortcuts and keycaps, frame, fast-forwards, Line starts and volumes, Subtitles, output
   narration/         The Narration: narration.json (text, word timings) and each Line's audio, named by its id
@@ -99,7 +99,7 @@ Use actual locators for clicks. Canvas drags often require coordinates; derive o
   preview.png        Preview: the current Edit beside candidate Looks, from the last `preview`
   final.mp4          Final: H.264 camera composition
   render.json        Encoder, rate control and GPU used by the last Render; its times are seconds of the Final
-  verification.json Output metadata, decode result, capture observations
+  verification.json Output metadata, decode result, capture observations, and warnings when the browser fell behind
 ```
 
 A copied scenario snapshot may import helper modules from its original project. It is a record of the scenario, not a bundled runnable archive. Keep business scenarios in their application repository.

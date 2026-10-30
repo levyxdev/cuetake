@@ -88,17 +88,30 @@ function voicedLines(edit, narration, dir) {
   });
 }
 
+/**
+ * The resolution scale Capture uses: the one the Scenario or Look chose, else 2, or 1 when doctor found
+ * Chromium drawing without a GPU, where scale 2 starves a busy page of frames.
+ */
+export function captureScale(chosen, gpu) {
+  if (chosen !== undefined) return { resolutionScale: chosen, lowered: false };
+  return gpu?.accelerated === false ? { resolutionScale: 1, lowered: true } : { resolutionScale: 2, lowered: false };
+}
+
 /** New take directories are exclusive: reruns never overwrite a previous take. */
 export async function recordScenario(scenarioPath, outputDir, options = {}) {
   const scenario = await import(pathToFileURL(resolve(scenarioPath)).href);
   // A Look sits under the Scenario: every field the config names wins over it. File refs resolve
   // against the Look and the Scenario file, and the files are copied into the Take.
   const look = options.look ? await loadLook(options.look) : null;
-  const config = scenarioSchema.parse(merge(look ? resolvedLook(look) : {}, absolute(scenario.config, dirname(resolve(scenarioPath)))));
+  const given = merge(look ? resolvedLook(look) : {}, absolute(scenario.config, dirname(resolve(scenarioPath))));
+  const config = scenarioSchema.parse(given);
   if (typeof scenario.run !== 'function') throw new Error('Scenario must export run(director)');
   const authState = options.authProfile ? await resolveAuthProfile(options.authProfile) : undefined;
   const ready = await doctor();
   if (!ready.ok) throw new Error(JSON.stringify(ready));
+  const gpu = ready.checks.find(check => check.name === 'gpu');
+  const { resolutionScale, lowered } = captureScale(given.capture?.resolutionScale, gpu);
+  config.capture.resolutionScale = resolutionScale;
   const dir = resolve(outputDir || join('recordings', config.name, new Date().toISOString().replace(/[:.]/g, '-')));
   await fs.mkdir(resolve(dir, '..'), { recursive: true });
   await fs.mkdir(dir); // EEXIST is intentional, including for empty existing folders.
@@ -142,7 +155,9 @@ export async function recordScenario(scenarioPath, outputDir, options = {}) {
   } finally { await cleanup(); }
   await renderTake(dir);
   const verification = await verifyTake(dir);
-  return { directory: dir, final: join(dir, 'final.mp4'), verification, ...(unplaced.length && { unplaced: { lines: unplaced, note: 'These Lines were never said and have no start; add d.say or a start in edit.json' } }),
+  return { directory: dir, final: join(dir, 'final.mp4'), verification,
+    ...(lowered && { capture: { resolutionScale, note: `Chromium draws without a GPU here (${gpu.renderer}), so Capture used resolutionScale 1; set capture.resolutionScale to 2 in the Scenario to override` } }),
+    ...(unplaced.length && { unplaced: { lines: unplaced, note: 'These Lines were never said and have no start; add d.say or a start in edit.json' } }),
     ...(unvoiced.length && { unvoiced: { lines: unvoiced, note: `These Lines have no audio yet; voice them and run cuetake narrate import ${dir} <narration.json>` } }) };
 }
 
@@ -291,9 +306,27 @@ export function summarizeFrames(frames, duration) {
   return { callbacks: frames.length, medianIntervalMs: sorted[Math.floor(sorted.length / 2)] ?? null, maxIntervalMs: sorted.at(-1) ?? null, perSecond: seconds, note: 'Source capture is variable frame rate. Static sections reduce cadence; callback counts are observations, not a guarantee of unique encoded frames. Final output uses constant frame rate without motion interpolation.' };
 }
 
+/** Animation frames per second below which the page in a Final visibly jumps. */
+const SLOW_PAGE_FRAMES = 20;
+
+/**
+ * Warns when the browser fell behind during Capture: the page got fewer than SLOW_PAGE_FRAMES animation
+ * frames in at least two whole seconds. The Source's own frames cannot tell, since a still page sends few.
+ * At resolution scale 1 the Take cannot be helped by lowering it again.
+ */
+export function captureWarnings(capture, scale) {
+  const whole = (capture.pageFrames ?? []).slice(0, Math.floor(capture.duration));
+  const slow = whole.filter(n => n < SLOW_PAGE_FRAMES);
+  if (slow.length < 2) return [];
+  const fix = scale > 1
+    ? 'Record again with capture: { resolutionScale: 1 } in the Scenario, or close other work'
+    : 'Capture already used resolutionScale 1: close other work, use a smaller viewport, or record on a machine with a GPU';
+  return [`The browser fell behind during Capture: the page got fewer than ${SLOW_PAGE_FRAMES} frames per second for ${slow.length} of ${whole.length} s (lowest ${Math.min(...slow)}), so the page in the Final jumps while the Cursor moves smoothly. ${fix}.`];
+}
+
 export async function verifyTake(directory) {
   const dir = resolve(directory);
-  const { project, edit, narration } = await loadTake(dir);
+  const { project, config, edit, narration } = await loadTake(dir);
   const spoken = narrationForRender(edit, narration, dir);
   const media = await inspectFinal(join(dir, 'final.mp4'), spoken?.lines ?? []);
   const { fps } = edit.output, map = timeMap(edit.fastForward, project.duration);
@@ -309,7 +342,8 @@ export async function verifyTake(directory) {
   const capture = await readJson(join(dir, 'capture.json'));
   const { lines, ...final } = media;
   const verification = {
-    passed: true, checkedAt: new Date().toISOString(), media: final, source: { settings: capture.settings, ...summarizeFrames(capture.frames, capture.duration) }, fullDecode: 'passed',
+    passed: true, checkedAt: new Date().toISOString(), warnings: captureWarnings(capture, config.capture.resolutionScale), media: final,
+    source: { settings: capture.settings, ...summarizeFrames(capture.frames, capture.duration), ...(capture.pageFrames && { pageFramesPerSecond: capture.pageFrames }) }, fullDecode: 'passed',
     ...(spoken && { narration: { lines: spoken.lines.map(({ id, start }) => ({ id, start, duration: lines.find(line => line.id === id).duration })), subtitles: SUBTITLE_FILES.map(([name]) => name), burned: burnsIn(edit.subtitles) } }),
   };
   await writeJson(join(dir, 'verification.json'), verification);
