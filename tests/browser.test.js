@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { saveAuthState, resolveAuthProfile } from '../src/auth.js';
 import { installProbe, collectTimeline } from '../src/probe.js';
+import { createDirector } from '../src/director.js';
 import { renderFinal, inspectFinal, extractFrame, composePreview } from '../src/render.js';
 import { merge, withDefaults } from '../src/edit.js';
 import { layout, previewSheet, outputSize } from '../src/stage.js';
@@ -128,13 +129,13 @@ test('probe records the cursor shape the page asks for, as the browser resolves 
   } finally { await browser.close(); }
 }, 30_000);
 
-/** A VP9 WebM of a black 640×480 stage with a red square, recorded like a real Source. */
-async function syntheticSource(browser, seconds) {
+/** A VP9 WebM of a black 640×480 stage with a red square, recorded like a real Source; the square turns green `greenAt` seconds in. */
+async function syntheticSource(browser, seconds, greenAt = Infinity) {
   const page = await browser.newPage();
-  const base64 = await page.evaluate(async ms => {
+  const base64 = await page.evaluate(async ([ms, greenMs]) => {
     const canvas = Object.assign(document.createElement('canvas'), { width: 640, height: 480 });
-    const ctx = canvas.getContext('2d');
-    const paint = () => { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 640, 480); ctx.fillStyle = '#f00'; ctx.fillRect(480, 200, 40, 40); };
+    const ctx = canvas.getContext('2d'), started = performance.now();
+    const paint = () => { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 640, 480); ctx.fillStyle = performance.now() - started >= greenMs ? '#0f0' : '#f00'; ctx.fillRect(480, 200, 40, 40); };
     paint();
     const recorder = new MediaRecorder(canvas.captureStream(30), { mimeType: 'video/webm;codecs=vp9' });
     const chunks = [];
@@ -149,7 +150,7 @@ async function syntheticSource(browser, seconds) {
     let binary = '';
     for (const b of bytes) binary += String.fromCharCode(b);
     return btoa(binary);
-  }, seconds * 1000);
+  }, [seconds * 1000, greenAt * 1000]);
   await page.close();
   return Buffer.from(base64, 'base64');
 }
@@ -184,6 +185,51 @@ test('Render maps CSS camera targets onto the 2× Source and holds the last fram
     expect(pixel[1][0]).toBeLessThan(40);
   } finally { await browser.close(); await fs.rm(dir, { recursive: true, force: true }); }
 }, 60_000);
+
+test('Render plays a fast-forward faster, with the Cursor in step with the page, and the rest as recorded', async () => {
+  const dir = await fs.mkdtemp(join(tmpdir(), 'cuetake-fast-'));
+  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
+  try {
+    const sourcePath = join(dir, 'source.webm'), outputPath = join(dir, 'final.mp4');
+    await fs.writeFile(sourcePath, await syntheticSource(browser, 3.1, 1.5));
+    // The pointer sweeps right at 80 CSS px a second of Source time.
+    const timeline = { viewport: { width: 320, height: 240 }, duration: 3, pointer: [[0, 40, 200], [3, 280, 200]], events: [] };
+    const edit = bare({ fastForward: [{ start: 0.3, end: 2.7, rate: 4 }] });
+    await renderFinal({ sourcePath, finalPath: outputPath, timeline, ...forRender(edit, dir) });
+    // 0.3 s as recorded, 0.6 s easing over 1.5 s of Source, 0.9 s at 4×, 0.3 s as recorded: 1.425 s.
+    expect(await inspectFinal(outputPath)).toMatchObject({ fps: 30, packets: 43, decodedFrames: 43 });
+    // At 0.95 s of the Final the Source is at about 2.4 s: the square has turned green and the Cursor is near x = 232.
+    const [square, cursor, behind] = await pixelsAt(browser, await extractFrame(outputPath, 0.95), [[250, 110], [239, 207], [123, 207]]);
+    expect(square[1]).toBeGreaterThan(180);
+    expect(square[0]).toBeLessThan(60);
+    expect(Math.min(...cursor)).toBeGreaterThan(180);
+    expect(Math.max(...behind)).toBeLessThan(40);
+    // Before the span the Final plays as recorded: still red, the Cursor near x = 56.
+    const [early, start] = await pixelsAt(browser, await extractFrame(outputPath, 0.2), [[250, 110], [63, 207]]);
+    expect(early[0]).toBeGreaterThan(180);
+    expect(Math.min(...start)).toBeGreaterThan(180);
+  } finally { await browser.close(); await fs.rm(dir, { recursive: true, force: true }); }
+}, 60_000);
+
+test('the Director marks a fast-forwarded wait, and refuses Lines and fast-forwards inside one', async () => {
+  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
+  try {
+    const page = await browser.newPage();
+    const said = [], forwarded = [];
+    const d = createDirector(page, Date.now(), 60, [], [], said, forwarded);
+    await d.wait(100);
+    expect(await d.fastForward(async () => { await d.wait(300); return 'ready'; }, { rate: 3 })).toBe('ready');
+    expect(forwarded).toEqual([{ t: expect.any(Number), end: expect.any(Number), rate: 3 }]);
+    expect(forwarded[0].t).toBeGreaterThanOrEqual(0.1);
+    expect(forwarded[0].end - forwarded[0].t).toBeGreaterThanOrEqual(0.29);
+    await expect(d.fastForward(() => d.say('wait', 'Waiting.'))).rejects.toThrow("Line 'wait' is said inside d.fastForward");
+    await expect(d.fastForward(() => d.fastForward(() => d.wait(10)))).rejects.toThrow('d.fastForward was called inside the one from');
+    await expect(d.fastForward(() => d.wait(10), { rate: 0.5 })).rejects.toThrow('d.fastForward needs a rate of at least 1, not 0.5');
+    await expect(d.fastForward(Promise.resolve())).rejects.toThrow('d.fastForward needs a function that waits');
+    expect(said).toEqual([]);
+    expect(forwarded.map(span => span.rate)).toEqual([3, 4, 4]);
+  } finally { await browser.close(); }
+}, 30_000);
 
 test('Render draws the built-in cursor at the pointer and a spark around each click', async () => {
   const dir = await fs.mkdtemp(join(tmpdir(), 'cuetake-cursor-'));

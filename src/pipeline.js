@@ -13,6 +13,7 @@ import { createEdit, evenSize, merge, withDefaults } from './edit.js';
 import { loadLook, resolvedLook, applyLook, lookFromEdit, saveLook, summarize } from './look.js';
 import { absolute, bundle, forRender } from './styles.js';
 import { burnsIn, cuesFor, isCjk, lineProblems, toSrt, toVtt } from './narration.js';
+import { linesInFinal, timeMap } from './time-map.js';
 import pkg from '../package.json' with { type: 'json' };
 
 const SCHEMA_VERSION = 3;
@@ -116,8 +117,8 @@ export async function recordScenario(scenarioPath, outputDir, options = {}) {
     await page.evaluate(() => document.fonts.ready);
     const capture = await beginCapture(session.sessionId);
     const startedAtMs = Date.parse(capture.startedAt);
-    const focus = [], wide = [], said = [];
-    const director = createDirector(page, startedAtMs, config.capture.fps, focus, wide, said, imported && new Map(Object.entries(imported.durations)), config.director);
+    const focus = [], wide = [], said = [], forwarded = [];
+    const director = createDirector(page, startedAtMs, config.capture.fps, focus, wide, said, forwarded, imported && new Map(Object.entries(imported.durations)), config.director);
     const evidence = await scenario.run(director);
     await page.screenshot({ path: join(dir, 'poster.png') });
     const observed = await collectTimeline(page, startedAtMs);
@@ -126,7 +127,7 @@ export async function recordScenario(scenarioPath, outputDir, options = {}) {
     await fs.rename(stopped.webmPath.replace(/\.webm$/, '-capture.json'), join(dir, 'capture.json'));
     const timeline = {
       schemaVersion: SCHEMA_VERSION, viewport: config.viewport, scale: config.capture.resolutionScale, duration: stopped.durationSeconds,
-      pointer: observed.pointer, shapes: observed.shapes, events: [...observed.events, ...focus.map(f => ({ type: 'focus', ...f })), ...said.map(line => ({ type: 'say', ...line }))].sort((a, b) => a.t - b.t),
+      pointer: observed.pointer, shapes: observed.shapes, events: [...observed.events, ...focus.map(f => ({ type: 'focus', ...f })), ...said.map(line => ({ type: 'say', ...line })), ...forwarded.map(span => ({ type: 'fastForward', ...span }))].sort((a, b) => a.t - b.t),
     };
     await writeJson(join(dir, 'timeline.json'), timeline);
     let edit = createEdit(config, timeline, focus, wide);
@@ -154,12 +155,13 @@ export async function importNarration(directory, file) {
   const dir = resolve(directory);
   const { timeline, edit } = await loadTake(dir);
   const { narration, durations } = await intoTakeNarration(file, dir);
-  const end = Math.round(timeline.duration * edit.output.fps) / edit.output.fps;
   const { edit: next, unplaced } = placeLines(edit, narration);
   await writeJson(join(dir, 'edit.json'), next);
   const lines = next.narration.lines.filter(line => line.id in durations).map(line => ({ ...line, duration: durations[line.id] }));
   const missing = next.narration.lines.filter(line => !(line.id in durations)).map(line => line.id);
-  const problems = [...lineProblems(lines, end), ...missing.map(id => `Line '${id}' is placed in edit.json but the Narration has no audio for it`)];
+  const map = timeMap(next.fastForward, timeline.duration), end = Math.round(map.duration * next.output.fps) / next.output.fps;
+  const inFinal = linesInFinal(lines, map);
+  const problems = [...inFinal.problems, ...lineProblems(inFinal.lines, end), ...missing.map(id => `Line '${id}' is placed in edit.json but the Narration has no audio for it`)];
   return { narration: join(dir, 'narration', 'narration.json'), lines, unplaced, problems, next: `cuetake render ${dir}` };
 }
 
@@ -193,12 +195,14 @@ function narrationForRender(edit, narration, dir) {
 
 /**
  * Writes preview.png: the Take's current Edit beside each Look (names or JSON files), composed with a
- * 1080-pixel short side in each output's own proportions. Without `at` it shows the last moment with the camera wide.
+ * 1080-pixel short side in each output's own proportions. `at` is seconds of the Final; without it the
+ * Preview shows the last moment with the camera wide.
  */
 export async function previewTake(directory, refs = [], { at } = {}) {
   const dir = resolve(directory);
   const { config, timeline, edit, narration } = await loadTake(dir);
-  if (at !== undefined && !(at >= 0 && at <= timeline.duration)) throw new Error(`--at must be between 0 and ${timeline.duration} seconds`);
+  const length = timeMap(edit.fastForward, timeline.duration).duration;
+  if (at !== undefined && !(at >= 0 && at <= length)) throw new Error(`--at must be between 0 and ${+length.toFixed(3)} seconds of the Final`);
   const host = new URL(config.url).host;
   const looks = await Promise.all(refs.map(ref => loadLook(ref)));
   const tiles = [{ name: 'current', edit }, ...looks.map(look => ({ name: look.name, edit: applyLook(edit, resolvedLook(look), host) }))];
@@ -254,7 +258,7 @@ export async function renderTake(directory) {
  * Line, Lines that do not fit, subtitle files that do not match the Lines, and burned-in Subtitles
  * Render did not draw for a Line.
  */
-async function narrationProblems(dir, edit, narration, media, end) {
+async function narrationProblems(dir, edit, narration, media, map, end) {
   const problems = [], fps = edit.output.fps;
   if (!media.audio) return ['no audio track, though the Edit places Lines'];
   if (media.audio.error) problems.push(`the audio track does not decode: ${media.audio.error}`);
@@ -262,8 +266,8 @@ async function narrationProblems(dir, edit, narration, media, end) {
   const measured = new Map(media.lines.map(line => [line.id, line]));
   for (const line of media.lines) if (line.error) problems.push(line.error);
   if (problems.length) return problems;
-  const lines = narration.lines.map(line => ({ ...line, duration: measured.get(line.id).duration }));
-  problems.push(...lineProblems(lines, end));
+  const inFinal = linesInFinal(narration.lines.map(line => ({ ...line, duration: measured.get(line.id).duration })), map), { lines } = inFinal;
+  problems.push(...inFinal.problems, ...lineProblems(lines, end));
   if (problems.length) return problems;
   const cues = cuesFor(lines, narration.language, edit.subtitles, end);
   for (const [name, format] of SUBTITLE_FILES) {
@@ -292,14 +296,14 @@ export async function verifyTake(directory) {
   const { project, edit, narration } = await loadTake(dir);
   const spoken = narrationForRender(edit, narration, dir);
   const media = await inspectFinal(join(dir, 'final.mp4'), spoken?.lines ?? []);
-  const { fps } = edit.output;
-  const expected = { ...outputSize(edit), fps, frames: Math.round(project.duration * fps) };
+  const { fps } = edit.output, map = timeMap(edit.fastForward, project.duration);
+  const expected = { ...outputSize(edit), fps, frames: Math.round(map.duration * fps) };
   const problems = [
     media.width !== expected.width || media.height !== expected.height ? `size ${media.width}×${media.height}, expected ${expected.width}×${expected.height}` : null,
     Math.abs(media.fps - expected.fps) > 0.01 ? `${media.fps} fps, expected ${expected.fps}` : null,
     media.packets !== expected.frames ? `${media.packets} frames, expected ${expected.frames}` : null,
     media.decodedFrames !== media.packets ? `only ${media.decodedFrames} of ${media.packets} frames decoded` : null,
-    ...(spoken ? await narrationProblems(dir, edit, spoken, media, expected.frames / fps) : []),
+    ...(spoken ? await narrationProblems(dir, edit, spoken, media, map, expected.frames / fps) : []),
   ].filter(Boolean);
   if (problems.length) throw new Error(`Final failed verification: ${problems.join('; ')}`);
   const capture = await readJson(join(dir, 'capture.json'));

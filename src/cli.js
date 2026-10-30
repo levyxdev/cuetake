@@ -39,8 +39,8 @@ record captures, renders and verifies a new take; an existing directory is never
   --narration copies a Narration and its audio into the Take first: d.say(id) holds each Line for its audio.
 narrate import copies a Narration and its audio into a recorded Take, replacing its earlier one. Lines keep
   their start in edit.json; a new Line takes the start the file gives it. Render plays and subtitles them.
-preview writes preview.png in the take: the current Edit beside each Look, at --at seconds
-  or at the end with the camera wide. It never changes edit.json or final.mp4.
+preview writes preview.png in the take: the current Edit beside each Look, at --at seconds of the
+  Final or at the end with the camera wide. It never changes edit.json or final.mp4.
 render reuses source.webm, timeline.json and edit.json, replacing final.mp4 only on success.
 frame saves one Final frame as a PNG for inspection.
 login opens a separate browser; close its window after logging in to save the profile.

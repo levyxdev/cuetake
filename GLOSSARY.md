@@ -27,7 +27,7 @@ The unedited picture of the page produced by Capture, in device pixels.
 _Avoid_: raw video, recording
 
 **Timeline**:
-Every interaction observed during Capture (pointer path, presses and releases, the cursor shape the page asked for, typing, Shortcuts, focus targets, where each Line was said), timed from the start of Capture and positioned in CSS pixels.
+Every interaction observed during Capture (pointer path, presses and releases, the cursor shape the page asked for, typing, Shortcuts, focus targets, where each Line was said, the Fast-forwards the Scenario marked), timed from the start of Capture and positioned in CSS pixels.
 _Avoid_: event log, camera events
 
 **Shortcut**:
@@ -41,8 +41,12 @@ _Avoid_: session, cookies, login state
 ### Rendering
 
 **Edit**:
-The editable choices that turn a Source and Timeline into a Final: camera, cursor, click effects, the Shortcuts shown and their keycaps, frame styling, Line timing, Subtitles, and output, together with the shader, drawing-code and image files those choices name, kept in the Take.
+The editable choices that turn a Source and Timeline into a Final: camera, cursor, click effects, the Shortcuts shown and their keycaps, frame styling, Fast-forwards, Line timing, Subtitles, and output, together with the shader, drawing-code and image files those choices name, kept in the Take.
 _Avoid_: camera edit, render config, project settings
+
+**Fast-forward**:
+A span of a Take, marked by the Scenario as a wait the viewer need not sit through, that the Final plays faster at its rate.
+_Avoid_: speed-up, timelapse, idle skip
 
 **Background**:
 What fills the Final around the window: a list of image and shader layers, each drawn over the one before. It stays still while the camera moves the window over it.

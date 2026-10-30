@@ -55,6 +55,7 @@ Only `name` and `url` are required in config. Other fields use the shown default
 | `drag({x,y}, {x,y}, { duration, focus })` | Move to the start, press, move more slowly than an empty-handed move, then release. |
 | `focus({x,y,width,height}, seconds?)` | Add a camera target; defaults to the current time. |
 | `say(id, text?)` | Start a Narration Line. With `--narration` it waits until the Line's audio ends; without, `text` is required and it does not wait. See [narration.md](narration.md). |
+| `fastForward(wait, { rate=4 })` | Run `wait`, a function that waits on the page, such as `() => reply.waitFor()`, and return its result; the Final plays that span `rate` times faster. |
 | `time()` | Seconds elapsed since capture started. |
 
 The Director moves like a person. A move takes longer the farther and smaller its target is (Fitts's law), starts quickly and settles slowly, and at the default speed stays under about 2000 CSS px/s; it pauses briefly before pressing and after releasing, and holds a click's button for a moment, so the Cursor's press shows. A `duration` fixes one move's length in ms and `msPerChar` one field's typing pace; the arc, pauses and uneven typing stay. The same Scenario and `seed` move the same way on every recording. Changing any of this needs a new recording.
@@ -77,6 +78,8 @@ The camera works like Screen Studio's auto zoom. It follows the clicks, typing a
 
 Each target is framed with `padding` CSS px around its box, zooming at most `maxZoom`; boxes too large to reach `minZoom` stay wide. Set `zoom` on a target in `edit.json` to fix it; its segment then zooms no further. Pass `focus: false` to an action to keep the camera wide for it; a bare number still works as the action's timing. `d.focus(box)` adds a deliberate target and, like a manual zoom in Screen Studio, replaces only the automatic targets within its own span; the rest of the Take keeps following actions. Focus boxes always use CSS pixels, even when the source is captured at 2× scale.
 
+Wrap only dead time in `fastForward`: a page load, a server, an AI response streaming in. A deliberate hold such as `d.at(5)` on a result stays outside, so the viewer can read it. The Final eases into and out of the faster speed inside the span; the page, the Cursor and click effects speed up with it, while the camera, keycaps and Subtitles keep their pace. A Line cannot play faster, so `say` inside `fastForward` fails the Take: say it before the wait. Each span is copied into `edit.json` as `fastForward: [{ "start": 3.2, "end": 9.8, "rate": 4 }]` (Source seconds), where it can be retimed or removed without recording again.
+
 Use actual locators for clicks. Canvas drags often require coordinates; derive or validate them for the configured viewport. Keep setup outside capture, hold important states, and assert meaningful application changes. An exception marks the take failed and closes the isolated browser.
 
 ## Take folder
@@ -87,21 +90,21 @@ Use actual locators for clicks. Canvas drags often require coordinates; derive o
   scenario.mjs       Snapshot of the original scenario module
   source.webm        Source: original high-resolution VP9 capture
   capture.json       Track settings and video frame callback observations
-  timeline.json      Timeline: pointer path, cursor shapes, clicks and drags with their release, typing, Shortcuts, focus and said Lines, in seconds and CSS pixels
-  edit.json          Edit: camera targets and settings, cursor, click effect, Shortcuts and keycaps, frame, Line starts and volumes, Subtitles, output
+  timeline.json      Timeline: pointer path, cursor shapes, clicks and drags with their release, typing, Shortcuts, focus, said Lines and fast-forwards, in seconds and CSS pixels
+  edit.json          Edit: camera targets and settings, cursor, click effect, Shortcuts and keycaps, frame, fast-forwards, Line starts and volumes, Subtitles, output
   narration/         The Narration: narration.json (text, word timings) and each Line's audio, named by its id
   subtitles.srt/.vtt Subtitles of the placed Lines, from the last Render
   styles/            Shaders, drawing code and images the Edit names
   poster.png         Final page state at native capture resolution
   preview.png        Preview: the current Edit beside candidate Looks, from the last `preview`
   final.mp4          Final: H.264 camera composition
-  render.json        Encoder, rate control and GPU used by the last Render
+  render.json        Encoder, rate control and GPU used by the last Render; its times are seconds of the Final
   verification.json Output metadata, decode result, capture observations
 ```
 
 A copied scenario snapshot may import helper modules from its original project. It is a record of the scenario, not a bundled runnable archive. Keep business scenarios in their application repository.
 
-To edit a completed take, change `edit.json` (camera settings, target boxes and times, the Shortcuts shown as `shortcuts: [{ "t": 2.4, "keys": ["Meta", "K"] }]`, and the styling in [styling.md](styling.md)), then run `cuetake render <take>`. To compare styling first, run `cuetake preview <take> --look <name|file.json>...`, which composes stills without touching `edit.json` or the Final. A Look is a partial Edit holding any styling and camera settings, but not camera targets, Shortcuts, `frame.url` or `output.fps`. `cuetake look apply` merges one into `edit.json`, and `cuetake record --look` seeds a new take's Edit with it under the Scenario config. The Scenario config only seeds the first Edit. Changing what happens on the page requires recording again. `render` automatically runs verification; `verify` checks without rendering.
+Times in `edit.json` and `timeline.json` are Source seconds, from the start of Capture; a fast-forward only changes when they happen in the Final. To edit a completed take, change `edit.json` (camera settings, target boxes and times, fast-forwards, the Shortcuts shown as `shortcuts: [{ "t": 2.4, "keys": ["Meta", "K"] }]`, and the styling in [styling.md](styling.md)), then run `cuetake render <take>`. To compare styling first, run `cuetake preview <take> --look <name|file.json>...`, which composes stills without touching `edit.json` or the Final. A Look is a partial Edit holding any styling and camera settings, but not camera targets, Shortcuts, fast-forwards, `frame.url` or `output.fps`. `cuetake look apply` merges one into `edit.json`, and `cuetake record --look` seeds a new take's Edit with it under the Scenario config. The Scenario config only seeds the first Edit. Changing what happens on the page requires recording again. `render` automatically runs verification; `verify` checks without rendering.
 
 `edit.json` also carries `output.fps`, the Final's frame rate, which a new Take takes from `capture.fps`, and `frame.url`, the address bar's text, which defaults to the Scenario's host. Encoders without a quantizer mode fall back to a bitrate, recorded in `render.json`.
 

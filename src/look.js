@@ -6,19 +6,19 @@ import { absolute, bundle, codeRefs, fileRefs } from './styles.js';
 
 /**
  * A Look is the part of an Edit that does not depend on one Take: everything except camera targets,
- * the address bar's url, the frame rate, the Shortcuts and the Narration's Lines. A Look sets only what
- * it names, and is not validated.
+ * the address bar's url, the frame rate, the Shortcuts, the fast-forwards and the Narration's Lines. A
+ * Look sets only what it names, and is not validated.
  */
 export const mergeLook = merge;
 
 /** The Look an Edit carries. */
 export function lookFromEdit(edit) {
-  const { schemaVersion, narration, shortcuts, output: { fps, ...output } = {}, frame, camera: { targets, ...camera } = {}, ...rest } = edit;
+  const { schemaVersion, narration, shortcuts, fastForward, output: { fps, ...output } = {}, frame, camera: { targets, ...camera } = {}, ...rest } = edit;
   const { url, ...styling } = frame ?? {};
   return { ...rest, output, frame: styling, camera };
 }
 
-/** The Edit with a Look adopted. Camera targets, the frame rate, the Shortcuts and the Lines stay; the address bar keeps its url, else shows `host`. */
+/** The Edit with a Look adopted. Camera targets, the frame rate, the Shortcuts, the fast-forwards and the Lines stay; the address bar keeps its url, else shows `host`. */
 export function applyLook(edit, look, host) {
   const next = merge(edit, look);
   next.frame = { ...next.frame, url: edit.frame?.url ?? host };

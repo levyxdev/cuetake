@@ -12,6 +12,7 @@ import { bundle, codeRefs, forRender, BUILTIN_DIR } from '../src/styles.js';
 import { npxFolders, uninstall } from '../src/uninstall.js';
 import { subtitleRows, subtitleCues, lineProblems, toSrt, toVtt } from '../src/narration.js';
 import { shortcutKeys, keycapShows, keycapTrack } from '../src/shortcuts.js';
+import { timeMap, fastForwardProblems, retimed, linesInFinal } from '../src/time-map.js';
 import fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -146,6 +147,85 @@ test('the camera eases into each move', () => {
   expect(zoomAt(track, 1.45)).toBeLessThan(1.01);
   const speeds = track.slice(84, 96).map((c, i, all) => i ? Math.abs(c.w - all[i - 1].w) : 0).slice(1);
   for (let i = 1; i < speeds.length; i++) expect(speeds[i]).toBeGreaterThan(speeds[i - 1]);
+});
+
+const speedAt = (map, t) => (map.sourceAt(t + 1e-4) - map.sourceAt(t - 1e-4)) / 2e-4;
+
+test('a fast-forward shortens the Final by what its rate saves, and plays the rest as recorded', () => {
+  const map = timeMap([{ start: 5, end: 13, rate: 4 }], 20);
+  // 0.3 s easing in and out covers 0.75 s of Source each; the other 6.5 s play at 4×.
+  expect(map.duration).toBeCloseTo(5 + 0.6 + 6.5 / 4 + 7, 9);
+  expect(map.spans).toEqual([{ start: 5, end: expect.closeTo(7.225, 9), rate: 4 }]);
+  expect(map.sourceAt(3)).toBe(3);
+  expect(map.sourceAt(map.duration)).toBeCloseTo(20, 9);
+  expect(map.sourceAt(map.duration - 2)).toBeCloseTo(18, 9);
+  expect(timeMap([], 20)).toMatchObject({ duration: 20, spans: [] });
+  expect(timeMap([], 20).sourceAt(7.5)).toBe(7.5);
+});
+
+test('a fast-forward eases to its rate and back, never jumping, and maps both ways', () => {
+  const map = timeMap([{ start: 5, end: 13, rate: 4 }], 20);
+  expect(speedAt(map, 4.99)).toBeCloseTo(1, 2);
+  expect(speedAt(map, 5.01)).toBeLessThan(1.1);
+  expect(speedAt(map, 6)).toBeCloseTo(4, 6);
+  expect(speedAt(map, 7.22)).toBeLessThan(1.1);
+  expect(speedAt(map, 7.3)).toBeCloseTo(1, 6);
+  let previous = -1;
+  for (let t = 0; t <= map.duration; t += 0.01) {
+    const s = map.sourceAt(t);
+    expect(s).toBeGreaterThanOrEqual(previous);
+    expect(map.outputAt(s)).toBeCloseTo(t, 9);
+    previous = s;
+  }
+});
+
+test('a fast-forward too short to ease fully still keeps its length exact, and spans clip to the Source', () => {
+  const map = timeMap([{ start: 1, end: 1.5, rate: 4 }], 3);
+  expect(map.duration).toBeCloseTo(1 + 0.2 + 1.5, 9);
+  expect(map.sourceAt(1.2)).toBeCloseTo(1.5, 9);
+  expect(timeMap([{ start: 2, end: 9, rate: 2 }], 3).sourceAt(timeMap([{ start: 2, end: 9, rate: 2 }], 3).duration)).toBeCloseTo(3, 9);
+});
+
+test('fast-forwards that overlap, are empty or slow down are named, and stop the time map', () => {
+  expect(fastForwardProblems([{ start: 1, end: 3, rate: 2 }, { start: 2, end: 4, rate: 2 }])).toEqual(['The fast-forward from 1.00 s overlaps the one from 2.00 s']);
+  expect(fastForwardProblems([{ start: 3, end: 3, rate: 2 }, { start: 5, end: 6, rate: 0.5 }])).toEqual([
+    'The fast-forward from 3.00 s needs a start before its end, in seconds', 'The fast-forward from 5.00 s needs a rate of at least 1',
+  ]);
+  expect(fastForwardProblems([{ start: 1, end: 2, rate: 2 }, { start: 2, end: 3, rate: 3 }])).toEqual([]);
+  expect(() => timeMap([{ start: 1, end: 2 }], 5)).toThrow('The fast-forward spans do not fit: The fast-forward from 1.00 s needs a rate of at least 1');
+});
+
+test('Shortcuts and camera targets move to Final time, so the camera keeps its pace across a fast-forward', () => {
+  const map = timeMap([{ start: 1, end: 9, rate: 4 }], 12);
+  const [target] = retimed([{ t: 10, until: 10.5, box: small(240, 100) }], map, ['t', 'until']);
+  expect(target.t).toBeCloseTo(10 - (9 - map.spans[0].end), 9);
+  expect(target.until - target.t).toBeCloseTo(0.5, 9);
+  expect(retimed([{ t: 0.5, keys: ['Meta', 'K'] }], map)).toEqual([{ t: 0.5, keys: ['Meta', 'K'] }]);
+  // Around the moved action the camera moves exactly as it would around the same action without the fast-forward.
+  const track = cameraTrack({ targets: [target], viewport, camera, duration: map.duration, fps: 60 });
+  const plain = cameraTrack({ targets: [{ t: 10, until: 10.5, box: small(240, 100) }], viewport, camera, duration: 12, fps: 60 });
+  for (const offset of [-0.6, -0.3, 0, 0.5, 1.5]) expect(zoomAt(track, target.t + offset)).toBeCloseTo(zoomAt(plain, 10 + offset), 1);
+  expect(zoomAt(track, target.t)).toBeGreaterThan(1.85);
+});
+
+test('Lines move to Final time, and one spoken while the Final fast-forwards is named', () => {
+  const map = timeMap([{ start: 2, end: 6, rate: 4 }], 10);
+  const { lines, problems } = linesInFinal([{ id: 'before', start: 0.5, duration: 1.5 }, { id: 'after', start: 7, duration: 1 }], map);
+  expect(problems).toEqual([]);
+  expect(lines.map(line => line.start)).toEqual([0.5, expect.closeTo(7 - (6 - map.spans[0].end), 9)]);
+  expect(linesInFinal([{ id: 'late', start: 1.5, duration: 1 }], map).problems).toEqual([
+    expect.stringMatching(/^Line 'late' is spoken from 1\.50 s to 2\.50 s of the Final, while it fast-forwards from 2\.00 s to 3\.\d\d s; move the Line out of it or shorten the fast-forward$/),
+  ]);
+  expect(linesInFinal([{ id: 'inside', start: 4, duration: 0.1 }], map).problems).toHaveLength(1);
+});
+
+test('the first Edit fast-forwards the waits the Scenario marked, and a Look keeps them out', () => {
+  const timeline = { events: [{ type: 'click', t: 1, x: 0, y: 0, box }, { type: 'fastForward', t: 1.5, end: 6, rate: 4 }] };
+  const edit = createEdit(scenarioSchema.parse({ name: 'demo', url: 'https://example.com' }), timeline, []);
+  expect(edit.fastForward).toEqual([{ start: 1.5, end: 6, rate: 4 }]);
+  expect(withDefaults({}).fastForward).toEqual([]);
+  expect(lookFromEdit(edit)).not.toHaveProperty('fastForward');
+  expect(applyLook(edit, lookFromEdit(withDefaults({}))).fastForward).toEqual(edit.fastForward);
 });
 
 test('the cursor interpolates the pointer path and is hidden before the first sample', () => {

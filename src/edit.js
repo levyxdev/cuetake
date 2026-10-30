@@ -50,7 +50,7 @@ export function merge(base, over) {
 
 /** A complete Edit: the defaults under whatever `edit` names. */
 export function withDefaults(edit) {
-  return merge({ schemaVersion: EDIT_VERSION, ...DEFAULT_STYLE, output: { ...DEFAULT_STYLE.output, fps: 60 }, camera: { ...DEFAULT_STYLE.camera, targets: [] }, shortcuts: [], narration: { volume: 1, lines: [] } }, edit);
+  return merge({ schemaVersion: EDIT_VERSION, ...DEFAULT_STYLE, output: { ...DEFAULT_STYLE.output, fps: 60 }, camera: { ...DEFAULT_STYLE.camera, targets: [] }, shortcuts: [], fastForward: [], narration: { volume: 1, lines: [] } }, edit);
 }
 
 /**
@@ -77,7 +77,8 @@ export function cameraTargets(timeline, focus, wide = [], camera = {}) {
 /**
  * The first Edit of a Take. Each Line starts where the Scenario said it (`d.say`); its text, audio and
  * word timings stay in the Take's Narration, since they change only with new audio. The Shortcuts the
- * Timeline recorded are the ones shown, so one can be relabeled or removed without recording again.
+ * Timeline recorded are the ones shown, so one can be relabeled or removed without recording again, and
+ * so are the waits the Scenario fast-forwarded (`d.fastForward`), so one can be retimed (time-map.js).
  */
 export function createEdit(config, timeline, focus, wide = []) {
   return withDefaults({
@@ -86,6 +87,7 @@ export function createEdit(config, timeline, focus, wide = []) {
     frame: { url: new URL(config.url).host, ...config.frame },
     camera: { ...config.camera, targets: cameraTargets(timeline, focus, wide, config.camera) },
     shortcuts: timeline.events.filter(event => event.type === 'shortcut').map(({ t, keys }) => ({ t, keys })),
+    fastForward: timeline.events.filter(event => event.type === 'fastForward').map(({ t, end, rate }) => ({ start: t, end, rate })),
     narration: { lines: timeline.events.filter(event => event.type === 'say').map(event => ({ id: event.id, start: event.t })) },
   });
 }

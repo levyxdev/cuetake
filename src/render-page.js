@@ -9,6 +9,11 @@
  *
  * Spaces: camera crops are CSS pixels of the viewport; the Source texture is sampled by UV only;
  * "stage" is the Final's pixels at camera zoom 1, laid out by stage.js.
+ *
+ * Times: the Timeline and the Edit are in Source time, the Final in its own, and time-map.js maps
+ * between them. The page's own motion (the Source, the Cursor, click effects) plays at the Final
+ * moment's Source time, so it fast-forwards with the page; the camera, keycaps, Subtitles and audio
+ * keep their pace in Final time.
  */
 import * as MB from '/mediabunny.js';
 import { cameraTrack } from '/camera.js';
@@ -16,6 +21,7 @@ import { cursorTrack, drawnShape, pointerAt, presses, sparksAt } from '/cursor.j
 import { layout, outputSize, cameraView, previewSheet, brandColor } from '/stage.js';
 import { burnsIn, cuesFor, lineProblems } from '/narration.js';
 import { keycapTrack } from '/shortcuts.js';
+import { linesInFinal, retimed, timeMap } from '/time-map.js';
 
 const VERTEX = `#version 300 es
 in vec2 p; void main() { gl_Position = vec4(p, 0, 1); }`;
@@ -401,14 +407,15 @@ async function decodeLines(lines) {
 }
 
 /**
- * The Narration as Render plays it: each Line's decoded audio and measured duration, and its subtitle
- * cues. Lines that overlap or run past `seconds`, the Final's length, stop the Render.
+ * The Narration as Render plays it: each Line's decoded audio and measured duration, placed in Final
+ * time by `map`, and its subtitle cues. Lines that overlap, run past `seconds`, the Final's length, or
+ * speak while it fast-forwards stop the Render.
  */
-async function prepareNarration(narration, subtitles, seconds) {
+async function prepareNarration(narration, subtitles, seconds, map) {
   if (!narration?.lines.length) return null;
   const buffers = await decodeLines(narration.lines);
-  const placed = narration.lines.map((line, i) => ({ ...line, duration: buffers[i].duration }));
-  const problems = lineProblems(placed, seconds);
+  const { lines: placed, problems: forwarded } = linesInFinal(narration.lines.map((line, i) => ({ ...line, duration: buffers[i].duration })), map);
+  const problems = [...forwarded, ...lineProblems(placed, seconds)];
   if (problems.length) throw new Error(`The Narration does not fit: ${problems.join('; ')}`);
   return { placed, buffers, cues: cuesFor(placed, narration.language, subtitles, seconds) };
 }
@@ -476,13 +483,17 @@ async function encoderConfig(width, height, fps, quality) {
   throw new Error(`No H.264 encoder supports ${width}×${height} at ${fps} fps`);
 }
 
-/**
+/** The camera's crop for every frame of the Final: its targets move to Final time, and it follows the pointer at each moment's Source time. */
+function cameraPath(edit, viewport, pointer, map) {
+  const { camera } = edit, targets = retimed(camera.targets, map, ['t', 'until']);
+  return cameraTrack({ targets, viewport, camera, duration: map.duration, fps: edit.output.fps, pointerAt: t => pointerAt(pointer, map.sourceAt(t)) });
+}
 
 /**
  * Everything Render draws for one Edit (as forRender in styles.js serves it). `firstFrame` is the
- * Source's first frame: Background layers see it, and it picks the brand color.
+ * Source's first frame: Background layers see it, and it picks the brand color. `map` is the Take's time map.
  */
-async function createScene(edit, viewport, { pointer, shapes, events }, firstFrame, sourceWidth, sourceHeight, cues = []) {
+async function createScene(edit, viewport, { pointer, shapes, events }, firstFrame, sourceWidth, sourceHeight, cues, map) {
   const { camera, cursor, clickEffect, keycaps, shortcuts, frame, subtitles } = edit;
   const chrome = frame.chrome ? await loadChrome(frame.chrome, viewport.width, frame.url ?? '') : null;
   const stage = layout(edit, viewport, chrome?.height ?? 0);
@@ -500,17 +511,17 @@ async function createScene(edit, viewport, { pointer, shapes, events }, firstFra
   const effect = clickEffect ? await loadClickEffect(clickEffect, cursor ? Object.fromEntries(Object.entries(cursor).filter(([key]) => !['ref', 'kind', 'url', 'files'].includes(key))) : {}) : null;
   const pressList = presses(events);
   const subtitleDrawing = burnsIn(subtitles) && cues.length ? await loadScreenDrawing(subtitles, 'Subtitles') : null;
-  const keys = keycapTrack(shortcuts, keycaps), keycapDrawing = keys.shows.length ? await loadScreenDrawing(keycaps, 'Keycaps') : null;
+  const keys = keycapTrack(retimed(shortcuts, map), keycaps), keycapDrawing = keys.shows.length ? await loadScreenDrawing(keycaps, 'Keycaps') : null;
   const unit = Math.min(stage.width, stage.height) / 1080;
   let effectTexture = null, subtitleTexture = null, shown = -1, keycapTexture = null, keycapsShown = null;
   return {
     stage, compositor, keycapShows: keys.shows,
     /**
-     * Draws output time `t` with the camera showing `crop`, a viewport rectangle in CSS pixels; returns
+     * Draws Final time `t` with the camera showing `crop`, a viewport rectangle in CSS pixels; returns
      * the index of the cue it shows, or -1, and the keycap show, or null.
      */
     draw(t, crop) {
-      const view = cameraView(crop, stage, viewport);
+      const view = cameraView(crop, stage, viewport), source = map.sourceAt(t);
       const cue = subtitleDrawing ? cues.findIndex(c => t >= c.start && t < c.end) : -1;
       if (cue >= 0 && cue !== shown) subtitleTexture = compositor.sprite(subtitleDrawing.canvas(stage.width, stage.height, { rows: cues[cue].rows }), subtitleTexture, false);
       shown = cue;
@@ -520,7 +531,7 @@ async function createScene(edit, viewport, { pointer, shapes, events }, firstFra
       keycapsShown = drawnAs ?? keycapsShown;
       compositor.frame(view.x, view.y, view.zoom, draw => {
         if (chromeTexture) draw(chromeTexture, [stage.window.x, stage.window.y, stage.window.w, stage.chrome]);
-        for (const press of effect ? sparksAt(pressList, clickEffect, t) : []) {
+        for (const press of effect ? sparksAt(pressList, clickEffect, source) : []) {
           // Each click effect is drawn at its on-screen scale so thin strokes stay crisp.
           const scale = stage.scale * view.zoom, ctx = canvas2d(2 * effect.reach * scale, 2 * effect.reach * scale);
           ctx.scale(scale, scale); ctx.translate(effect.reach, effect.reach);
@@ -529,7 +540,7 @@ async function createScene(edit, viewport, { pointer, shapes, events }, firstFra
           draw(effectTexture, [...at(press.x - effect.reach, press.y - effect.reach), 2 * effect.reach * stage.scale, 2 * effect.reach * stage.scale]);
         }
         // The Cursor scales around its hotspot, so a press keeps its tip on the target.
-        const now = track && track.at(t);
+        const now = track && track.at(source);
         if (now) {
           const shape = drawnShape(now.shape, drawn), sprite = cursorSprites[shape], k = now.scale, frames = cursorTextures[shape];
           draw(frames[Math.floor(t * frames.length) % frames.length], [...at(now.x + sprite.offset.x * k, now.y + sprite.offset.y * k), sprite.size.w * k * stage.scale, sprite.size.h * k * stage.scale]);
@@ -552,14 +563,15 @@ const uploadStream = url => new WritableStream({
 });
 
 window.cuetakeRender = async ({ sourceUrl, finalUrl, duration, viewport, pointer, shapes, events, edit, narration }) => {
-  const { camera } = edit, { quality, fps } = edit.output;
+  const { quality, fps } = edit.output;
   const { width, height } = outputSize(edit);
   const started = performance.now();
   const input = new MB.Input({ formats: MB.ALL_FORMATS, source: new MB.UrlSource(sourceUrl) });
   const track = await input.getPrimaryVideoTrack();
   const reader = frameReader(track, await track.getDecoderConfig());
-  const frameCount = Math.round(duration * fps), seconds = frameCount / fps;
-  const voice = await prepareNarration(narration, edit.subtitles, seconds);
+  const map = timeMap(edit.fastForward, duration);
+  const frameCount = Math.round(map.duration * fps), seconds = frameCount / fps;
+  const voice = await prepareNarration(narration, edit.subtitles, seconds, map);
   const output = new MB.Output({ format: new MB.Mp4OutputFormat({ fastStart: 'reserve' }), target: new MB.StreamTarget(uploadStream(finalUrl), { chunked: true }) });
   const packets = new MB.EncodedVideoPacketSource('avc');
   output.addVideoTrack(packets, { frameRate: fps, maximumPacketCount: frameCount });
@@ -599,18 +611,18 @@ window.cuetakeRender = async ({ sourceUrl, finalUrl, duration, viewport, pointer
   let current = await reader.next(), next = await reader.next(), uploaded = null;
   if (!current) throw new Error('Source has no video frames');
   const cues = voice?.cues ?? [], shownFrames = cues.map(() => null), keycapFrames = [];
-  const scene = await createScene(edit, viewport, { pointer, shapes, events }, current, track.codedWidth, track.codedHeight, cues), { compositor } = scene;
-  const cameraPath = cameraTrack({ targets: camera.targets, viewport, camera, duration, fps, pointerAt: t => pointerAt(pointer, t) });
+  const scene = await createScene(edit, viewport, { pointer, shapes, events }, current, track.codedWidth, track.codedHeight, cues, map), { compositor } = scene;
+  const crops = cameraPath(edit, viewport, pointer, map);
   const origin = current.timestamp;
   try {
     for (let i = 0; i < frameCount; i++) {
       if (failure) throw failure;
-      // Sample and hold: show the latest Source frame at or before this output time (VFR → CFR).
-      const due = origin + Math.round(i * 1e6 / fps);
+      // Sample and hold: show the latest Source frame at or before this moment's Source time (VFR → CFR).
+      const due = origin + Math.round(map.sourceAt(i / fps) * 1e6);
       while (next && next.timestamp <= due) { current.close(); current = next; next = await reader.next(); }
       if (uploaded !== current) { compositor.upload(current); uploaded = current; }
       if (audio && i % fps === 0) await feedAudio(i / fps + 1);
-      const { cue, keycap } = scene.draw(i / fps, cameraPath[i]);
+      const { cue, keycap } = scene.draw(i / fps, crops[i]);
       if (cue >= 0) shownFrames[cue] = [shownFrames[cue]?.[0] ?? i, i];
       if (keycap) keycapFrames[keycap.index] = [keycapFrames[keycap.index]?.[0] ?? i, i];
       const videoFrame = new VideoFrame(compositor.canvas, { timestamp: Math.round(i * 1e6 / fps), duration: Math.round(1e6 / fps) });
@@ -698,8 +710,8 @@ window.cuetakePreview = async ({ sourceUrl, duration, viewport, pointer, shapes,
   const input = new MB.Input({ formats: MB.ALL_FORMATS, source: new MB.UrlSource(sourceUrl) });
   const track = await input.getPrimaryVideoTrack();
   const sink = new MB.VideoSampleSink(track), origin = await track.getFirstTimestamp();
-  const t = at ?? duration;
-  const firstSample = await sink.getSample(origin), sample = await sink.getSample(origin + t);
+  const map = timeMap(tiles[0]?.edit.fastForward, duration), t = at ?? map.duration;
+  const firstSample = await sink.getSample(origin), sample = await sink.getSample(origin + map.sourceAt(t));
   if (!firstSample || !sample) throw new Error('Source has no video frames');
   const firstFrame = firstSample.toVideoFrame(), frame = sample.toVideoFrame();
   try {
@@ -709,12 +721,12 @@ window.cuetakePreview = async ({ sourceUrl, duration, viewport, pointer, shapes,
     ctx.imageSmoothingQuality = 'high';
     ctx.font = '600 22px system-ui, -apple-system, sans-serif'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#e5e7eb';
     for (const [i, { name, edit }] of tiles.entries()) {
-      const voice = await prepareNarration(narration, edit.subtitles, Math.round(duration * edit.output.fps) / edit.output.fps);
-      const scene = await createScene(edit, viewport, { pointer, shapes, events }, firstFrame, track.codedWidth, track.codedHeight, voice?.cues);
+      const voice = await prepareNarration(narration, edit.subtitles, Math.round(map.duration * edit.output.fps) / edit.output.fps, map);
+      const scene = await createScene(edit, viewport, { pointer, shapes, events }, firstFrame, track.codedWidth, track.codedHeight, voice?.cues ?? [], map);
       let crop = { x: 0, y: 0, w: viewport.width, h: viewport.height };
       if (at !== null) {
-        const { fps } = edit.output, path = cameraTrack({ targets: edit.camera.targets, viewport, camera: edit.camera, duration, fps, pointerAt: s => pointerAt(pointer, s) });
-        crop = path[Math.min(Math.round(at * fps), path.length - 1)] ?? crop;
+        const path = cameraPath(edit, viewport, pointer, map);
+        crop = path[Math.min(Math.round(at * edit.output.fps), path.length - 1)] ?? crop;
       }
       scene.compositor.upload(frame);
       scene.draw(t, crop);

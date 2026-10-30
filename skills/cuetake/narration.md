@@ -51,7 +51,7 @@ Without `--narration`, `d.say(id, text)` only marks where a Line starts and does
 - **New audio or text**: voice again, then `narrate import <take> narration.json`. It replaces the Take's Narration. Lines keep their start in `edit.json`, and a new Line takes the `start` the file gives it. The command reports each Line's start and duration, and any Line that overlaps the next one or runs past the end.
 - **Timing and volume**: `edit.json` holds `narration: { volume, lines: [{ id, start, volume }] }`. Change `start` (seconds) or `volume` (1 is as recorded), then `render`. You only need to record again when the picture must change to make room.
 
-A Line that overlaps the next one or runs past the end of the Final stops `render` and `verify`, with an error naming the Line and the seconds involved. Move or shorten the Line; CueTake never moves Lines or stretches the picture.
+A Line that overlaps the next one, runs past the end of the Final or is spoken while the Final fast-forwards ([scenarios.md](scenarios.md)) stops `render` and `verify`, with an error naming the Line and the seconds involved. Move or shorten the Line; CueTake never moves Lines or stretches the picture.
 
 ## Subtitles
 

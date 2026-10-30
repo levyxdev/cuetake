@@ -2,12 +2,12 @@ import { landing, pauseMs, random, reach, typingDelays } from './motion.js';
 
 /**
  * Timed, viewport-aligned interactions shared by all scenarios, moving like a person (see motion.js).
- * `said` collects where each Line starts; `voiced` maps the Narration's Line ids to their audio's
- * seconds, or is null without one. `speed` scales every move, pause and typing delay it chooses;
- * `seed` picks one of many equally human ways to move.
+ * `said` collects where each Line starts and `forwarded` each fast-forwarded wait; `voiced` maps the
+ * Narration's Line ids to their audio's seconds, or is null without one. `speed` scales every move,
+ * pause and typing delay it chooses; `seed` picks one of many equally human ways to move.
  */
-export function createDirector(page, startedAt, fps, focusTargets, wideWindows, said = [], voiced = null, { speed = 1, seed = 1 } = {}) {
-  let cursor = { x: 0, y: 0 };
+export function createDirector(page, startedAt, fps, focusTargets, wideWindows, said = [], forwarded = [], voiced = null, { speed = 1, seed = 1 } = {}) {
+  let cursor = { x: 0, y: 0 }, forwarding = null;
   const rand = random(seed);
   const wait = ms => page.waitForTimeout(Math.max(0, ms));
   const time = () => (Date.now() - startedAt) / 1000;
@@ -92,10 +92,24 @@ export function createDirector(page, startedAt, fps, focusTargets, wideWindows, 
       await pause('afterRelease');
     });
   }
+  /**
+   * Runs `action`, a wait the viewer need not sit through, such as `() => reply.waitFor()`;
+   * the Final plays it `rate` times faster. Speech cannot speed up with it, so no Line is said inside.
+   */
+  async function fastForward(action, opts) {
+    const { rate = 4 } = options(opts, 'rate');
+    if (typeof action !== 'function') throw new Error('d.fastForward needs a function that waits, such as () => reply.waitFor()');
+    if (!(typeof rate === 'number' && rate >= 1)) throw new Error(`d.fastForward needs a rate of at least 1, not ${rate}`);
+    if (forwarding) throw new Error(`d.fastForward was called inside the one from ${forwarding.t.toFixed(2)} s`);
+    forwarding = { t: time(), rate };
+    try { return await action(); }
+    finally { forwarded.push({ t: forwarding.t, end: time(), rate }); forwarding = null; }
+  }
   /** Starts a Line. With a Narration it holds for the Line's audio, so the picture follows the voice. */
   async function say(id, text) {
     const t = time(), earlier = said.find(line => line.id === id);
     if (earlier) throw new Error(`Line '${id}' was already said at ${earlier.t.toFixed(2)} s`);
+    if (forwarding) throw new Error(`Line '${id}' is said inside d.fastForward, which the Final plays faster than speech; say it before the wait`);
     if (voiced) {
       if (!voiced.has(id)) throw new Error(`The Narration has no Line '${id}'; its Lines are ${[...voiced.keys()].join(', ')}`);
       said.push({ t, id });
@@ -105,5 +119,5 @@ export function createDirector(page, startedAt, fps, focusTargets, wideWindows, 
       said.push({ t, id, text });
     }
   }
-  return { page, wait, time, at: seconds => wait(seconds * 1000 - (Date.now() - startedAt)), move, hover, click, press, type, drag, focus, say };
+  return { page, wait, time, at: seconds => wait(seconds * 1000 - (Date.now() - startedAt)), move, hover, click, press, type, drag, focus, say, fastForward };
 }

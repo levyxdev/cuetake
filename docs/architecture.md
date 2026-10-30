@@ -6,7 +6,7 @@ CueTake is an agent-facing local recording runtime. Settled decisions live in [d
 
 Agent + skill → business scenario → CLI → Playwright context → Chromium tab capture → VP9 Source + Timeline → Render in headless Chromium (WebCodecs decode, WebGL compose, H.264 encode) → Final + verification.
 
-The scenario controls story and timing. All pointer/camera coordinates are CSS pixels; the source uses device pixels. Device scale does not change the page layout. Render samples the latest Source frame at or before each output time, turning the variable-rate Source into a constant-rate Final and holding the last frame to the measured Take duration.
+The scenario controls story and timing. All pointer/camera coordinates are CSS pixels; the source uses device pixels. Device scale does not change the page layout. Render samples the latest Source frame at or before each output moment's Source time, turning the variable-rate Source into a constant-rate Final and holding the last frame to the measured Take duration. The Edit's fast-forwards map Final time to Source time (`time-map.js`, ADR 0007); without one the two are the same.
 
 The Source holds only page pixels, since tab capture never shows the pointer; `probe.js` records the cursor shape the page asks for. Render draws the Cursor from the Timeline's pointer path, in that shape, pressed while a button is held, and any click effect at each press, as WebGL sprites under the same camera, so a Take can be restyled without recording again (ADR 0002). The Background, window effects, chrome, cursor, click effect and Subtitles are agent-written shaders, drawing code or images, with built-in defaults in `src/styles/` (ADR 0005); the render page has no network.
 
@@ -15,13 +15,14 @@ A Narration is voiced before Capture by a separate speech tool (ADR 0006). The D
 ## Modules
 
 - `pipeline.js`: scenario validation, artifact lifecycle, render and verification.
-- `director.js`: timed interactions, focus targets and said Lines.
+- `director.js`: timed interactions, focus targets, said Lines and fast-forwarded waits.
 - `motion.js`: how the Director moves like a person (durations, path, pauses, typing rhythm); pure and seeded.
 - `recorder.js` / `tab-capture.js`: supported HD capture only.
 - `cursor.js`: the Cursor's position, press, fade and shape over time, and click-effect timing; shared by Node and the render page.
 - `camera.js`: camera chains and the crop at any time; shared by Node and the render page.
 - `stage.js`: output size, window and page layout, camera view and brand color; shared by Node and the render page.
 - `narration.js`: Line problems, subtitle rows and cues, and subtitle files; shared by Node and the render page.
+- `time-map.js`: the map between Final and Source time that fast-forwards make, and what moves to Final time; shared by Node and the render page.
 - `styles.js` / `styles/`: built-in styling files, and the file refs an Edit or Look names (copying, serving).
 - `look.js`: saving, listing and adopting Looks.
 - `environment.js`: `doctor`, `install-browser`, and removing the browser.
