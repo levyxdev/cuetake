@@ -45,7 +45,7 @@ _Avoid_: session, cookies, login state
 ### Rendering
 
 **Edit**:
-The editable choices that turn a Source and Timeline into a Final: camera, cursor, click effects, the Shortcuts shown and their keycaps, frame styling, Fast-forwards, Line timing, Subtitles, and output, together with the shader, drawing-code and image files those choices name, kept in the Take.
+The editable choices that turn a Source and Timeline into a Final: camera, cursor, click effects, the Shortcuts shown and their keycaps, frame styling, how Tabs switch and where popup windows sit, Fast-forwards, Line timing, Subtitles, and output, together with the shader, drawing-code and image files those choices name, kept in the Take.
 _Avoid_: camera edit, render config, project settings
 
 **Fast-forward**:
@@ -61,7 +61,7 @@ The pointer Render draws over the page, following the Timeline's pointer path, i
 _Avoid_: mouse, pointer sprite
 
 **Look**:
-A named, reusable set of the Edit choices that do not depend on one Take (frame styling, cursor, click effects, keycap styling, Subtitle styling, output size and quality, camera behavior), with the files they name, that a new or existing Take can adopt. A Look is saved locally, for the directory CueTake runs in, or globally, for every directory; a local Look hides a global one with the same name.
+A named, reusable set of the Edit choices that do not depend on one Take (frame styling, how Tabs switch, cursor, click effects, keycap styling, Subtitle styling, output size and quality, camera behavior), with the files they name, that a new or existing Take can adopt. A Look is saved locally, for the directory CueTake runs in, or globally, for every directory; a local Look hides a global one with the same name.
 _Avoid_: style, theme, preset
 
 **Preview**:
