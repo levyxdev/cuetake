@@ -226,6 +226,8 @@ function createCompositor(stage, sourceWidth, sourceHeight, brand) {
   return {
     canvas,
     gpu: (() => { const info = gl.getExtension('WEBGL_debug_renderer_info'); return info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : 'unknown'; })(),
+    /** The widest and tallest texture the GPU holds; a larger sprite would draw black. */
+    maxTextureSize: gl.getParameter(gl.MAX_TEXTURE_SIZE),
     /** Frees the GPU context; a Preview makes one compositor per tile. */
     dispose() { gl.getExtension('WEBGL_lose_context')?.loseContext(); },
     upload(frame) {
@@ -504,13 +506,15 @@ async function createScene(edit, viewport, { pointer, shapes, events }, firstFra
   // Page CSS pixels → stage pixels; sprites are rasterized for the closest zoom and mipmapped below it.
   const at = (x, y) => [stage.page.x + x * stage.scale, stage.page.y + y * stage.scale];
   const sharpest = stage.scale * camera.maxZoom * 2;
+  // A sprite past the GPU's texture limit draws black, so a large one is rasterized only as sharp as fits.
+  const fitting = (w, h) => Math.min(sharpest, compositor.maxTextureSize / Math.max(w, h, 1));
   // The address bar shows `frame.url`, then each of `frame.urls` from its Source time; one sprite per text.
   const addresses = [{ t: -Infinity, url: frame.url ?? '' }, ...(frame.urls ?? []).toSorted((a, b) => a.t - b.t)];
   const chromeTextures = new Map(chrome ? addresses.map(({ url }) => [url, null]) : []);
-  for (const url of chromeTextures.keys()) chromeTextures.set(url, compositor.sprite(chrome.canvas(sharpest, stage.radius / stage.scale, url)));
+  for (const url of chromeTextures.keys()) chromeTextures.set(url, compositor.sprite(chrome.canvas(fitting(viewport.width, chrome.height), stage.radius / stage.scale, url)));
   const addressAt = source => addresses.findLast(address => address.t <= source).url;
   const cursorSprites = cursor ? await loadCursor(cursor) : {};
-  const cursorTextures = Object.fromEntries(Object.entries(cursorSprites).map(([shape, sprite]) => [shape, sprite.canvases(sharpest).map(canvas => compositor.sprite(canvas))]));
+  const cursorTextures = Object.fromEntries(Object.entries(cursorSprites).map(([shape, sprite]) => [shape, sprite.canvases(fitting(sprite.size.w, sprite.size.h)).map(canvas => compositor.sprite(canvas))]));
   const drawn = new Set(Object.keys(cursorSprites)), track = cursor && cursorTrack({ pointer, shapes, events }, cursor);
   const effect = clickEffect ? await loadClickEffect(clickEffect, cursor ? Object.fromEntries(Object.entries(cursor).filter(([key]) => !['ref', 'kind', 'url', 'files'].includes(key))) : {}) : null;
   const pressList = presses(events);

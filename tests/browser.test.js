@@ -577,6 +577,25 @@ test('Render frames the page in the built-in chrome over an agent shader Backgro
   } finally { await browser.close(); await fs.rm(dir, { recursive: true, force: true }); }
 }, 60_000);
 
+test('Render draws the chrome even when its sharpest size is past what the GPU holds in one texture', async () => {
+  const dir = await fs.mkdtemp(join(tmpdir(), 'cuetake-wide-chrome-'));
+  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
+  try {
+    const sourcePath = join(dir, 'source.webm'), outputPath = join(dir, 'final.mp4');
+    await fs.writeFile(sourcePath, await syntheticSource(browser, 0.4));
+    // A wide viewport and a deep zoom ask for a chrome sprite over 11,000 px wide; GPUs without a
+    // discrete card often hold 8192 at most.
+    const viewport = { width: 1440, height: 900 };
+    const edit = bare({ output: { width: 854, height: 480 }, camera: { maxZoom: 8 }, frame: { padding: 0.08, radius: 12, url: 'example.com', chrome: { draw: 'browser' }, background: [{ shader: 'fluted' }] } });
+    const stage = layout(edit, viewport, 44);
+    expect(viewport.width * stage.scale * 8 * 2).toBeGreaterThan(8192);
+    await renderFinal({ sourcePath, finalPath: outputPath, timeline: { viewport, duration: 0.5 }, ...forRender(edit, dir) });
+    const bar = [Math.round(stage.window.x + stage.window.w * 0.8), Math.round(stage.window.y + stage.chrome / 2)];
+    const [pixel] = await pixelsAt(browser, await extractFrame(outputPath, 0.25), [bar]);
+    expect(Math.min(...pixel)).toBeGreaterThan(220);           // the light chrome bar, not black
+  } finally { await browser.close(); await fs.rm(dir, { recursive: true, force: true }); }
+}, 60_000);
+
 test('a Preview composes each Look over the Source exactly where Render would place it', async () => {
   const dir = await fs.mkdtemp(join(tmpdir(), 'cuetake-preview-'));
   const browser = await chromium.launch({ headless: true, channel: 'chromium' });
