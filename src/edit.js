@@ -77,6 +77,30 @@ export function cameraTargets(timeline, focus, wide = [], camera = {}) {
   return [...automatic, ...focus].sort((a, b) => a.t - b.t);
 }
 
+/** What the address bar shows for a page address: its host, or the whole address when it has none. */
+export function addressOf(url) {
+  try { const parsed = new URL(url); return /^https?:$/.test(parsed.protocol) ? parsed.host : url; } catch { return url; }
+}
+
+/**
+ * The address bar's text when Capture started (`url`), and each change after it (`urls`, as
+ * { t, url } in Source time): a full navigation to another host shows the new one from the moment the
+ * page took its address. The Scenario's `frame.url`, when set, names the host Capture started on,
+ * also when a navigation comes back to it.
+ */
+export function addressBar(config, timeline) {
+  const first = addressOf(timeline.url ?? config.url), shown = host => host === first ? config.frame?.url ?? first : host;
+  const urls = [];
+  let current = first;
+  for (const event of timeline.events ?? []) {
+    if (event.type !== 'navigate' || event.commit === undefined) continue;
+    const host = addressOf(event.url);
+    if (host !== current) urls.push({ t: event.commit, url: shown(host) });
+    current = host;
+  }
+  return { url: shown(first), urls };
+}
+
 /**
  * The first Edit of a Take. Each Line starts where the Scenario said it (`d.say`); its text, audio and
  * word timings stay in the Take's Narration, since they change only with new audio. The Shortcuts the
@@ -86,8 +110,8 @@ export function cameraTargets(timeline, focus, wide = [], camera = {}) {
 export function createEdit(config, timeline, focus, wide = []) {
   return withDefaults({
     cursor: config.cursor, clickEffect: config.clickEffect, keycaps: config.keycaps, subtitles: config.subtitles, fastForwardBadge: config.fastForwardBadge, output: { ...config.output, fps: config.capture.fps },
-    // The browser chrome shows the Scenario's host unless the config names something else.
-    frame: { url: new URL(config.url).host, ...config.frame },
+    // The browser chrome shows the host the page is on, unless the config names something else.
+    frame: { ...config.frame, ...addressBar(config, timeline) },
     camera: { ...config.camera, targets: cameraTargets(timeline, focus, wide, config.camera) },
     shortcuts: timeline.events.filter(event => event.type === 'shortcut').map(({ t, keys }) => ({ t, keys })),
     fastForward: timeline.events.filter(event => event.type === 'fastForward').map(({ t, end, rate }) => ({ start: t, end, rate })),

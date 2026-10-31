@@ -139,7 +139,7 @@ export async function recordScenario(scenarioPath, outputDir, options = {}) {
     await fs.rename(stopped.webmPath, join(dir, 'source.webm'));
     await fs.rename(stopped.webmPath.replace(/\.webm$/, '-capture.json'), join(dir, 'capture.json'));
     const timeline = {
-      schemaVersion: SCHEMA_VERSION, viewport: config.viewport, scale: config.capture.resolutionScale, duration: stopped.durationSeconds,
+      schemaVersion: SCHEMA_VERSION, url: capture.url, viewport: config.viewport, scale: config.capture.resolutionScale, duration: stopped.durationSeconds,
       pointer: observed.pointer, shapes: observed.shapes, ...((observed.turned.length || observed.unplaced.length) && { frameInput: { turned: observed.turned, unplaced: observed.unplaced } }), events: [...observed.events, ...focus.map(f => ({ type: 'focus', ...f })), ...said.map(line => ({ type: 'say', ...line })), ...forwarded.map(span => ({ type: 'fastForward', ...span })), ...stopped.navigations.map(load => ({ type: 'navigate', ...load }))].sort((a, b) => a.t - b.t),
     };
     await writeJson(join(dir, 'timeline.json'), timeline);

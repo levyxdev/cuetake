@@ -297,10 +297,10 @@ function createCompositor(stage, sourceWidth, sourceHeight, brand) {
 
 /**
  * The chrome bar: drawing code exporting `height` (CSS px) and `draw(ctx, { width, height, radius, url,
- * params, files })`, or an image as wide as the window. `paint(scale, radius)` rasterizes it, clipped to
- * the window's rounded top.
+ * params, files })`, or an image as wide as the window. `canvas(scale, radius, url)` rasterizes it with
+ * the address bar showing `url`, clipped to the window's rounded top.
  */
-async function loadChrome(item, width, url) {
+async function loadChrome(item, width) {
   let height, paint;
   if (item.kind === 'image') {
     const image = await loadImage(item, item.url);
@@ -309,15 +309,15 @@ async function loadChrome(item, width, url) {
   } else {
     const module = await loadModule(item), files = await loadFiles(item), params = paramsOf(item);
     height = item.height ?? (typeof module.height === 'function' ? module.height(params) : module.height) ?? 0;
-    paint = (ctx, radius) => module.draw(ctx, { width, height, radius, url, params, files });
+    paint = (ctx, radius, url) => module.draw(ctx, { width, height, radius, url, params, files });
   }
   return {
     height,
-    canvas(scale, radius) {
+    canvas(scale, radius, url) {
       const ctx = canvas2d(width * scale, height * scale);
       ctx.scale(scale, scale);
       ctx.beginPath(); ctx.roundRect(0, 0, width, height + radius, [radius, radius, 0, 0]); ctx.clip();
-      try { paint(ctx, radius); } catch (error) { throw fail(item, error); }
+      try { paint(ctx, radius, url); } catch (error) { throw fail(item, error); }
       return ctx.canvas;
     },
   };
@@ -495,7 +495,7 @@ function cameraPath(edit, viewport, pointer, map) {
  */
 async function createScene(edit, viewport, { pointer, shapes, events }, firstFrame, sourceWidth, sourceHeight, cues, map) {
   const { camera, cursor, clickEffect, keycaps, shortcuts, frame, subtitles, fastForwardBadge } = edit;
-  const chrome = frame.chrome ? await loadChrome(frame.chrome, viewport.width, frame.url ?? '') : null;
+  const chrome = frame.chrome ? await loadChrome(frame.chrome, viewport.width) : null;
   const stage = layout(edit, viewport, chrome?.height ?? 0);
   const compositor = createCompositor(stage, sourceWidth, sourceHeight, brandOf(firstFrame));
   compositor.upload(firstFrame);
@@ -504,7 +504,11 @@ async function createScene(edit, viewport, { pointer, shapes, events }, firstFra
   // Page CSS pixels → stage pixels; sprites are rasterized for the closest zoom and mipmapped below it.
   const at = (x, y) => [stage.page.x + x * stage.scale, stage.page.y + y * stage.scale];
   const sharpest = stage.scale * camera.maxZoom * 2;
-  const chromeTexture = chrome ? compositor.sprite(chrome.canvas(sharpest, stage.radius / stage.scale)) : null;
+  // The address bar shows `frame.url`, then each of `frame.urls` from its Source time; one sprite per text.
+  const addresses = [{ t: -Infinity, url: frame.url ?? '' }, ...(frame.urls ?? []).toSorted((a, b) => a.t - b.t)];
+  const chromeTextures = new Map(chrome ? addresses.map(({ url }) => [url, null]) : []);
+  for (const url of chromeTextures.keys()) chromeTextures.set(url, compositor.sprite(chrome.canvas(sharpest, stage.radius / stage.scale, url)));
+  const addressAt = source => addresses.findLast(address => address.t <= source).url;
   const cursorSprites = cursor ? await loadCursor(cursor) : {};
   const cursorTextures = Object.fromEntries(Object.entries(cursorSprites).map(([shape, sprite]) => [shape, sprite.canvases(sharpest).map(canvas => compositor.sprite(canvas))]));
   const drawn = new Set(Object.keys(cursorSprites)), track = cursor && cursorTrack({ pointer, shapes, events }, cursor);
@@ -535,7 +539,7 @@ async function createScene(edit, viewport, { pointer, shapes, events }, firstFra
       if (badge && badge.rate !== badgeShown) badgeTexture = compositor.sprite(badgeDrawing.canvas(stage.width, stage.height, { rate: badge.rate }), badgeTexture, false);
       badgeShown = badge ? badge.rate : badgeShown;
       compositor.frame(view.x, view.y, view.zoom, draw => {
-        if (chromeTexture) draw(chromeTexture, [stage.window.x, stage.window.y, stage.window.w, stage.chrome]);
+        if (chrome) draw(chromeTextures.get(addressAt(source)), [stage.window.x, stage.window.y, stage.window.w, stage.chrome]);
         for (const press of effect ? sparksAt(pressList, clickEffect, source) : []) {
           // Each click effect is drawn at its on-screen scale so thin strokes stay crisp.
           const scale = stage.scale * view.zoom, ctx = canvas2d(2 * effect.reach * scale, 2 * effect.reach * scale);

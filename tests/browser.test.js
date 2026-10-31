@@ -353,7 +353,7 @@ test('Capture keeps one Source and one Timeline through a full navigation and a 
   try {
     const { sessionId } = await startRecording(`http://127.0.0.1:${server.port}/`, { width: 320, height: 240, resolutionScale: 1, fps: 30, outputDir: dir, deferCapture: true });
     const recorded = getRecordingPage(sessionId);
-    const startedAtMs = Date.parse((await beginCapture(sessionId)).startedAt);
+    const started = await beginCapture(sessionId), startedAtMs = Date.parse(started.startedAt), beginCaptureUrl = started.url;
     await recorded.waitForTimeout(500);
     await Promise.all([recorded.waitForURL('**/next'), recorded.mouse.click(100, 100)]);
     await recorded.waitForTimeout(500);
@@ -370,6 +370,10 @@ test('Capture keeps one Source and one Timeline through a full navigation and a 
     for (const n of navigations) expect(n.end).toBeGreaterThanOrEqual(n.t);
     expect(navigations[1].t).toBeGreaterThan(navigations[0].end);
     expect(capture.navigations).toEqual(navigations);
+    // Each took its address between its request and its load; the reload stays on /next.
+    for (const n of navigations) expect(n.commit).toBeGreaterThanOrEqual(n.t);
+    for (const n of navigations) expect(n.commit).toBeLessThanOrEqual(n.end);
+    expect((await beginCaptureUrl)).toBe(`http://127.0.0.1:${server.port}/`);
     // The probe saw input on both documents, on the one clock from the start of Capture.
     expect(timeline.events.filter(e => e.type === 'click')).toHaveLength(1);
     expect(timeline.pointer.at(-1)).toEqual([expect.any(Number), 200, 50]);
@@ -559,6 +563,17 @@ test('Render frames the page in the built-in chrome over an agent shader Backgro
     expect(background[0]).toBeLessThan(60); expect(background[2]).toBeGreaterThan(190);
     expect(Math.max(...page)).toBeLessThan(40);              // the black Source
     expect(Math.min(...bar)).toBeGreaterThan(220);           // light chrome bar
+    // The address bar changes text from the Source time a navigation committed on another host.
+    const moved = { ...edit, frame: { ...edit.frame, urls: [{ t: 0.5, url: 'checkout.stripe.test/pay' }] } };
+    await renderFinal({ sourcePath, finalPath: outputPath, timeline: { viewport, duration: 1 }, ...forRender(moved, dir) });
+    const field = Array.from({ length: 120 }, (_, i) => [Math.round(stage.window.x + stage.window.w * (0.3 + 0.4 * i / 120)), Math.round(stage.window.y + stage.chrome / 2)]);
+    const ink = rgb => Math.min(...rgb) < 200;
+    const early = (await pixelsAt(browser, await extractFrame(outputPath, 0.2), field)).map(ink);
+    const late = (await pixelsAt(browser, await extractFrame(outputPath, 0.8), field)).map(ink);
+    const again = (await pixelsAt(browser, await extractFrame(outputPath, 0.3), field)).map(ink);
+    expect(early.filter(Boolean).length).toBeGreaterThan(3);
+    expect(late.filter(Boolean).length).toBeGreaterThan(early.filter(Boolean).length);  // a longer address
+    expect(again).toEqual(early);
   } finally { await browser.close(); await fs.rm(dir, { recursive: true, force: true }); }
 }, 60_000);
 

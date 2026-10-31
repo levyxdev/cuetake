@@ -29,7 +29,8 @@ function countAnimationFrames() {
  * Captures the page's tab at its device-pixel resolution from a recorder page of its own, so the
  * Source keeps recording across full navigations and reloads of the page. Unlike Playwright
  * recordVideo, this does not use the 25 fps / 1 Mbps VP8 encoder. Each main-frame navigation is noted,
- * from its request until the new document has loaded.
+ * from its request until the new document has loaded, with when the page took its new address (`commit`).
+ * Returns the page's address when Capture started as `url`.
  */
 export async function startTabCapture(page, options) {
   const state = { paints: [], navigations: [] };
@@ -39,21 +40,32 @@ export async function startTabCapture(page, options) {
     await page.exposeBinding('__cuetakePaint', (_, times) => { if (Array.isArray(times)) captures.get(page)?.paints.push(...times); });
     await page.addInitScript(countAnimationFrames);
   }
-  // A redirect, or a navigation started before the last one loaded, continues it.
+  // A redirect, or a navigation started before the last one committed, continues it.
   const onRequest = request => {
     if (!request.isNavigationRequest() || request.frame() !== page.mainFrame()) return;
     const last = state.navigations.at(-1);
-    if (last?.end === null) last.url = request.url();
-    else state.navigations.push({ ms: Date.now(), url: request.url(), end: null });
+    if (last?.end === null && !last.commit) { last.url = request.url(); return; }
+    // One that starts after the last committed, such as a script's redirect while loading, is its own.
+    if (last?.end === null) last.end = Date.now();
+    state.navigations.push({ ms: Date.now(), url: request.url(), end: null });
   };
   // A navigation that fails or turns into a download never loads a document.
   const onEnd = () => { const last = state.navigations.at(-1); if (last?.end === null) last.end = Date.now(); };
+  // The page takes its new address when the new document commits, after any redirect. A same-document
+  // navigation (pushState, a fragment) also reports here, but finds no navigation waiting for one.
+  const onCommit = frame => {
+    const last = state.navigations.at(-1);
+    if (frame !== page.mainFrame() || last?.end !== null || last.commit) return;
+    last.commit = Date.now();
+    last.url = frame.url();
+  };
   const onFailed = request => { if (request.isNavigationRequest() && request.frame() === page.mainFrame()) onEnd(); };
   page.on('request', onRequest);
   page.on('load', onEnd);
   page.on('requestfailed', onFailed);
   page.on('download', onEnd);
-  state.detach = () => { page.off('request', onRequest); page.off('load', onEnd); page.off('requestfailed', onFailed); page.off('download', onEnd); };
+  page.on('framenavigated', onCommit);
+  state.detach = () => { page.off('request', onRequest); page.off('load', onEnd); page.off('requestfailed', onFailed); page.off('download', onEnd); page.off('framenavigated', onCommit); };
   const recorder = await page.context().newPage();
   state.recorder = recorder;
   captures.set(page, state);
@@ -128,7 +140,7 @@ export async function startTabCapture(page, options) {
           const stage = await recorder.evaluate(() => window.__cuetakeCaptureStage).catch(() => 'unknown');
           reject(new Error(`Tab capture did not start within 15 seconds (waiting on: ${stage})`));
         }, 15_000);
-      })]).then(started => { state.startedAtMs = Date.parse(started.startedAt); return started; });
+      })]).then(started => { state.startedAtMs = Date.parse(started.startedAt); return { ...started, url: page.url() }; });
     } finally { clearTimeout(timeout); await restore(); }
   } catch (error) {
     await stopListening(page);
@@ -147,7 +159,7 @@ async function stopListening(page) {
 
 /**
  * Seconds since Capture started of each animation frame's second, and of each navigation, from its
- * request until its document loaded (or Capture stopped).
+ * request until its document loaded (or Capture stopped), with when it committed, if it did.
  */
 export function captureSeconds({ paints, navigations, startedAtMs }, stoppedAtMs) {
   const pageFrames = [];
@@ -159,7 +171,7 @@ export function captureSeconds({ paints, navigations, startedAtMs }, stoppedAtMs
   const t = ms => Math.round(Math.max(0, Math.min(ms, stoppedAtMs) - startedAtMs)) / 1000;
   return {
     pageFrames: Array.from(pageFrames, n => n ?? 0),
-    navigations: navigations.filter(n => (n.end ?? stoppedAtMs) >= startedAtMs && n.ms < stoppedAtMs).map(n => ({ t: t(n.ms), end: t(n.end ?? stoppedAtMs), url: n.url })),
+    navigations: navigations.filter(n => (n.end ?? stoppedAtMs) >= startedAtMs && n.ms < stoppedAtMs).map(n => ({ t: t(n.ms), end: t(n.end ?? stoppedAtMs), url: n.url, ...(n.commit && n.commit < stoppedAtMs && { commit: t(n.commit) }) })),
   };
 }
 

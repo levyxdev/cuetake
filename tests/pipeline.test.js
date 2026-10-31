@@ -6,7 +6,7 @@ import { placeRecords } from '../src/probe.js';
 import { captureSeconds } from '../src/tab-capture.js';
 import { drawsWithGpu } from '../src/environment.js';
 import { fitZoom, cropAround, zoomSegments, cameraTrack } from '../src/camera.js';
-import { cameraTargets, createEdit, DEFAULT_STYLE, withDefaults } from '../src/edit.js';
+import { cameraTargets, createEdit, DEFAULT_STYLE, withDefaults, addressBar, addressOf } from '../src/edit.js';
 import { pointerAt, presses, sparksAt, heldSpans, pressScale, shapeAt, drawnShape, cursorTrack } from '../src/cursor.js';
 import { random, reachMs, reach, landing, pauseMs, typingDelays } from '../src/motion.js';
 import { atShortSide, layout, cameraView, brandHue, brandColor, previewSheet } from '../src/stage.js';
@@ -53,14 +53,38 @@ test('places animation frames and navigations in seconds since Capture started',
     paints: [9_990, 10_000, 10_500, 10_999, 11_000, 12_200, 13_400],
     navigations: [
       { ms: 9_000, end: 9_500, url: 'https://cuetake.test/before' },
-      { ms: 10_800, end: 11_650, url: 'https://cuetake.test/next' },
+      { ms: 10_800, end: 11_650, commit: 11_100, url: 'https://cuetake.test/next' },
       { ms: 12_900, end: null, url: 'https://cuetake.test/slow' },
     ],
   }, 13_300);
   // A paint before the start or after the stop is not counted; a second with none counts as zero.
   expect(counted.pageFrames).toEqual([3, 1, 1]);
   // A navigation finished before the start is left out; one still loading at the stop ends there.
-  expect(counted.navigations).toEqual([{ t: 0.8, end: 1.65, url: 'https://cuetake.test/next' }, { t: 2.9, end: 3.3, url: 'https://cuetake.test/slow' }]);
+  expect(counted.navigations).toEqual([{ t: 0.8, end: 1.65, commit: 1.1, url: 'https://cuetake.test/next' }, { t: 2.9, end: 3.3, url: 'https://cuetake.test/slow' }]);
+});
+
+test('the address bar shows the host the page is on, changing when a navigation commits on another', () => {
+  const config = scenarioSchema.parse({ name: 'demo', url: 'http://localhost:3000/login' });
+  const navigate = (commit, url) => ({ type: 'navigate', t: commit - 0.2, end: commit + 0.3, commit, url });
+  const timeline = { url: 'http://localhost:3000/orders', events: [
+    { type: 'click', t: 1, x: 0, y: 0 },
+    navigate(1.4, 'http://localhost:3000/orders/1'),         // same host: no change
+    navigate(3.2, 'https://checkout.stripe.test/pay?id=1'),
+    { type: 'navigate', t: 4, end: 4.1, url: 'https://files.example/report.pdf' }, // never committed: a download
+    navigate(6.5, 'http://localhost:3000/orders/1?paid=1'),
+  ] };
+  expect(addressBar(config, timeline)).toEqual({ url: 'localhost:3000', urls: [{ t: 3.2, url: 'checkout.stripe.test' }, { t: 6.5, url: 'localhost:3000' }] });
+  // A url the Scenario names stands for the host Capture started on, also when the page comes back to it.
+  const named = scenarioSchema.parse({ name: 'demo', url: 'http://localhost:3000/login', frame: { url: 'app.acme.com' } });
+  expect(addressBar(named, timeline)).toEqual({ url: 'app.acme.com', urls: [{ t: 3.2, url: 'checkout.stripe.test' }, { t: 6.5, url: 'app.acme.com' }] });
+  // Without the start address, a Take of an older version starts from the Scenario's url.
+  expect(addressBar(config, { events: [] })).toEqual({ url: 'localhost:3000', urls: [] });
+  expect(addressOf('about:blank')).toBe('about:blank');
+  const edit = createEdit(config, timeline, []);
+  expect(edit.frame).toMatchObject({ url: 'localhost:3000', urls: [{ t: 3.2 }, { t: 6.5 }], chrome: { draw: 'browser' } });
+  // The changes belong to the Take: a Look leaves them out, and applying one keeps them.
+  expect(lookFromEdit(edit).frame).not.toHaveProperty('urls');
+  expect(applyLook(edit, lookFromEdit(withDefaults({})), 'localhost:3000').frame.urls).toEqual(edit.frame.urls);
 });
 
 test('warns when the page got too few animation frames during Capture, not when it merely sat still', () => {
