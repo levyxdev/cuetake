@@ -1,4 +1,5 @@
 import { landing, pauseMs, random, reach, typingDelays } from './motion.js';
+import { boxOnPage } from './frames.js';
 
 /**
  * Timed, viewport-aligned interactions shared by all scenarios, moving like a person (see motion.js).
@@ -34,23 +35,47 @@ export function createDirector(page, startedAt, fps, focusTargets, wideWindows, 
     try { return await action(); }
     finally { if (follow === false) wideWindows.push({ start, end: time() }); }
   }
-  /** Moves onto a target, landing a little off its center; returns the target and where it landed inside its box. */
+  /**
+   * Moves onto a target, landing a little off its center, measured through any iframes it is in.
+   * Returns the target and the `position` that makes Playwright press where it landed: Playwright
+   * counts it from the padding edge of its own box, which is off inside a cross-origin iframe. Where
+   * Playwright's box is off, it would also check the wrong spot for what the press hits, so `share`,
+   * where it landed as a share of the box, is returned for the Director to check instead.
+   */
   async function approach(locator, duration, action) {
     const target = typeof locator === 'string' ? page.locator(locator) : locator;
-    const box = await target.boundingBox();
-    if (!box) throw new Error(`${action} target has no visible bounding box`);
+    const [box, seen, border] = await Promise.all([
+      boxOnPage(target), target.boundingBox(),
+      target.evaluate(e => { const style = getComputedStyle(e); return { left: parseInt(style.borderLeftWidth, 10) || 0, top: parseInt(style.borderTopWidth, 10) || 0 }; }),
+    ]);
+    if (!box || !seen) throw new Error(`${action} target has no visible bounding box`);
     const point = landing(box, rand);
     await glide(point, { size: Math.min(box.width, box.height), duration });
-    return { target, position: { x: point.x - box.x, y: point.y - box.y } };
+    const placed = ['x', 'y', 'width', 'height'].every(key => Math.abs(seen[key] - box[key]) < 0.5);
+    return { target, position: { x: point.x - seen.x - border.left, y: point.y - seen.y - border.top }, share: !placed && { x: (point.x - box.x) / box.width, y: (point.y - box.y) / box.height } };
+  }
+  /** Waits until the target is enabled and is what a press at `share` of its box hits, as Playwright's click waits. */
+  async function unblocked(target, share, action) {
+    for (const deadline = Date.now() + 10_000; ;) {
+      const blocker = await target.evaluate((e, share) => {
+        if (e.matches(':disabled')) return 'disabled';
+        const r = e.getBoundingClientRect(), hit = e.getRootNode().elementFromPoint(r.x + share.x * r.width, r.y + share.y * r.height);
+        return !hit || hit === e || e.contains(hit) ? null : `covered by <${hit.localName}${hit.id ? `#${hit.id}` : ''}>`;
+      }, share);
+      if (!blocker) return;
+      if (Date.now() > deadline) throw new Error(`${action} target is ${blocker} where the Director landed`);
+      await wait(100);
+    }
   }
   /** `button: 'right'` opens the page's context menu instead. */
   function click(locator, opts) {
     const { duration, button = 'left', ...rest } = options(opts, 'duration');
     return act(rest, async () => {
-      const { target, position } = await approach(locator, duration, 'Click');
+      const { target, position, share } = await approach(locator, duration, 'Click');
       await pause('beforePress');
+      if (share) await unblocked(target, share, 'Click');
       // A person holds the button for a moment, so the Cursor's press shows.
-      await target.click({ position, button, delay: pauseMs('press', speed, rand) });
+      await target.click({ position, button, delay: pauseMs('press', speed, rand), force: !!share });
       await pause('afterRelease');
     });
   }

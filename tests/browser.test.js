@@ -256,6 +256,53 @@ test('probe scales input inside a scaled iframe, and notes one that is rotated',
   } finally { await browser.close(); server.close(); }
 }, 30_000);
 
+test('the Director lands inside bordered, nested and scaled cross-origin iframes, and presses where it landed', async () => {
+  // The button notes where inside its border box each click arrived.
+  const form = `<body style="margin:0"><button id="go" style="margin:30px;width:120px;height:40px;border:3px solid">Go</button>
+    <script>window.hits = []; go.onclick = e => hits.push({ x: e.offsetX + go.clientLeft, y: e.offsetY + go.clientTop });</script></body>`;
+  const server = await sites({
+    '/': `<body style="margin:0">
+      <iframe id="bordered" src="http://localhost:PORT/form" style="border:5px solid;padding:3px;width:240px;height:120px;margin:20px"></iframe>
+      <iframe id="outer" src="http://localhost:PORT/outer" style="border:6px solid;padding:4px;width:300px;height:200px;margin:20px"></iframe>
+      <iframe id="small" src="http://localhost:PORT/form" style="border:4px solid;width:400px;height:200px;transform:scale(0.5);transform-origin:0 0;position:absolute;left:20px;top:300px"></iframe>
+      <iframe id="zoomed" src="http://localhost:PORT/form" style="border:4px solid;width:400px;height:200px;scale:0.5;transform-origin:0 0;position:absolute;left:300px;top:300px"></iframe></body>`,
+    '/outer': '<body style="margin:0"><iframe id="inner" src="http://127.0.0.2:PORT/form" style="border:2px solid;padding:5px;width:220px;height:120px;margin:10px"></iframe></body>',
+    '/form': form,
+  });
+  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
+  try {
+    const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+    await page.goto(`http://127.0.0.1:${server.port}/`);
+    // Playwright places each of these off, missing the iframes' borders, padding and scale, so it would check their presses at the wrong spot.
+    const owners = [page.locator('#bordered'), page.frameLocator('#outer').locator('#inner'), page.locator('#small'), page.locator('#zoomed')];
+    const frames = [];
+    for (const owner of owners) frames.push(await (await owner.elementHandle()).contentFrame());
+    for (const frame of frames) await frame.locator('#go').waitFor();
+    // Where each glide ends: the Director moves with page.mouse, and Playwright presses without it.
+    const moves = [], move = page.mouse.move.bind(page.mouse);
+    page.mouse.move = (x, y, options) => { moves.push({ x, y, ms: Date.now() }); return move(x, y, options); };
+    const startedAtMs = Date.now();
+    await installProbe(page);
+    const d = createDirector(page, startedAtMs, 60, [], [], [], [], null, { speed: 4 });
+    for (const frame of frames) await d.click(frame.locator('#go'));
+    const timeline = await collectTimeline(page, startedAtMs);
+    const clicks = timeline.events.filter(e => e.type === 'click');
+    expect(clicks).toHaveLength(4);
+    for (const [i, scale] of [1, 1, 0.5, 0.5].entries()) {
+      const click = clicks[i], landed = moves.filter(m => m.ms <= startedAtMs + click.t * 1000).at(-1);
+      // Pressed where the glide ended, so the Cursor does not jump at the press.
+      expect(Math.hypot(click.x - landed.x, click.y - landed.y)).toBeLessThan(1);
+      // The button took the click there: where it arrived, mapped back up, is where it was pressed.
+      const hits = await frames[i].evaluate(() => hits);
+      expect(hits).toHaveLength(1);
+      expect(Math.abs(click.box.x + hits[0].x * scale - click.x)).toBeLessThan(1.5);
+      expect(Math.abs(click.box.y + hits[0].y * scale - click.y)).toBeLessThan(1.5);
+      expect(click.x - click.box.x).toBeGreaterThan(click.box.width * 0.2);
+      expect(click.x - click.box.x).toBeLessThan(click.box.width * 0.8);
+    }
+  } finally { await browser.close(); server.close(); }
+}, 30_000);
+
 /** A VP9 WebM of a black 640×480 stage with a red square, recorded like a real Source; the square turns green `greenAt` seconds in. */
 async function syntheticSource(browser, seconds, greenAt = Infinity) {
   const page = await browser.newPage();

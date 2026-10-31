@@ -1,4 +1,5 @@
 import { shortcutKeys } from './shortcuts.js';
+import { contentOf } from './frames.js';
 
 /**
  * The Timeline probe. It records input exactly as the page receives it, so director actions and raw
@@ -12,9 +13,10 @@ import { shortcutKeys } from './shortcuts.js';
  * coordinates up through its parents to top-level CSS pixels, so scrolling, fixed and sticky
  * positioning, translation and scaling are all followed. A rotated, skewed or 3D-transformed iframe is
  * placed as if it were only scaled, and noted.
- * Times are epoch milliseconds until collectTimeline rebases them.
+ * Times are epoch milliseconds until collectTimeline rebases them. `contentOf` is frames.js's, passed
+ * in because the probe runs as page source.
  */
-function probe() {
+function probe(contentOf) {
   window.__cuetakeProbe?.dispose();
   const abort = new AbortController();
   const send = record => { try { window.__cuetakeRecord?.(record)?.catch?.(() => {}); } catch {} };
@@ -111,10 +113,7 @@ function probe() {
     const rects = [];
     for (const [element, entry] of tracked) {
       if (!element.isConnected) { tracked.delete(element); continue; }
-      const r = element.getBoundingClientRect(), style = getComputedStyle(element);
-      const sx = element.offsetWidth ? r.width / element.offsetWidth : 1, sy = element.offsetHeight ? r.height / element.offsetHeight : 1;
-      const rect = { x: r.x + (element.clientLeft + parseFloat(style.paddingLeft)) * sx, y: r.y + (element.clientTop + parseFloat(style.paddingTop)) * sy, sx, sy };
-      const key = [rect.x, rect.y, sx, sy].map(v => v.toFixed(2)).join();
+      const rect = contentOf(element), key = [rect.x, rect.y, rect.sx, rect.sy].map(v => v.toFixed(2)).join();
       if (key === entry.key) continue;
       entry.key = key;
       rects.push({ id: entry.id, ...rect, turned: turned(element) });
@@ -139,7 +138,7 @@ function probe() {
   send({ kind: 'hello' });
 }
 
-const collectors = new WeakMap();
+const collectors = new WeakMap(), script = `(${probe})(${contentOf})`;
 
 /**
  * Installs the probe in every frame of the page, now and in frames that load later, and starts
@@ -155,7 +154,7 @@ export async function installProbe(page) {
       collector.records.push({ ...record, frame: collector.idOf(frame) });
       collector.link(frame);
     });
-    await page.addInitScript(probe);
+    await page.addInitScript(script);
   }
   const ids = new WeakMap(), linked = new WeakSet(), records = [];
   let count = 0;
@@ -180,7 +179,7 @@ export async function installProbe(page) {
   records.push({ kind: 'top', frame: idOf(page.mainFrame()) });
   Object.assign(collector, { idOf, link, records });
   // Parents first (frames() lists them in tree order), so each child finds its parent's probe to link to.
-  for (const frame of page.frames()) await frame.evaluate(probe).catch(() => {});
+  for (const frame of page.frames()) await frame.evaluate(script).catch(() => {});
 }
 
 /** The entry of `list`, sorted by `ms`, last at or before `ms`, or its first. */
