@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import pkg from '../package.json' with { type: 'json' };
 import { scenarioSchema, summarizeFrames, captureWarnings, timelineWarnings, captureScale, narrationSchema } from '../src/pipeline.js';
 import { placeRecords } from '../src/probe.js';
+import { captureSeconds } from '../src/tab-capture.js';
 import { drawsWithGpu } from '../src/environment.js';
 import { fitZoom, cropAround, zoomSegments, cameraTrack } from '../src/camera.js';
 import { cameraTargets, createEdit, DEFAULT_STYLE, withDefaults } from '../src/edit.js';
@@ -35,6 +36,31 @@ test('reports sparse static capture honestly rather than labeling it 60 unique f
   const stats = summarizeFrames([{ timeMs: 0 }, { timeMs: 17 }, { timeMs: 34 }, { timeMs: 1034 }], 2);
   expect(stats.maxIntervalMs).toBe(1000);
   expect(stats.perSecond.map(s => s.callbacks)).toEqual([3, 1]);
+});
+
+test('does not count a page load as falling behind, since no document draws while one loads', () => {
+  const capture = { duration: 6.5, pageFrames: [60, 8, 3, 60, 60, 60], navigations: [{ t: 1.4, end: 2.6, url: 'https://cuetake.test/next' }] };
+  expect(captureWarnings(capture, 2)).toEqual([]);
+  // Slow seconds away from the load still count.
+  const [behind] = captureWarnings({ ...capture, pageFrames: [60, 8, 3, 60, 9, 7] }, 2);
+  expect(behind).toContain('for 2 of 4 s (lowest 7)');
+});
+
+test('places animation frames and navigations in seconds since Capture started', () => {
+  const startedAtMs = 10_000;
+  const counted = captureSeconds({
+    startedAtMs,
+    paints: [9_990, 10_000, 10_500, 10_999, 11_000, 12_200, 13_400],
+    navigations: [
+      { ms: 9_000, end: 9_500, url: 'https://cuetake.test/before' },
+      { ms: 10_800, end: 11_650, url: 'https://cuetake.test/next' },
+      { ms: 12_900, end: null, url: 'https://cuetake.test/slow' },
+    ],
+  }, 13_300);
+  // A paint before the start or after the stop is not counted; a second with none counts as zero.
+  expect(counted.pageFrames).toEqual([3, 1, 1]);
+  // A navigation finished before the start is left out; one still loading at the stop ends there.
+  expect(counted.navigations).toEqual([{ t: 0.8, end: 1.65, url: 'https://cuetake.test/next' }, { t: 2.9, end: 3.3, url: 'https://cuetake.test/slow' }]);
 });
 
 test('warns when the page got too few animation frames during Capture, not when it merely sat still', () => {

@@ -27,7 +27,7 @@ The unedited picture of the page produced by Capture, in device pixels.
 _Avoid_: raw video, recording
 
 **Timeline**:
-Every interaction observed during Capture (pointer path, presses and releases, the cursor shape the page asked for, typing, Shortcuts, focus targets, where each Line was said, the Fast-forwards the Scenario marked), timed from the start of Capture and positioned in CSS pixels.
+Every interaction observed during Capture (pointer path, presses and releases, the cursor shape the page asked for, typing, Shortcuts, focus targets, where each Line was said, the Fast-forwards the Scenario marked, each page load from a navigation or reload), timed from the start of Capture and positioned in CSS pixels.
 _Avoid_: event log, camera events
 
 **Shortcut**:

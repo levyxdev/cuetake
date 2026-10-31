@@ -11,6 +11,7 @@ import { renderFinal, inspectFinal, extractFrame, composePreview } from '../src/
 import { merge, withDefaults } from '../src/edit.js';
 import { layout, previewSheet, outputSize } from '../src/stage.js';
 import { forRender } from '../src/styles.js';
+import { startRecording, getRecordingPage, beginCapture, stopRecording, cleanup } from '../src/recorder.js';
 
 /** Preview tiles as composePreview takes them: Edits with their files served from `dir`. */
 const previewOf = (dir, tiles) => { const files = {}; return { files, tiles: tiles.map(([name, edit]) => ({ name, edit: forRender(edit, dir, files).edit })) }; };
@@ -343,6 +344,48 @@ async function pixelsAt(browser, png, points) {
     }, [png.toString('base64'), points]);
   } finally { await page.close(); }
 }
+
+test('Capture keeps one Source and one Timeline through a full navigation and a reload', async () => {
+  const page = color => `<title>${color}</title><body style="margin:0;background:${color}"><a href="/next" style="display:block;width:320px;height:240px">Next</a></body>`;
+  const server = await sites({ '/': page('rgb(220,30,30)'), '/next': page('rgb(30,180,60)') });
+  const dir = await fs.mkdtemp(join(tmpdir(), 'cuetake-navigate-'));
+  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
+  try {
+    const { sessionId } = await startRecording(`http://127.0.0.1:${server.port}/`, { width: 320, height: 240, resolutionScale: 1, fps: 30, outputDir: dir, deferCapture: true });
+    const recorded = getRecordingPage(sessionId);
+    const startedAtMs = Date.parse((await beginCapture(sessionId)).startedAt);
+    await recorded.waitForTimeout(500);
+    await Promise.all([recorded.waitForURL('**/next'), recorded.mouse.click(100, 100)]);
+    await recorded.waitForTimeout(500);
+    await recorded.reload();
+    await recorded.waitForTimeout(300);
+    await recorded.mouse.move(200, 50, { steps: 4 });
+    await recorded.waitForTimeout(500);
+    const timeline = await collectTimeline(recorded, startedAtMs);
+    const { webmPath, durationSeconds, navigations } = await stopRecording(sessionId);
+    const capture = JSON.parse(await fs.readFile(webmPath.replace(/\.webm$/, '-capture.json'), 'utf8'));
+    // Both loads are noted, in order, each from its request until its document loaded.
+    expect(navigations.map(n => new URL(n.url).pathname)).toEqual(['/next', '/next']);
+    expect(navigations[0].t).toBeGreaterThan(0.4);
+    for (const n of navigations) expect(n.end).toBeGreaterThanOrEqual(n.t);
+    expect(navigations[1].t).toBeGreaterThan(navigations[0].end);
+    expect(capture.navigations).toEqual(navigations);
+    // The probe saw input on both documents, on the one clock from the start of Capture.
+    expect(timeline.events.filter(e => e.type === 'click')).toHaveLength(1);
+    expect(timeline.pointer.at(-1)).toEqual([expect.any(Number), 200, 50]);
+    expect(timeline.pointer.at(-1)[0]).toBeGreaterThan(navigations[1].end);
+    // The Source kept recording after each load, and shows the first page, then the second.
+    expect(capture.frames.some(f => f.timeMs / 1000 > navigations[1].end)).toBe(true);
+    expect(capture.settings.width).toBe(320);
+    expect(durationSeconds).toBeGreaterThan(navigations[1].end);
+    const [before] = await pixelsAt(browser, await extractFrame(webmPath, 0.2), [[300, 220]]);
+    const [after] = await pixelsAt(browser, await extractFrame(webmPath, durationSeconds - 0.2), [[300, 220]]);
+    expect(before[0]).toBeGreaterThan(180);
+    expect(after[1]).toBeGreaterThan(150);
+    expect(after[0]).toBeLessThan(80);
+    expect(capture.pageFrames.length).toBeGreaterThan(0);
+  } finally { await cleanup(); await browser.close(); server.close(); await fs.rm(dir, { recursive: true, force: true }); }
+}, 60_000);
 
 test('Render maps CSS camera targets onto the 2× Source and holds the last frame to the Take duration', async () => {
   const dir = await fs.mkdtemp(join(tmpdir(), 'cuetake-render-'));

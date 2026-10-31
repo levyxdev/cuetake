@@ -140,7 +140,7 @@ export async function recordScenario(scenarioPath, outputDir, options = {}) {
     await fs.rename(stopped.webmPath.replace(/\.webm$/, '-capture.json'), join(dir, 'capture.json'));
     const timeline = {
       schemaVersion: SCHEMA_VERSION, viewport: config.viewport, scale: config.capture.resolutionScale, duration: stopped.durationSeconds,
-      pointer: observed.pointer, shapes: observed.shapes, ...((observed.turned.length || observed.unplaced.length) && { frameInput: { turned: observed.turned, unplaced: observed.unplaced } }), events: [...observed.events, ...focus.map(f => ({ type: 'focus', ...f })), ...said.map(line => ({ type: 'say', ...line })), ...forwarded.map(span => ({ type: 'fastForward', ...span }))].sort((a, b) => a.t - b.t),
+      pointer: observed.pointer, shapes: observed.shapes, ...((observed.turned.length || observed.unplaced.length) && { frameInput: { turned: observed.turned, unplaced: observed.unplaced } }), events: [...observed.events, ...focus.map(f => ({ type: 'focus', ...f })), ...said.map(line => ({ type: 'say', ...line })), ...forwarded.map(span => ({ type: 'fastForward', ...span })), ...stopped.navigations.map(load => ({ type: 'navigate', ...load }))].sort((a, b) => a.t - b.t),
     };
     await writeJson(join(dir, 'timeline.json'), timeline);
     let edit = createEdit(config, timeline, focus, wide);
@@ -312,10 +312,12 @@ const SLOW_PAGE_FRAMES = 20;
 /**
  * Warns when the browser fell behind during Capture: the page got fewer than SLOW_PAGE_FRAMES animation
  * frames in at least two whole seconds. The Source's own frames cannot tell, since a still page sends few.
+ * A second that a navigation or reload touches is left out, since no document draws while one loads.
  * At resolution scale 1 the Take cannot be helped by lowering it again.
  */
 export function captureWarnings(capture, scale) {
-  const whole = (capture.pageFrames ?? []).slice(0, Math.floor(capture.duration));
+  const loading = second => (capture.navigations ?? []).some(load => load.t < second + 1 && load.end >= second);
+  const whole = (capture.pageFrames ?? []).slice(0, Math.floor(capture.duration)).filter((_, second) => !loading(second));
   const slow = whole.filter(n => n < SLOW_PAGE_FRAMES);
   if (slow.length < 2) return [];
   const fix = scale > 1

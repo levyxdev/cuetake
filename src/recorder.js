@@ -2,7 +2,7 @@ import { chromium } from 'playwright';
 import { randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { startTabCapture, stopTabCapture } from './tab-capture.js';
+import { startTabCapture, stopTabCapture, captureArgs } from './tab-capture.js';
 import { installProbe } from './probe.js';
 
 let browser = null;
@@ -15,7 +15,7 @@ export async function startRecording(url, options = {}) {
   // but only captures at device scale when the scale is also forced on the browser.
   browser ||= await chromium.launch({
     headless: !options.headed, channel: 'chromium',
-    args: ['--auto-accept-this-tab-capture', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', ...(options.headed ? [] : [`--force-device-scale-factor=${resolutionScale}`])],
+    args: [...captureArgs, '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', ...(options.headed ? [] : [`--force-device-scale-factor=${resolutionScale}`])],
   });
   const outputDir = options.outputDir || './recordings';
   await mkdir(outputDir, { recursive: true });
@@ -39,7 +39,8 @@ export function getRecordingPage(sessionId) {
 export async function beginCapture(sessionId) {
   const session = sessions.get(sessionId);
   if (!session || session.capture) throw new Error('Session is missing or already recording');
-  // Preparation may navigate through login; install the probe only at the final document.
+  // Preparation may navigate through login, before the probe and the recorder start; both then follow
+  // the page through any navigation or reload until Capture stops.
   await installProbe(session.page);
   const capture = await startTabCapture(session.page, { width: session.width * session.resolutionScale, height: session.height * session.resolutionScale, fps: session.options.fps || 60, bitrate: 40_000_000 });
   session.capture = capture;
@@ -53,7 +54,7 @@ export async function stopRecording(sessionId) {
   const stats = await stopTabCapture(session.page, webmPath);
   await session.context.close();
   sessions.delete(sessionId);
-  return { webmPath, durationSeconds: stats.duration };
+  return { webmPath, durationSeconds: stats.duration, navigations: stats.navigations };
 }
 
 export async function cleanup() {
