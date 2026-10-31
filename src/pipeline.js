@@ -140,7 +140,7 @@ export async function recordScenario(scenarioPath, outputDir, options = {}) {
     await fs.rename(stopped.webmPath.replace(/\.webm$/, '-capture.json'), join(dir, 'capture.json'));
     const timeline = {
       schemaVersion: SCHEMA_VERSION, viewport: config.viewport, scale: config.capture.resolutionScale, duration: stopped.durationSeconds,
-      pointer: observed.pointer, shapes: observed.shapes, events: [...observed.events, ...focus.map(f => ({ type: 'focus', ...f })), ...said.map(line => ({ type: 'say', ...line })), ...forwarded.map(span => ({ type: 'fastForward', ...span }))].sort((a, b) => a.t - b.t),
+      pointer: observed.pointer, shapes: observed.shapes, ...((observed.turned.length || observed.unplaced.length) && { frameInput: { turned: observed.turned, unplaced: observed.unplaced } }), events: [...observed.events, ...focus.map(f => ({ type: 'focus', ...f })), ...said.map(line => ({ type: 'say', ...line })), ...forwarded.map(span => ({ type: 'fastForward', ...span }))].sort((a, b) => a.t - b.t),
     };
     await writeJson(join(dir, 'timeline.json'), timeline);
     let edit = createEdit(config, timeline, focus, wide);
@@ -324,9 +324,23 @@ export function captureWarnings(capture, scale) {
   return [`The browser fell behind during Capture: the page got fewer than ${SLOW_PAGE_FRAMES} frames per second for ${slow.length} of ${whole.length} s (lowest ${Math.min(...slow)}), so the page in the Final jumps while the Cursor moves smoothly. ${fix}.`];
 }
 
+/**
+ * Warns when input landed inside an iframe Capture could not place exactly: one rotated, skewed or
+ * 3D-transformed, placed as if it were only scaled, or one it could not place at all, which the Cursor
+ * and camera do not follow.
+ */
+export function timelineWarnings(timeline) {
+  const { turned = [], unplaced = [] } = timeline.frameInput ?? {};
+  const at = times => times.slice(0, 5).map(t => `${t.toFixed(2)} s`).join(', ') + (times.length > 5 ? ` and ${times.length - 5} more` : '');
+  return [
+    turned.length && `Input at ${at(turned)} landed inside an iframe that is rotated, skewed or 3D-transformed, which Capture places as if it were only scaled, so the Cursor and camera there may sit off what the page shows. Check those moments with frame, and record again once the iframe is upright, after any opening animation.`,
+    unplaced.length && `Input at ${at(unplaced)} landed inside an iframe Capture could not place, so the Cursor and camera do not follow it there. Check those moments with frame.`,
+  ].filter(Boolean);
+}
+
 export async function verifyTake(directory) {
   const dir = resolve(directory);
-  const { project, config, edit, narration } = await loadTake(dir);
+  const { project, config, timeline, edit, narration } = await loadTake(dir);
   const spoken = narrationForRender(edit, narration, dir);
   const media = await inspectFinal(join(dir, 'final.mp4'), spoken?.lines ?? []);
   const { fps } = edit.output, map = timeMap(edit.fastForward, project.duration);
@@ -342,7 +356,7 @@ export async function verifyTake(directory) {
   const capture = await readJson(join(dir, 'capture.json'));
   const { lines, ...final } = media;
   const verification = {
-    passed: true, checkedAt: new Date().toISOString(), warnings: captureWarnings(capture, config.capture.resolutionScale), media: final,
+    passed: true, checkedAt: new Date().toISOString(), warnings: [...captureWarnings(capture, config.capture.resolutionScale), ...timelineWarnings(timeline)], media: final,
     source: { settings: capture.settings, ...summarizeFrames(capture.frames, capture.duration), ...(capture.pageFrames && { pageFramesPerSecond: capture.pageFrames }) }, fullDecode: 'passed',
     ...(spoken && { narration: { lines: spoken.lines.map(({ id, start }) => ({ id, start, duration: lines.find(line => line.id === id).duration })), subtitles: SUBTITLE_FILES.map(([name]) => name), burned: burnsIn(edit.subtitles) } }),
   };

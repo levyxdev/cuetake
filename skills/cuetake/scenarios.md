@@ -44,7 +44,7 @@ Only `name` and `url` are required in config. Other fields use the shown default
 
 | API | Behavior |
 | --- | --- |
-| `page` | The isolated Playwright page; use its locators and assertions. |
+| `page` | The isolated Playwright page; use its locators and assertions. A locator inside an iframe, such as `d.page.frameLocator('iframe[name=checkout]').getByLabel('Card number')`, works with every action, cross-origin and nested frames included. |
 | `at(seconds)` | Wait until a time relative to the capture start. Past times return immediately. |
 | `wait(ms)` | Hold the current state. |
 | `move(x, y, durationMs?)` | Move along a slight arc using viewport CSS coordinates. `0` jumps there. |
@@ -66,7 +66,7 @@ Capture records each Shortcut, a key pressed outside a text field or with Contro
 
 Capture records the cursor shape the page asks for (a hand over links, an I-beam over text, whatever a canvas app sets), and Render draws the Cursor in that shape; the page's own cursor never appears in the Source.
 
-The camera works like Screen Studio's auto zoom. It follows the clicks, typing and drags the page observed, whether they came from the director or from Playwright input directly:
+The camera works like Screen Studio's auto zoom. It follows the clicks, typing and drags the page observed, whether they came from the director or from Playwright input directly, and in any frame: input inside an iframe, such as an embedded checkout or sign-in, is placed where the iframe shows on the page, through scrolling, fixed positioning and scaling. An iframe that is rotated, skewed or 3D-transformed is placed as if it were only scaled, and verification warns; record once it is upright, after any opening animation.
 
 - It arrives `lead` seconds before each action, so the zoom is in place when the action happens.
 - Actions whose zoom windows sit within `chainGap` seconds share one zoom segment: the camera stays zoomed and moves between them instead of zooming out and back in. A segment holds one zoom, the closest that fits every target in it.
@@ -90,7 +90,7 @@ Use actual locators for clicks. Canvas drags often require coordinates; derive o
   scenario.mjs       Snapshot of the original scenario module
   source.webm        Source: original high-resolution VP9 capture
   capture.json       Track settings, video frame callback observations and the page's animation frames per second
-  timeline.json      Timeline: pointer path, cursor shapes, clicks and drags with their release, typing, Shortcuts, focus, said Lines and fast-forwards, in seconds and CSS pixels
+  timeline.json      Timeline: pointer path, cursor shapes, clicks and drags with their release, typing, Shortcuts, focus, said Lines and fast-forwards, in seconds and top-level CSS pixels, plus any input inside an iframe it could not place exactly (`frameInput`)
   edit.json          Edit: camera targets and settings, cursor, click effect, Shortcuts and keycaps, frame, fast-forwards, Line starts and volumes, Subtitles, output
   narration/         The Narration: narration.json (text, word timings) and each Line's audio, named by its id
   subtitles.srt/.vtt Subtitles of the placed Lines, from the last Render
@@ -99,7 +99,7 @@ Use actual locators for clicks. Canvas drags often require coordinates; derive o
   preview.png        Preview: the current Edit beside candidate Looks, from the last `preview`
   final.mp4          Final: H.264 camera composition
   render.json        Encoder, rate control and GPU used by the last Render; its times are seconds of the Final
-  verification.json Output metadata, decode result, capture observations, and warnings when the browser fell behind
+  verification.json Output metadata, decode result, capture observations, and warnings when the browser fell behind or iframe input could not be placed exactly
 ```
 
 A copied scenario snapshot may import helper modules from its original project. It is a record of the scenario, not a bundled runnable archive. Keep business scenarios in their application repository.

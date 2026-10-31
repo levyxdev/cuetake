@@ -1,7 +1,8 @@
 import { test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import pkg from '../package.json' with { type: 'json' };
-import { scenarioSchema, summarizeFrames, captureWarnings, captureScale, narrationSchema } from '../src/pipeline.js';
+import { scenarioSchema, summarizeFrames, captureWarnings, timelineWarnings, captureScale, narrationSchema } from '../src/pipeline.js';
+import { placeRecords } from '../src/probe.js';
 import { drawsWithGpu } from '../src/environment.js';
 import { fitZoom, cropAround, zoomSegments, cameraTrack } from '../src/camera.js';
 import { cameraTargets, createEdit, DEFAULT_STYLE, withDefaults } from '../src/edit.js';
@@ -49,6 +50,66 @@ test('warns when the page got too few animation frames during Capture, not when 
   expect(atOne).toContain('GPU');
   // Takes recorded before the page's frames were counted are not judged.
   expect(captureWarnings({ duration: 3, frames: [] }, 2)).toEqual([]);
+});
+
+test('places input from nested iframes in top-level CSS pixels, as each parent measured its iframe at the moment', () => {
+  // Frame 0 is the top; frame 1 sits in it and frame 2 in frame 1, shown at half size.
+  const records = [
+    { kind: 'top', frame: 0 },
+    { kind: 'link', frame: 1, parent: 0, element: 0 },
+    { kind: 'link', frame: 2, parent: 1, element: 3 },
+    { kind: 'frames', frame: 0, ms: 100, rects: [{ id: 0, x: 50, y: 200, sx: 1, sy: 1, turned: false }] },
+    // The page scrolls 40 px down at 300 ms, carrying frame 1 up.
+    { kind: 'frames', frame: 0, ms: 300, rects: [{ id: 0, x: 50, y: 160, sx: 1, sy: 1, turned: false }] },
+    { kind: 'frames', frame: 1, ms: 120, rects: [{ id: 3, x: 10, y: 20, sx: 0.5, sy: 0.5, turned: false }] },
+    { kind: 'move', frame: 0, ms: 90, x: 5, y: 5, shape: 'default' },
+    // Before frame 1's first measure, its first one holds.
+    { kind: 'move', frame: 1, ms: 95, x: 1, y: 2, shape: 'default' },
+    { kind: 'move', frame: 2, ms: 200, x: 40, y: 60, shape: 'pointer' },
+    { kind: 'down', frame: 2, ms: 210, button: 'left', x: 40, y: 60, box: { x: 20, y: 40, width: 100, height: 40 } },
+    { kind: 'up', frame: 2, ms: 260, button: 'left', x: 40, y: 60 },
+    { kind: 'key', frame: 2, ms: 400, key: 'a', code: 'KeyA', field: true, box: { x: 0, y: 100, width: 200, height: 20 } },
+  ];
+  const placed = placeRecords(records.toReversed());
+  expect(placed.pointer).toEqual([[90, 5, 5], [95, 51, 202], [200, 50 + 10 + 20, 200 + 20 + 30], [210, 80, 250]]);
+  expect(placed.downs).toEqual([{ ms: 210, button: 'left', x: 80, y: 250, box: { x: 70, y: 240, width: 50, height: 20 } }]);
+  expect(placed.ups).toEqual([{ ms: 260, button: 'left', x: 80, y: 250 }]);
+  // After the scroll, the key's field box moves up with its frames.
+  expect(placed.keys).toEqual([{ ms: 400, key: 'a', code: 'KeyA', field: true, box: { x: 60, y: 160 + 20 + 50, width: 100, height: 10 } }]);
+  expect(placed.shapes).toEqual([[90, 'default'], [200, 'pointer']]);
+  expect(placed.turned).toEqual([]);
+  expect(placed.unplaced).toEqual([]);
+});
+
+test('counts a frame\'s cursor shape only while the pointer is over it, and notes input it cannot place exactly', () => {
+  const records = [
+    { kind: 'top', frame: 0 },
+    { kind: 'link', frame: 1, parent: 0, element: 0 },
+    { kind: 'frames', frame: 0, ms: 0, rects: [{ id: 0, x: 100, y: 100, sx: 1, sy: 1, turned: true }] },
+    { kind: 'move', frame: 1, ms: 10, x: 5, y: 5, shape: 'text' },
+    { kind: 'move', frame: 0, ms: 20, x: 5, y: 5, shape: 'default' },
+    // Frame 1 resamples on a key while the pointer is over the top: not shown.
+    { kind: 'shape', frame: 1, ms: 30, shape: 'pointer' },
+    { kind: 'key', frame: 1, ms: 30, key: 'Enter', code: 'Enter', field: false, box: null },
+    { kind: 'down', frame: 1, ms: 40, button: 'left', x: 6, y: 6, box: null },
+    // Frame 2 was never linked to its iframe.
+    { kind: 'move', frame: 2, ms: 50, x: 1, y: 1, shape: 'grab' },
+    { kind: 'down', frame: 2, ms: 60, button: 'left', x: 1, y: 1, box: null },
+  ];
+  const placed = placeRecords(records);
+  expect(placed.shapes).toEqual([[10, 'text'], [20, 'default'], [50, 'grab']]);
+  expect(placed.turned).toEqual([30, 40]);
+  expect(placed.unplaced).toEqual([60]);
+  expect(placed.pointer.map(([ms]) => ms)).toEqual([10, 20, 40]);
+});
+
+test('warns about input Capture could not place exactly inside an iframe', () => {
+  expect(timelineWarnings({ pointer: [], events: [] })).toEqual([]);
+  const [turned, unplaced] = timelineWarnings({ frameInput: { turned: [1.2, 1.5, 2, 2.5, 3, 4, 5], unplaced: [6.25] } });
+  expect(turned).toContain('1.20 s, 1.50 s, 2.00 s, 2.50 s, 3.00 s and 2 more');
+  expect(turned).toContain('rotated');
+  expect(unplaced).toContain('6.25 s');
+  expect(timelineWarnings({ frameInput: { turned: [], unplaced: [3] } })).toHaveLength(1);
 });
 
 test('tells a software renderer from a GPU by the name Chromium reports', () => {

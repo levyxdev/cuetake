@@ -3,6 +3,7 @@ import { chromium } from 'playwright';
 import fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer } from 'node:http';
 import { saveAuthState, resolveAuthProfile } from '../src/auth.js';
 import { installProbe, collectTimeline } from '../src/probe.js';
 import { createDirector } from '../src/director.js';
@@ -127,6 +128,132 @@ test('probe records the cursor shape the page asks for, as the browser resolves 
     const later = await collectTimeline(page, Date.now());
     expect(later.shapes).toEqual([[0, 'grab']]);
   } finally { await browser.close(); }
+}, 30_000);
+
+/**
+ * Serves `pages` (path → HTML, with PORT replaced) on every loopback name, so 127.0.0.1, localhost and
+ * 127.0.0.2 are three sites and Chromium puts each one's iframes in its own process.
+ */
+async function sites(pages) {
+  const server = createServer((request, response) => {
+    response.setHeader('content-type', 'text/html');
+    response.end((pages[request.url] ?? '').replaceAll('PORT', server.address().port));
+  });
+  await new Promise(done => server.listen(0, done));
+  return { port: server.address().port, close: () => server.close() };
+}
+
+test('probe follows input inside cross-origin, nested, late and removed iframes, in top-level CSS pixels', async () => {
+  const checkout = '<body style="margin:0"><button id="pay" style="margin:20px;width:100px;height:30px;cursor:pointer">Pay</button><input id="card" style="margin:10px;width:150px"></body>';
+  const server = await sites({
+    '/': `<body style="margin:0;height:2000px"><div style="height:150px"></div>
+      <iframe id="outer" src="http://localhost:PORT/outer" style="border:5px solid;padding:3px;width:400px;height:300px;margin-left:60px"></iframe>
+      <div style="position:fixed;left:50%;top:70%;transform:translate(-50%,-50%)"><iframe id="modal" src="http://127.0.0.2:PORT/checkout" style="border:0;width:200px;height:120px"></iframe></div></body>`,
+    '/outer': '<body style="margin:0;height:1000px"><div style="height:40px"></div><iframe id="inner" src="http://127.0.0.2:PORT/checkout" style="border:0;width:300px;height:150px;margin-left:30px"></iframe></body>',
+    '/checkout': checkout,
+  });
+  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
+  try {
+    const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+    await page.goto(`http://127.0.0.1:${server.port}/`);
+    const inner = page.frameLocator('#outer').frameLocator('#inner'), modal = page.frameLocator('#modal');
+    await inner.locator('#pay').waitFor();
+    await modal.locator('#pay').waitFor();
+    const startedAtMs = Date.now();
+    await installProbe(page);
+    // Both the page and the outer frame are scrolled, so the inner frame sits away from where it loaded.
+    await page.evaluate(() => scrollTo(0, 40));
+    await page.frame({ url: /\/outer$/ }).evaluate(() => scrollTo(0, 15));
+    const center = async locator => { const b = await locator.boundingBox(); return { box: b, x: b.x + b.width / 2, y: b.y + b.height / 2 }; };
+    await page.mouse.move(20, 20);
+    await page.waitForTimeout(50);
+    const pay = await center(inner.locator('#pay'));
+    await page.mouse.move(pay.x, pay.y, { steps: 4 });
+    await page.waitForTimeout(50);
+    await page.mouse.click(pay.x, pay.y, { delay: 50 });
+    const card = await center(inner.locator('#card'));
+    await page.mouse.click(card.x, card.y);
+    await page.keyboard.type('4242', { delay: 30 });
+    const centered = await center(modal.locator('#pay'));
+    await page.mouse.click(centered.x, centered.y);
+    // A frame that loads after Capture starts and is removed right after it takes a click.
+    await page.evaluate(port => document.body.append(Object.assign(document.createElement('iframe'), { id: 'late', src: `http://localhost:${port}/checkout`, style: 'position:fixed;left:500px;top:20px;border:0;width:200px;height:100px' })), server.port);
+    const late = page.frameLocator('#late');
+    await late.locator('#pay').waitFor();
+    const latePay = await center(late.locator('#pay'));
+    await page.mouse.click(latePay.x, latePay.y);
+    await page.evaluate(() => document.getElementById('late').remove());
+    await page.mouse.move(20, 20, { steps: 3 });
+    await page.waitForTimeout(50);
+    const timeline = await collectTimeline(page, startedAtMs);
+    const clicks = timeline.events.filter(e => e.type === 'click');
+    expect(clicks).toHaveLength(4);
+    for (const [click, target] of [[clicks[0], pay], [clicks[1], card], [clicks[2], centered], [clicks[3], latePay]]) {
+      expect(click.x).toBeCloseTo(target.x, 0);
+      expect(click.y).toBeCloseTo(target.y, 0);
+    }
+    // Boxes measured from layout, frame by frame. Playwright's boundingBox leaves out the outer
+    // iframe's border and padding, so it is not the reference here.
+    const content = (frame, selector) => frame.evaluate(selector => {
+      const e = document.querySelector(selector), r = e.getBoundingClientRect(), style = getComputedStyle(e);
+      return { x: r.x + e.clientLeft + parseFloat(style.paddingLeft), y: r.y + e.clientTop + parseFloat(style.paddingTop), width: r.width, height: r.height };
+    }, selector);
+    const outer = await content(page.mainFrame(), '#outer'), nested = await content(page.frame({ url: /\/outer$/ }), '#inner');
+    const inside = page.frames().find(frame => frame.parentFrame()?.url().endsWith('/outer'));
+    const shown = async selector => {
+      const r = await inside.evaluate(selector => document.querySelector(selector).getBoundingClientRect().toJSON(), selector);
+      return { x: outer.x + nested.x + r.x, y: outer.y + nested.y + r.y, width: r.width, height: r.height };
+    };
+    const [payBox, cardBox] = [await shown('#pay'), await shown('#card')];
+    for (const key of ['x', 'y', 'width', 'height']) expect(clicks[0].box[key]).toBeCloseTo(payBox[key], 0);
+    const [typing] = timeline.events.filter(e => e.type === 'type');
+    for (const key of ['x', 'y', 'width']) expect(typing.box[key]).toBeCloseTo(cardBox[key], 0);
+    // The pointer path runs on into the frames rather than stopping at their edge.
+    expect(timeline.pointer.some(([, x, y]) => Math.abs(x - pay.x) < 1 && Math.abs(y - pay.y) < 1)).toBe(true);
+    // The page, the nested Pay button, the card field, then the modal's and the late frame's Pay buttons
+    // (one jump apart, so one change), and the page again.
+    expect(timeline.shapes.map(([, shape]) => shape)).toEqual(['default', 'pointer', 'text', 'pointer', 'default']);
+    expect(timeline.turned).toEqual([]);
+    expect(timeline.unplaced).toEqual([]);
+  } finally { await browser.close(); server.close(); }
+}, 30_000);
+
+test('probe scales input inside a scaled iframe, and notes one that is rotated', async () => {
+  const form = '<body style="margin:0"><button id="go" style="margin:40px;width:100px;height:40px">Go</button></body>';
+  const server = await sites({
+    '/': `<body style="margin:0">
+      <iframe id="small" src="http://localhost:PORT/form" style="border:4px solid;width:400px;height:200px;transform:scale(0.5);transform-origin:0 0;margin:100px"></iframe>
+      <iframe id="tilted" src="http://localhost:PORT/form" style="position:fixed;left:350px;top:250px;border:0;width:200px;height:150px;rotate:4deg"></iframe></body>`,
+    '/form': form,
+  });
+  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
+  try {
+    const page = await browser.newPage({ viewport: { width: 640, height: 480 } });
+    await page.goto(`http://127.0.0.1:${server.port}/`);
+    await page.frameLocator('#small').locator('#go').waitFor();
+    await page.frameLocator('#tilted').locator('#go').waitFor();
+    const startedAtMs = Date.now();
+    await installProbe(page);
+    await page.mouse.move(10, 10);
+    // Where the button shows: 40 px into the frame's content, which starts inside the 4 px border, at half size.
+    const frame = await page.locator('#small').boundingBox(), half = { x: frame.x + 2 + 20, y: frame.y + 2 + 20, width: 50, height: 20 };
+    const small = { ...half };
+    await page.mouse.click(small.x + 5, small.y + 5);
+    const tilted = await page.frameLocator('#tilted').locator('#go').boundingBox();
+    await page.mouse.click(tilted.x + tilted.width / 2, tilted.y + tilted.height / 2);
+    await page.keyboard.press('Meta+K');
+    const timeline = await collectTimeline(page, startedAtMs);
+    const [scaled, rotated] = timeline.events.filter(e => e.type === 'click');
+    expect(scaled.x).toBeCloseTo(small.x + 5, 0);
+    expect(scaled.y).toBeCloseTo(small.y + 5, 0);
+    for (const key of ['x', 'y', 'width', 'height']) expect(scaled.box[key]).toBeCloseTo(small[key], 0);
+    // Placed as if only scaled, so near but not exactly where it landed, and noted with both keys of Meta+K.
+    expect(Math.hypot(rotated.x - (tilted.x + tilted.width / 2), rotated.y - (tilted.y + tilted.height / 2))).toBeLessThan(15);
+    expect(timeline.turned).toHaveLength(3);
+    expect(timeline.turned[0]).toBe(rotated.t);
+    expect(timeline.turned).toContain(timeline.events.find(e => e.type === 'shortcut').t);
+    expect(timeline.unplaced).toEqual([]);
+  } finally { await browser.close(); server.close(); }
 }, 30_000);
 
 /** A VP9 WebM of a black 640×480 stage with a red square, recorded like a real Source; the square turns green `greenAt` seconds in. */
