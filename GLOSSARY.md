@@ -18,16 +18,20 @@ _Avoid_: driver, bot, automation
 One recording attempt and everything it produces, kept together in its own folder.
 _Avoid_: recording, run, project
 
+**Tab**:
+One page a Take shows: the start page, or one the demo opened, as a new tab or a popup window. One Tab is in front at each moment.
+_Avoid_: page, window, popup
+
 **Capture**:
 The phase that drives the page through a Scenario and produces the Source and the Timeline.
 _Avoid_: recording phase
 
 **Source**:
-The unedited picture of the page produced by Capture, in device pixels.
+The unedited picture of one Tab produced by Capture, in device pixels; a Take has one Source per Tab.
 _Avoid_: raw video, recording
 
 **Timeline**:
-Every interaction observed during Capture (pointer path, presses and releases, the cursor shape the page asked for, typing, Shortcuts, focus targets, where each Line was said, the Fast-forwards the Scenario marked, each page load from a navigation or reload), timed from the start of Capture and positioned in CSS pixels.
+Every interaction observed during Capture (pointer path, presses and releases, the cursor shape the page asked for, typing, Shortcuts, focus targets, where each Line was said, the Fast-forwards the Scenario marked, each page load from a navigation or reload, which Tab is in front), timed from the start of Capture and positioned in the CSS pixels of the Tab it happened in.
 _Avoid_: event log, camera events
 
 **Shortcut**:
