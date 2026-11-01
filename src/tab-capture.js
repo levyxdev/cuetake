@@ -8,6 +8,7 @@ export const captureArgs = [`--auto-select-tab-capture-source-by-title=${CAPTURE
 const RECORDER_URL = 'https://recorder.cuetake.invalid/';
 
 const captures = new WeakMap(), counting = new WeakSet();
+let nextKey = 0;
 
 /**
  * Counts the page's animation frames in its top document, sending their times to Node a few times a
@@ -26,20 +27,32 @@ function countAnimationFrames() {
 }
 
 /**
- * Captures the page's tab at its device-pixel resolution from a recorder page of its own, so the
- * Source keeps recording across full navigations and reloads of the page. Unlike Playwright
- * recordVideo, this does not use the 25 fps / 1 Mbps VP8 encoder. Each main-frame navigation is noted,
- * from its request until the new document has loaded, with when the page took its new address (`commit`).
- * Returns the page's address when Capture started as `url`.
+ * Opens the page that records every Tab of a Take, in a window of its own beside `page`, the first Tab.
+ * Chromium on macOS starts a capture only from the page in front, and a recorder that were a tab of the
+ * Tabs' window would hide the tab it starts on, which then paints no first frame for a second or more; it
+ * would also give that window a tab strip, which leaves each tab less room than the viewport, and tab
+ * capture records only that room.
  */
-export async function startTabCapture(page, options) {
+export async function openRecorder(page) {
+  const context = page.context(), own = await context.newCDPSession(page), browser = await context.browser().newBrowserCDPSession();
+  try {
+    const { targetInfo } = await own.send('Target.getTargetInfo');
+    const [recorder] = await Promise.all([context.waitForEvent('page'), browser.send('Target.createTarget', { url: 'about:blank', newWindow: true, browserContextId: targetInfo.browserContextId })]);
+    try {
+      await recorder.route(RECORDER_URL, route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>CueTake recorder</title>' }));
+      await recorder.goto(RECORDER_URL);
+      return recorder;
+    } catch (error) { await recorder.close().catch(() => {}); throw error; }
+  } finally { await Promise.all([own.detach(), browser.detach()].map(detached => detached.catch(() => {}))); }
+}
+
+/**
+ * Notes each main-frame navigation of the page, from its request until the new document has loaded,
+ * with when the page took its new address (`commit`), for startTabCapture. A Tab is watched from the
+ * moment it opens, so a popup's first navigations are noted before its capture starts.
+ */
+export function watchNavigations(page) {
   const state = { paints: [], navigations: [] };
-  // A page that captured before keeps its binding and init script; only the collection starts over.
-  if (!counting.has(page)) {
-    counting.add(page);
-    await page.exposeBinding('__cuetakePaint', (_, times) => { if (Array.isArray(times)) captures.get(page)?.paints.push(...times); });
-    await page.addInitScript(countAnimationFrames);
-  }
   // A redirect, or a navigation started before the last one committed, continues it.
   const onRequest = request => {
     if (!request.isNavigationRequest() || request.frame() !== page.mainFrame()) return;
@@ -66,14 +79,29 @@ export async function startTabCapture(page, options) {
   page.on('download', onEnd);
   page.on('framenavigated', onCommit);
   state.detach = () => { page.off('request', onRequest); page.off('load', onEnd); page.off('requestfailed', onFailed); page.off('download', onEnd); page.off('framenavigated', onCommit); };
-  const recorder = await page.context().newPage();
-  state.recorder = recorder;
   captures.set(page, state);
+  return state;
+}
+
+/**
+ * Captures the page's tab at its device-pixel resolution from `recorder` (openRecorder), so the Source
+ * keeps recording across full navigations and reloads of the page, whether the tab is in front or not,
+ * until it closes. One recorder records several tabs, one stream each. Unlike Playwright recordVideo,
+ * this does not use the 25 fps / 1 Mbps VP8 encoder. Its navigations are noted (watchNavigations).
+ * Returns the page's address when Capture started as `url`.
+ */
+export async function startTabCapture(page, recorder, options) {
+  const state = captures.get(page) ?? watchNavigations(page);
+  // A page that captured before keeps its binding and init script; only the collection starts over.
+  if (!counting.has(page)) {
+    counting.add(page);
+    await page.exposeBinding('__cuetakePaint', (_, times) => { if (Array.isArray(times)) captures.get(page)?.paints.push(...times); });
+    await page.addInitScript(countAnimationFrames);
+  }
+  const key = String(nextKey++);
+  Object.assign(state, { recorder, key });
   let timeout;
   try {
-    await recorder.route(RECORDER_URL, route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>CueTake recorder</title>' }));
-    await recorder.goto(RECORDER_URL);
-    await page.bringToFront();
     await page.evaluate(countAnimationFrames);
     // Headless Chromium paints only on change, so a settled page sends no frame and play() never
     // resolves. A near-invisible pixel flickers until recording starts to force paints.
@@ -92,7 +120,9 @@ export async function startTabCapture(page, options) {
       if (had) document.title = old; else document.querySelector('title')?.remove();
     }, named).catch(() => {});
     try {
-      return await Promise.race([recorder.evaluate(async ({ fps, width, height, bitrate }) => {
+      // Chromium on macOS starts a capture only from the page in front; the tab comes back after.
+      await recorder.bringToFront();
+      return await Promise.race([recorder.evaluate(async ({ key, fps, width, height, bitrate }) => {
         // The stage names the step a stalled start is waiting on.
         window.__cuetakeCaptureStage = 'getDisplayMedia';
         const stream = await navigator.mediaDevices.getDisplayMedia({
@@ -116,8 +146,11 @@ export async function startTabCapture(page, options) {
           const mimeType = 'video/webm;codecs=vp9';
           if (!MediaRecorder.isTypeSupported(mimeType)) throw new Error('VP9 tab capture unavailable');
           const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: bitrate });
-          const state = { stream, video, recorder, chunks: [], frames: [], settings: track.getSettings(), error: null };
-          window.__cuetakeCapture = state;
+          const state = { stream, video, recorder, chunks: [], frames: [], settings: track.getSettings(), error: null, endedAtMs: null };
+          (window.__cuetakeCaptures ??= {})[key] = state;
+          // A tab that closes ends its stream, and with it the recording.
+          state.stopped = new Promise(resolve => { recorder.onstop = resolve; });
+          track.addEventListener('ended', () => { state.endedAtMs ??= Date.now(); });
           const tick = (now, metadata) => {
             if (recorder.state !== 'recording') return;
             state.frames.push({ timeMs: performance.timeOrigin + now - state.startedAtMs, mediaTime: metadata.mediaTime, presentedFrames: metadata.presentedFrames });
@@ -135,31 +168,31 @@ export async function startTabCapture(page, options) {
           stream.getTracks().forEach(track => track.stop());
           throw error;
         }
-      }, options), new Promise((_, reject) => {
+      }, { ...options, key }), new Promise((_, reject) => {
         timeout = setTimeout(async () => {
           const stage = await recorder.evaluate(() => window.__cuetakeCaptureStage).catch(() => 'unknown');
           reject(new Error(`Tab capture did not start within 15 seconds (waiting on: ${stage})`));
         }, 15_000);
       })]).then(started => { state.startedAtMs = Date.parse(started.startedAt); return { ...started, url: page.url() }; });
-    } finally { clearTimeout(timeout); await restore(); }
+    } finally { clearTimeout(timeout); await page.bringToFront().catch(() => {}); await restore(); }
   } catch (error) {
-    await stopListening(page);
+    stopListening(page);
     throw error;
   }
 }
 
-async function stopListening(page) {
+function stopListening(page) {
   const state = captures.get(page);
   if (!state) return null;
   captures.delete(page);
   state.detach();
-  await state.recorder.close().catch(() => {});
   return state;
 }
 
 /**
- * Seconds since Capture started of each animation frame's second, and of each navigation, from its
- * request until its document loaded (or Capture stopped), with when it committed, if it did.
+ * Seconds since the tab's capture started of each animation frame's second, and of each navigation, from its
+ * request until its document loaded (or Capture stopped), with when it committed, if it did. A navigation
+ * noted before the capture started, such as a popup's first, has negative times.
  */
 export function captureSeconds({ paints, navigations, startedAtMs }, stoppedAtMs) {
   const pageFrames = [];
@@ -168,34 +201,37 @@ export function captureSeconds({ paints, navigations, startedAtMs }, stoppedAtMs
     const second = Math.floor((ms - startedAtMs) / 1000);
     pageFrames[second] = (pageFrames[second] ?? 0) + 1;
   }
-  const t = ms => Math.round(Math.max(0, Math.min(ms, stoppedAtMs) - startedAtMs)) / 1000;
+  const t = ms => Math.round(Math.min(ms, stoppedAtMs) - startedAtMs) / 1000;
   return {
     pageFrames: Array.from(pageFrames, n => n ?? 0),
-    navigations: navigations.filter(n => (n.end ?? stoppedAtMs) >= startedAtMs && n.ms < stoppedAtMs).map(n => ({ t: t(n.ms), end: t(n.end ?? stoppedAtMs), url: n.url, ...(n.commit && n.commit < stoppedAtMs && { commit: t(n.commit) }) })),
+    navigations: navigations.filter(n => n.ms < stoppedAtMs).map(n => ({ t: t(n.ms), end: t(n.end ?? stoppedAtMs), url: n.url, ...(n.commit && n.commit < stoppedAtMs && { commit: t(n.commit) }) })),
   };
 }
 
+/** Stops capturing the page's tab, or reads what it recorded until it closed, and writes the Source and its stats. */
 export async function stopTabCapture(page, outputPath) {
   const state = captures.get(page);
   if (!state) throw new Error('This page is not being captured');
   try {
     // Animation frames the page counted before the stop arrive before its answer to an evaluate.
     await page.evaluate(() => 0).catch(() => {});
-    const result = await state.recorder.evaluate(async () => {
-      const state = window.__cuetakeCapture;
-      const stoppedAtMs = Date.now();
-      await new Promise(resolve => { state.recorder.onstop = resolve; state.recorder.stop(); });
+    const result = await state.recorder.evaluate(async key => {
+      const state = window.__cuetakeCaptures[key];
+      const stoppedAtMs = state.endedAtMs ?? Date.now();
+      if (state.recorder.state !== 'inactive') state.recorder.stop();
+      await state.stopped;
       state.stream.getTracks().forEach(track => track.stop());
       state.video.srcObject = null;
       if (state.error) throw new Error(state.error);
       const bytes = new Uint8Array(await new Blob(state.chunks).arrayBuffer());
       let binary = '';
       for (let i = 0; i < bytes.length; i += 32768) binary += String.fromCharCode(...bytes.subarray(i, i + 32768));
+      delete window.__cuetakeCaptures[key];
       return { data: btoa(binary), stoppedAtMs, stats: { settings: state.settings, duration: (stoppedAtMs - state.startedAtMs) / 1000, frames: state.frames } };
-    });
+    }, state.key);
     const stats = { ...result.stats, ...captureSeconds(state, result.stoppedAtMs) };
     await writeFile(outputPath, Buffer.from(result.data, 'base64'));
     await writeFile(outputPath.replace(/\.webm$/, '-capture.json'), JSON.stringify(stats, null, 2));
     return stats;
-  } finally { await stopListening(page); }
+  } finally { stopListening(page); }
 }

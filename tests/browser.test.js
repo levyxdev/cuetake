@@ -7,6 +7,7 @@ import { createServer } from 'node:http';
 import { saveAuthState, resolveAuthProfile } from '../src/auth.js';
 import { installProbe, collectTimeline } from '../src/probe.js';
 import { createDirector } from '../src/director.js';
+import { followTabs } from '../src/follow-tabs.js';
 import { renderFinal, inspectFinal, extractFrame, composePreview } from '../src/render.js';
 import { merge, withDefaults } from '../src/edit.js';
 import { layout, previewSheet, outputSize } from '../src/stage.js';
@@ -284,7 +285,7 @@ test('the Director lands inside bordered, nested and scaled cross-origin iframes
     page.mouse.move = (x, y, options) => { moves.push({ x, y, ms: Date.now() }); return move(x, y, options); };
     const startedAtMs = Date.now();
     await installProbe(page);
-    const d = createDirector(page, startedAtMs, 60, [], [], [], [], null, { speed: 4 });
+    const d = createDirector(followTabs(page), { startedAt: startedAtMs, fps: 60, speed: 4 }, { focus: [], wide: [], said: [], forwarded: [], pointer: [] });
     for (const frame of frames) await d.click(frame.locator('#go'));
     const timeline = await collectTimeline(page, startedAtMs);
     const clicks = timeline.events.filter(e => e.type === 'click');
@@ -351,7 +352,7 @@ test('Capture keeps one Source and one Timeline through a full navigation and a 
   const dir = await fs.mkdtemp(join(tmpdir(), 'cuetake-navigate-'));
   const browser = await chromium.launch({ headless: true, channel: 'chromium' });
   try {
-    const { sessionId } = await startRecording(`http://127.0.0.1:${server.port}/`, { width: 320, height: 240, resolutionScale: 1, fps: 30, outputDir: dir, deferCapture: true });
+    const { sessionId } = await startRecording(`http://127.0.0.1:${server.port}/`, { width: 640, height: 400, resolutionScale: 1, fps: 30, outputDir: dir, deferCapture: true });
     const recorded = getRecordingPage(sessionId);
     const started = await beginCapture(sessionId), startedAtMs = Date.parse(started.startedAt), beginCaptureUrl = started.url;
     await recorded.waitForTimeout(500);
@@ -362,8 +363,7 @@ test('Capture keeps one Source and one Timeline through a full navigation and a 
     await recorded.mouse.move(200, 50, { steps: 4 });
     await recorded.waitForTimeout(500);
     const timeline = await collectTimeline(recorded, startedAtMs);
-    const { webmPath, durationSeconds, navigations } = await stopRecording(sessionId);
-    const capture = JSON.parse(await fs.readFile(webmPath.replace(/\.webm$/, '-capture.json'), 'utf8'));
+    const { durationSeconds, tabs: [{ webmPath, navigations, stats: capture }] } = await stopRecording(sessionId);
     // Both loads are noted, in order, each from its request until its document loaded.
     expect(navigations.map(n => new URL(n.url).pathname)).toEqual(['/next', '/next']);
     expect(navigations[0].t).toBeGreaterThan(0.4);
@@ -379,8 +379,9 @@ test('Capture keeps one Source and one Timeline through a full navigation and a 
     expect(timeline.pointer.at(-1)).toEqual([expect.any(Number), 200, 50]);
     expect(timeline.pointer.at(-1)[0]).toBeGreaterThan(navigations[1].end);
     // The Source kept recording after each load, and shows the first page, then the second.
-    expect(capture.frames.some(f => f.timeMs / 1000 > navigations[1].end)).toBe(true);
-    expect(capture.settings.width).toBe(320);
+    // A still page may paint the reloaded document before it finishes loading.
+    expect(capture.frames.some(f => f.timeMs / 1000 > navigations[1].commit)).toBe(true);
+    expect(capture.settings.width).toBe(640);
     expect(durationSeconds).toBeGreaterThan(navigations[1].end);
     const [before] = await pixelsAt(browser, await extractFrame(webmPath, 0.2), [[300, 220]]);
     const [after] = await pixelsAt(browser, await extractFrame(webmPath, durationSeconds - 0.2), [[300, 220]]);
@@ -391,6 +392,50 @@ test('Capture keeps one Source and one Timeline through a full navigation and a 
   } finally { await cleanup(); await browser.close(); server.close(); await fs.rm(dir, { recursive: true, force: true }); }
 }, 60_000);
 
+test('Capture records each Tab the demo opens; the Director acts only in the one in front and carries its cursor into a popup', async () => {
+  const button = (id, onclick) => `<button id="${id}" onclick="${onclick}" style="position:fixed;left:40px;top:40px;width:120px;height:40px">${id}</button>`;
+  const server = await sites({
+    '/': `<body style="margin:0;background:rgb(220,30,30)"><a href="/tab" target="_blank" style="position:fixed;left:40px;top:40px;width:120px;height:40px">tab</a>${button('pop', "window.open('/pop', 'pop', 'popup,width=200,height=160')").replace('top:40px', 'top:120px')}</body>`,
+    '/tab': `<body style="margin:0;background:rgb(30,180,60)">${button('done', '')}</body>`,
+    '/pop': `<body style="margin:0;background:rgb(30,60,200)">${button('ok', 'setTimeout(() => window.close(), 100)')}</body>`,
+  });
+  const dir = await fs.mkdtemp(join(tmpdir(), 'cuetake-tabs-'));
+  try {
+    const { sessionId } = await startRecording(`http://127.0.0.1:${server.port}/`, { width: 640, height: 400, resolutionScale: 1, fps: 30, outputDir: dir, deferCapture: true });
+    const { tabs, startedAt } = await beginCapture(sessionId);
+    const notes = { focus: [], wide: [], said: [], forwarded: [], pointer: [] };
+    const d = createDirector(tabs, { startedAt: Date.parse(startedAt), fps: 30, speed: 4 }, notes);
+    const first = d.page;
+    const opened = first.waitForEvent('popup');
+    await d.click(first.getByRole('link', { name: 'tab' }));
+    const tab = await opened;
+    expect(d.page).toBe(tab);
+    // A person can't click a tab they can't see.
+    await expect(d.click(first.locator('#pop'))).rejects.toThrow(/Tab 0, behind the one in front; .*d\.switchTo/);
+    await d.click(tab.locator('#done'));
+    await d.switchTo(first);
+    // The popup opens away from the cursor: the glide into it starts where its page cannot see the pointer.
+    await d.move(600, 380);
+    const popped = first.waitForEvent('popup');
+    await first.locator('#pop').click();
+    const popup = await popped;
+    await d.click(popup.locator('#ok'));
+    await first.waitForTimeout(500);
+    expect(d.page).toBe(first);
+    const stopped = await stopRecording(sessionId);
+    expect(stopped.tabs.map(({ id, opener, viewport, closed }) => [id, opener, viewport, closed === null])).toEqual([
+      [0, null, { width: 640, height: 400 }, true], [1, 0, { width: 640, height: 400 }, true], [2, 0, { width: 200, height: 160 }, false],
+    ]);
+    expect(stopped.tabs.map(t => [t.stats.settings.width, t.stats.settings.height])).toEqual([[640, 400], [640, 400], [200, 160]]);
+    expect(stopped.fronts.map(front => front.tab)).toEqual([1, 0, 2, 0]);
+    for (const t of stopped.tabs.slice(1)) expect(t.start).toBeGreaterThanOrEqual(t.opened);
+    // The popup sits centered over its opener, at 220, 120; the cursor at 600, 380 is outside it.
+    const unseen = notes.pointer.filter(([, , , id]) => id === 2);
+    expect(unseen[0].slice(1, 3)).toEqual([380, 260]);
+    for (const [, x, y] of unseen) expect(x < 0 || y < 0 || x >= 200 || y >= 160).toBe(true);
+  } finally { await cleanup(); server.close(); await fs.rm(dir, { recursive: true, force: true }); }
+}, 60_000);
+
 test('Render maps CSS camera targets onto the 2× Source and holds the last frame to the Take duration', async () => {
   const dir = await fs.mkdtemp(join(tmpdir(), 'cuetake-render-'));
   const browser = await chromium.launch({ headless: true, channel: 'chromium' });
@@ -398,7 +443,7 @@ test('Render maps CSS camera targets onto the 2× Source and holds the last fram
     const sourcePath = join(dir, 'source.webm'), outputPath = join(dir, 'final.mp4');
     await fs.writeFile(sourcePath, await syntheticSource(browser, 0.6));
     const edit = bare({ camera: { maxZoom: 2, padding: 0, lead: 0.1, response: 0.1, hold: 2, endWide: 0, follow: false, targets: [{ t: 0.2, box: { x: 240, y: 100, width: 20, height: 20 } }] } });
-    await renderFinal({ sourcePath, finalPath: outputPath, timeline: { viewport: { width: 320, height: 240 }, duration: 1.5 }, ...forRender(edit, dir) });
+    await renderFinal({ sources: [sourcePath], finalPath: outputPath, timeline: { viewport: { width: 320, height: 240 }, duration: 1.5 }, ...forRender(edit, dir) });
     expect(await inspectFinal(outputPath)).toMatchObject({ width: 320, height: 240, fps: 30, packets: 45, decodedFrames: 45 });
     const pixel = await pixelsAt(browser, await extractFrame(outputPath, 0.5), [[180, 120], [250, 110]]);
     expect(pixel[0][0]).toBeGreaterThan(180);
@@ -417,7 +462,7 @@ test('Render plays a fast-forward faster, with the Cursor in step with the page,
     const timeline = { viewport: { width: 320, height: 240 }, duration: 3, pointer: [[0, 40, 200], [3, 280, 200]], events: [] };
     // A white badge band, so it shows against the black page.
     const edit = bare({ fastForward: [{ start: 0.3, end: 2.7, rate: 4 }], fastForwardBadge: { draw: 'fast-forward', band: '#ffffff' } });
-    const render = await renderFinal({ sourcePath, finalPath: outputPath, timeline, ...forRender(edit, dir) });
+    const render = await renderFinal({ sources: [sourcePath], finalPath: outputPath, timeline, ...forRender(edit, dir) });
     expect(render.fastForwards).toEqual([{ start: 0.3, end: expect.closeTo(1.125, 6), rate: 4, frames: [9, 33] }]);
     // 0.3 s as recorded, 0.6 s easing over 1.5 s of Source, 0.9 s at 4×, 0.3 s as recorded: 1.425 s.
     expect(await inspectFinal(outputPath)).toMatchObject({ fps: 30, packets: 43, decodedFrames: 43 });
@@ -441,7 +486,7 @@ test('the Director marks a fast-forwarded wait, and refuses Lines and fast-forwa
   try {
     const page = await browser.newPage();
     const said = [], forwarded = [];
-    const d = createDirector(page, Date.now(), 60, [], [], said, forwarded);
+    const d = createDirector(followTabs(page), { startedAt: Date.now(), fps: 60 }, { focus: [], wide: [], said, forwarded, pointer: [] });
     await d.wait(100);
     expect(await d.fastForward(async () => { await d.wait(300); return 'ready'; }, { rate: 3 })).toBe('ready');
     expect(forwarded).toEqual([{ t: expect.any(Number), end: expect.any(Number), rate: 3 }]);
@@ -463,7 +508,7 @@ test('Render draws the built-in cursor at the pointer and a spark around each cl
     const sourcePath = join(dir, 'source.webm'), outputPath = join(dir, 'final.mp4');
     await fs.writeFile(sourcePath, await syntheticSource(browser, 0.6));
     const timeline = { viewport: { width: 320, height: 240 }, duration: 1, pointer: [[0, 60, 60], [1, 60, 60]], events: [{ type: 'click', t: 0.2, x: 200, y: 60 }] };
-    await renderFinal({ sourcePath, finalPath: outputPath, timeline, ...forRender(bare({ clickEffect: { draw: 'spark' } }), dir) });
+    await renderFinal({ sources: [sourcePath], finalPath: outputPath, timeline, ...forRender(bare({ clickEffect: { draw: 'spark' } }), dir) });
     // A spark ray sits ~26 px from the click along 22.5° at t=0.3; the arrow's body lies along the diagonal below-right of its tip.
     const ray = [Math.round(200 + 26 * Math.cos(Math.PI / 8)), Math.round(60 + 26 * Math.sin(Math.PI / 8))];
     const [arrow, spark, clear] = await pixelsAt(browser, await extractFrame(outputPath, 0.3), [[67, 67], ray, [120, 200]]);
@@ -485,7 +530,7 @@ test('Render draws the Cursor in the shape the page asked for, pressed while hel
       viewport: { width: 320, height: 240 }, duration: 2.6, pointer: [[0, 60, 60]], shapes: [[0, 'default'], [0.4, 'pointer']],
       events: [{ type: 'click', t: 0.8, end: 0.9, x: 60, y: 60 }],
     };
-    await renderFinal({ sourcePath, finalPath: outputPath, timeline, ...forRender(bare(), dir) });
+    await renderFinal({ sources: [sourcePath], finalPath: outputPath, timeline, ...forRender(bare(), dir) });
     const frame = async (t, points) => (await pixelsAt(browser, await extractFrame(outputPath, t), points)).map(rgb => Math.min(...rgb));
     // The arrow's body is right of its tip; the hand's thumb is left of the fingertip, and its palm reaches lower.
     const arrow = [67, 67], thumb = [54, 74], palm = [64, 82];
@@ -515,7 +560,7 @@ test('Render shows keycaps for each Shortcut outside the camera, fading in and o
       keycaps: { cap: '#ff0000', edge: '#ff0000', bottom: 300 }, shortcuts: [{ t: 0.5, keys: ['Meta', 'K'] }],
       camera: { maxZoom: 2, padding: 0, lead: 0.1, response: 0.1, hold: 2, endWide: 0, follow: false, targets: [{ t: 0.2, box: { x: 240, y: 100, width: 20, height: 20 } }] },
     });
-    const render = await renderFinal({ sourcePath, finalPath: outputPath, timeline: { viewport: { width: 320, height: 240 }, duration: 2.4 }, ...forRender(edit, dir) });
+    const render = await renderFinal({ sources: [sourcePath], finalPath: outputPath, timeline: { viewport: { width: 320, height: 240 }, duration: 2.4 }, ...forRender(edit, dir) });
     expect(render.keycaps).toEqual([{ t: 0.5, keys: ['Meta', 'K'], presses: 1, frames: [15, 59] }]);
     // On a 320×240 Final a 1080p pixel is 2/9 of an output pixel: the row ends 80 from the right, so the ⌘ cap
     // spans about 271 to 286 px across and 159 to 173 px down, 300 above the bottom; this point is inside it,
@@ -535,7 +580,7 @@ test('Render turns the busy ball once a second', async () => {
     const sourcePath = join(dir, 'source.webm'), outputPath = join(dir, 'final.mp4');
     await fs.writeFile(sourcePath, await syntheticSource(browser, 0.6));
     const timeline = { viewport: { width: 320, height: 240 }, duration: 1.2, pointer: [[0, 160, 120]], shapes: [[0, 'wait']], events: [] };
-    await renderFinal({ sourcePath, finalPath: outputPath, timeline, ...forRender(bare(), dir) });
+    await renderFinal({ sources: [sourcePath], finalPath: outputPath, timeline, ...forRender(bare(), dir) });
     // A point on the ball changes color as it turns, and comes back a second later.
     const colorAt = async t => (await pixelsAt(browser, await extractFrame(outputPath, t), [[166, 120]]))[0];
     const [first, turned, again] = [await colorAt(0.15), await colorAt(0.4), await colorAt(1.15)];
@@ -554,7 +599,7 @@ test('Render frames the page in the built-in chrome over an agent shader Backgro
     await fs.writeFile(join(dir, 'solid.glsl'), 'void main() { color = vec4(tint, 1.0); }');
     const viewport = { width: 320, height: 240 };
     const edit = bare({ output: { width: 854, height: 480 }, frame: { padding: 0.08, radius: 12, url: 'example.com', chrome: { draw: 'browser' }, background: [{ shader: 'solid.glsl', tint: '#2050e0' }] } });
-    await renderFinal({ sourcePath, finalPath: outputPath, timeline: { viewport, duration: 1 }, ...forRender(edit, dir) });
+    await renderFinal({ sources: [sourcePath], finalPath: outputPath, timeline: { viewport, duration: 1 }, ...forRender(edit, dir) });
     const stage = layout(edit, viewport, 44);
     expect(await inspectFinal(outputPath)).toMatchObject({ width: 854, height: 480, decodedFrames: 30 });
     const pageCenter = [Math.round(stage.page.x + stage.page.w * 0.3), Math.round(stage.page.y + stage.page.h / 2)];
@@ -565,7 +610,7 @@ test('Render frames the page in the built-in chrome over an agent shader Backgro
     expect(Math.min(...bar)).toBeGreaterThan(220);           // light chrome bar
     // The address bar changes text from the Source time a navigation committed on another host.
     const moved = { ...edit, frame: { ...edit.frame, urls: [{ t: 0.5, url: 'checkout.stripe.test/pay' }] } };
-    await renderFinal({ sourcePath, finalPath: outputPath, timeline: { viewport, duration: 1 }, ...forRender(moved, dir) });
+    await renderFinal({ sources: [sourcePath], finalPath: outputPath, timeline: { viewport, duration: 1 }, ...forRender(moved, dir) });
     const field = Array.from({ length: 120 }, (_, i) => [Math.round(stage.window.x + stage.window.w * (0.3 + 0.4 * i / 120)), Math.round(stage.window.y + stage.chrome / 2)]);
     const ink = rgb => Math.min(...rgb) < 200;
     const early = (await pixelsAt(browser, await extractFrame(outputPath, 0.2), field)).map(ink);
@@ -589,7 +634,7 @@ test('Render draws the chrome even when its sharpest size is past what the GPU h
     const edit = bare({ output: { width: 854, height: 480 }, camera: { maxZoom: 8 }, frame: { padding: 0.08, radius: 12, url: 'example.com', chrome: { draw: 'browser' }, background: [{ shader: 'fluted' }] } });
     const stage = layout(edit, viewport, 44);
     expect(viewport.width * stage.scale * 8 * 2).toBeGreaterThan(8192);
-    await renderFinal({ sourcePath, finalPath: outputPath, timeline: { viewport, duration: 0.5 }, ...forRender(edit, dir) });
+    await renderFinal({ sources: [sourcePath], finalPath: outputPath, timeline: { viewport, duration: 0.5 }, ...forRender(edit, dir) });
     const bar = [Math.round(stage.window.x + stage.window.w * 0.8), Math.round(stage.window.y + stage.chrome / 2)];
     const [pixel] = await pixelsAt(browser, await extractFrame(outputPath, 0.25), [bar]);
     expect(Math.min(...pixel)).toBeGreaterThan(220);           // the light chrome bar, not black
@@ -604,7 +649,7 @@ test('a Preview composes each Look over the Source exactly where Render would pl
     await fs.writeFile(sourcePath, await syntheticSource(browser, 0.6));
     const viewport = { width: 320, height: 240 }, timeline = { viewport, duration: 1, pointer: [], events: [] };
     const filled = bare({ output: { width: 1440, height: 1080 } });
-    const [red] = await pixelsAt(browser, await composePreview({ sourcePath, timeline, ...previewOf(dir, [['current', filled]]) }), [[250 * 4.5, 110 * 4.5]]);
+    const [red] = await pixelsAt(browser, await composePreview({ sources: [sourcePath], timeline, ...previewOf(dir, [['current', filled]]) }), [[250 * 4.5, 110 * 4.5]]);
     expect(red[0]).toBeGreaterThan(180);
     expect(red[1]).toBeLessThan(60);
 
@@ -612,7 +657,7 @@ test('a Preview composes each Look over the Source exactly where Render would pl
     await fs.writeFile(join(dir, 'paper.svg'), '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="9"><rect width="16" height="9" fill="#f4f4f5"/></svg>');
     const framed = background => withDefaults({ output: { width: 1920, height: 1080 }, frame: { url: 'example.com', ...(background && { background }) } });
     const edits = [framed([{ image: 'paper.svg' }]), framed()];
-    const png = await composePreview({ sourcePath, timeline, at: 0.5, ...previewOf(dir, edits.map((edit, i) => [`tile ${i}`, edit])) });
+    const png = await composePreview({ sources: [sourcePath], timeline, at: 0.5, ...previewOf(dir, edits.map((edit, i) => [`tile ${i}`, edit])) });
     const sheet = previewSheet(edits.map(outputSize));
     const stage = layout(edits[0], viewport, 44);
     const corner = tile => [Math.round(tile.x + 6), Math.round(tile.y + 6)];
@@ -632,7 +677,7 @@ test('styling code errors name their file and line, and the render page refuses 
     const sourcePath = join(dir, 'source.webm');
     await fs.writeFile(sourcePath, await syntheticSource(browser, 0.6));
     const timeline = { viewport: { width: 320, height: 240 }, duration: 1, pointer: [], events: [] };
-    const preview = edit => composePreview({ sourcePath, timeline, ...previewOf(dir, [['current', edit]]) });
+    const preview = edit => composePreview({ sources: [sourcePath], timeline, ...previewOf(dir, [['current', edit]]) });
     await fs.writeFile(join(dir, 'bad.glsl'), 'void main() {\n  color = vec4(missing);\n}');
     await expect(preview(bare({ frame: { background: [{ shader: 'bad.glsl' }] } }))).rejects.toThrow(/bad\.glsl: .*0:2/);
     await fs.writeFile(join(dir, 'remote.js'), "export const height = 30;\nawait fetch('https://example.com/font.woff2');\nexport function draw() {}");
@@ -683,7 +728,7 @@ test('Render mixes each Line in at its start, as long as the video, and burns in
     ] };
     // An opaque red band shows where the built-in draws; zoomed in, it must stay put.
     const edit = bare({ subtitles: { band: '#ff0000' }, camera: { maxZoom: 2, padding: 0, lead: 0.1, response: 0.1, hold: 2, endWide: 0, follow: false, targets: [{ t: 0.2, box: { x: 240, y: 100, width: 20, height: 20 } }] } });
-    const render = await renderFinal({ sourcePath, finalPath: outputPath, timeline: { viewport: { width: 320, height: 240 }, duration: 2 }, ...forRender(edit, dir), narration });
+    const render = await renderFinal({ sources: [sourcePath], finalPath: outputPath, timeline: { viewport: { width: 320, height: 240 }, duration: 2 }, ...forRender(edit, dir), narration });
     expect(render.lines).toEqual([{ id: 'a', start: 0.3, duration: 0.5 }, { id: 'b', start: 1.4, duration: 0.4 }]);
     expect(render.subtitles.map(({ id, start, end, rows, frames }) => ({ id, start, end, rows, frames }))).toEqual([
       { id: 'a', start: 0.3, end: expect.closeTo(1.3, 6), rows: ['Open the editor.'], frames: [9, 38] },
@@ -715,7 +760,7 @@ test('Render refuses Lines that overlap or run past the end, naming them, and au
     await fs.writeFile(sourcePath, await syntheticSource(browser, 0.6));
     await fs.writeFile(join(dir, 'a.wav'), toneWav(0.8));
     await fs.writeFile(join(dir, 'bad.wav'), 'not audio');
-    const render = lines => renderFinal({ sourcePath, finalPath: join(dir, 'final.mp4'), timeline: { viewport: { width: 320, height: 240 }, duration: 1 }, ...forRender(bare(), dir), narration: { language: 'en', lines } });
+    const render = lines => renderFinal({ sources: [sourcePath], finalPath: join(dir, 'final.mp4'), timeline: { viewport: { width: 320, height: 240 }, duration: 1 }, ...forRender(bare(), dir), narration: { language: 'en', lines } });
     const line = (id, start, file = 'a.wav') => ({ id, start, text: 'Hello.', path: join(dir, file) });
     await expect(render([line('a', 0), line('b', 0.5)])).rejects.toThrow("Line 'a' overlaps 'b' by 0.30 s; Line 'b' runs 0.30 s past the end of the Final");
     await expect(render([line('a', 0, 'bad.wav')])).rejects.toThrow("Line 'a': its audio bad.wav is not a format the browser decodes");

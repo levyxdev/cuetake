@@ -1,19 +1,45 @@
 import { landing, pauseMs, random, reach, typingDelays } from './motion.js';
 import { boxOnPage } from './frames.js';
+import { carried, seenBy, windowMaps } from './tabs.js';
 
 /**
  * Timed, viewport-aligned interactions shared by all scenarios, moving like a person (see motion.js).
- * `said` collects where each Line starts and `forwarded` each fast-forwarded wait; `voiced` maps the
- * Narration's Line ids to their audio's seconds, or is null without one. `speed` scales every move,
- * pause and typing delay it chooses; `seed` picks one of many equally human ways to move.
+ * `tabs` are the Tabs Capture follows (follow-tabs.js); the Director acts only on the one in front.
+ * `notes` collects the camera's focus targets and `wide` windows, where each Line starts (`said`),
+ * each fast-forwarded wait (`forwarded`) and the pointer path no Tab could see (`pointer`, as
+ * [epoch ms, x, y, tab]). `voiced` maps the Narration's Line ids to their audio's seconds, or is null
+ * without one. `speed` scales every move, pause and typing delay it chooses; `seed` picks one of many
+ * equally human ways to move.
  */
-export function createDirector(page, startedAt, fps, focusTargets, wideWindows, said = [], forwarded = [], voiced = null, { speed = 1, seed = 1 } = {}) {
-  let cursor = { x: 0, y: 0 }, forwarding = null;
+export function createDirector(tabs, { startedAt, fps, voiced = null, speed = 1, seed = 1 }, notes) {
+  const { focus: focusTargets, wide: wideWindows, said, forwarded, pointer } = notes;
+  let cursor = { x: 0, y: 0, tab: tabs.front.id }, forwarding = null;
   const rand = random(seed);
-  const wait = ms => page.waitForTimeout(Math.max(0, ms));
+  // Node's clock, not a page's, since the page in front may close mid-wait.
+  const wait = ms => new Promise(resolve => setTimeout(resolve, Math.max(0, ms)));
   const time = () => (Date.now() - startedAt) / 1000;
   const pause = name => wait(pauseMs(name, speed, rand));
+  /** Moves the front Tab's mouse; where its page cannot see the pointer, the Director notes the path itself. */
+  async function point(front, x, y) {
+    if (!seenBy({ x, y }, front.viewport)) pointer.push([Date.now(), x, y, front.id]);
+    await front.page.mouse.move(x, y);
+  }
+  /**
+   * The Tab in front, once it records. The cursor follows a change of Tab: it stays where it was over
+   * the window, so the new page's mouse is moved there, as converted through where a popup sits.
+   */
+  async function inFront() {
+    const front = tabs.front;
+    await tabs.ready(front.page);
+    if (cursor.tab !== front.id) {
+      const all = tabs.list(), at = carried(cursor, cursor.tab, front.id, windowMaps(all, all[0].viewport));
+      cursor = { ...at, tab: front.id };
+      await point(front, at.x, at.y);
+    }
+    return front;
+  }
   async function glide(to, { size, duration, drag } = {}) {
+    const front = await inFront();
     const path = reach(cursor, to, { size, duration, speed, drag, rand });
     // Progress follows the clock, so a page slow to take each move cannot stretch the move.
     const start = Date.now();
@@ -21,19 +47,31 @@ export function createDirector(page, startedAt, fps, focusTargets, wideWindows, 
       await wait(start + i * 1000 / fps - Date.now());
       t = path.duration ? Math.min(1, (Date.now() - start) / path.duration) : 1;
       const { x, y } = path.at(t);
-      await page.mouse.move(x, y);
+      await point(front, x, y);
     }
-    cursor = { ...to };
+    cursor = { x: to.x, y: to.y, tab: front.id };
   }
   const move = (x, y, duration) => glide({ x, y }, { duration });
   // Clicks, typing, drags and cursor shapes are recorded by the in-page probe; only deliberate camera choices live here.
-  const focus = (box, t = time()) => focusTargets.push({ t, box });
+  const focus = (box, t = time()) => focusTargets.push({ t, box, tab: tabs.front.id });
   /** Options may be a bare number for the action's main timing; `focus: false` keeps the camera wide. */
   const options = (value, key) => typeof value === 'number' ? { [key]: value } : value ?? {};
   async function act({ focus: follow = true }, action) {
     const start = time();
     try { return await action(); }
     finally { if (follow === false) wideWindows.push({ start, end: time() }); }
+  }
+  /** The located target, refused unless it is in the Tab in front: a person can't click a tab they can't see. */
+  async function located(locator, action) {
+    const front = await inFront();
+    const target = typeof locator === 'string' ? front.page.locator(locator) : locator;
+    if (target.page() !== front.page) {
+      const tab = tabs.of(target.page());
+      throw new Error(tab
+        ? `${action} target is in Tab ${tab.id}, behind the one in front; bring it in front first with d.switchTo(page)`
+        : `${action} target is on a page Capture does not follow; act on d.page, or on a page the demo opened`);
+    }
+    return target;
   }
   /**
    * Moves onto a target, landing a little off its center, measured through any iframes it is in.
@@ -43,7 +81,7 @@ export function createDirector(page, startedAt, fps, focusTargets, wideWindows, 
    * where it landed as a share of the box, is returned for the Director to check instead.
    */
   async function approach(locator, duration, action) {
-    const target = typeof locator === 'string' ? page.locator(locator) : locator;
+    const target = await located(locator, action);
     const [box, seen, border] = await Promise.all([
       boxOnPage(target), target.boundingBox(),
       target.evaluate(e => { const style = getComputedStyle(e); return { left: parseInt(style.borderLeftWidth, 10) || 0, top: parseInt(style.borderTopWidth, 10) || 0 }; }),
@@ -74,16 +112,17 @@ export function createDirector(page, startedAt, fps, focusTargets, wideWindows, 
       const { target, position, share } = await approach(locator, duration, 'Click');
       await pause('beforePress');
       if (share) await unblocked(target, share, 'Click');
-      // A person holds the button for a moment, so the Cursor's press shows.
-      await target.click({ position, button, delay: pauseMs('press', speed, rand), force: !!share });
+      // A person holds the button for a moment, so the Cursor's press shows. A popup may close itself on the click.
+      await target.click({ position, button, delay: pauseMs('press', speed, rand), force: !!share }).catch(error => { if (!target.page().isClosed()) throw error; });
       await pause('afterRelease');
     });
   }
   /** Presses a key or combination, such as 'Meta+K', on whatever has focus; the Final shows it as keycaps. */
   function press(keys, opts) {
     return act(options(opts), async () => {
+      const { page } = await inFront();
       await pause('beforeKey');
-      await page.keyboard.press(keys, { delay: pauseMs('press', speed, rand) });
+      await page.keyboard.press(keys, { delay: pauseMs('press', speed, rand) }).catch(error => { if (!page.isClosed()) throw error; });
       await pause('afterKey');
     });
   }
@@ -96,7 +135,7 @@ export function createDirector(page, startedAt, fps, focusTargets, wideWindows, 
     const { msPerChar = 70 / speed, ...rest } = options(opts, 'msPerChar');
     return act(rest, async () => {
       await click(locator, rest);
-      const chars = [...text], delays = typingDelays(text, msPerChar, rand);
+      const { page } = await inFront(), chars = [...text], delays = typingDelays(text, msPerChar, rand);
       for (let i = 0; i < chars.length; i++) {
         if (i) await wait(delays[i - 1]);
         await page.keyboard.type(chars[i]);
@@ -107,6 +146,7 @@ export function createDirector(page, startedAt, fps, focusTargets, wideWindows, 
     const { duration, ...rest } = options(opts, 'duration');
     return act(rest, async () => {
       await glide(from);
+      const { page } = await inFront();
       await pause('beforePress');
       await page.mouse.down();
       try {
@@ -144,5 +184,14 @@ export function createDirector(page, startedAt, fps, focusTargets, wideWindows, 
       said.push({ t, id, text });
     }
   }
-  return { page, wait, time, at: seconds => wait(seconds * 1000 - (Date.now() - startedAt)), move, hover, click, press, type, drag, focus, say, fastForward };
+  /** Brings a Tab back in front, such as the one a closed tab's demo continues in; the cursor stays where it was. */
+  async function switchTo(page) {
+    await tabs.switchTo(page);
+    await inFront();
+  }
+  return {
+    /** The Tab in front. */
+    get page() { return tabs.front.page; },
+    wait, time, at: seconds => wait(seconds * 1000 - (Date.now() - startedAt)), move, hover, click, press, type, drag, focus, say, fastForward, switchTo,
+  };
 }

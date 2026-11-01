@@ -17,15 +17,17 @@ Everything drawn around the page is code or images you write: CueTake fills in d
   "clickEffect": false,
   "keycaps": { "draw": "keycaps", "duration": 1.5, "singleKeys": false, "symbols": true, "fontSize": 34, "color": "#ffffff", "cap": "#1f1f23e6", "edge": "#ffffff40", "right": 80, "bottom": 80 },
   "subtitles": { "draw": "subtitles", "burn": true, "fontSize": 40, "weight": 600, "color": "#ffffff", "band": "#000000b3", "bottom": 72, "padding": 14 },
-  "fastForwardBadge": false
+  "fastForwardBadge": false,
+  "tabs": { "transition": "cut", "popupAnimation": { "duration": 0.2, "scale": 0.9 } }
 }
 ```
 
 - `output`: any even width and height; `quality` is the H.264 quantizer, lower is sharper.
 - `padding` is a fraction of the short side, one number or `[top, right, bottom, left]`; `radius` is in 1080p pixels. With `padding: 0`, `chrome: false`, `radius: 0` and an output at the viewport's proportions (2880×1800 for 1440×900), the page fills the Final.
 - `background` is a list of layers, each drawn over the one before. It stays still while the camera moves the window.
-- `effects` are drawn around the window every frame and follow it as the camera zooms and moves.
-- `chrome`, `cursor` and `clickEffect` take `false` to show nothing.
+- `effects` are drawn around the window every frame and follow it as the camera zooms and moves, and around each popup window, faded with it.
+- `chrome`, `cursor` and `clickEffect` take `false` to show nothing. A popup window gets its own chrome, drawn at its width with its own address.
+- `tabs` sets how the Final shows Tabs ([scenarios.md](scenarios.md)): `transition` is `"cut"` or `{ "fade": 0.2 }` (seconds) where the window shows another tab, and `popupAnimation` scales a popup window from `scale` and fades it in as it opens and out as it closes, over `duration` seconds; `false` shows it at once.
 - The Cursor takes the shape the page asked for at each moment, as the Timeline recorded it. CueTake reads `press` (the scale it shrinks to around its hotspot while a button is held, springing back on release) itself; `false` turns it off. The Cursor stays shown from its first move to the last frame; to clear it from a result, move it aside in the Scenario.
 - A click shows on the Cursor, so there is no click effect by default. Name one, such as `{ "draw": "spark", "duration": 420, "radius": 32, "length": 16, "count": 8 }`, to add one.
 - `keycaps` draws each Shortcut the Edit lists ([scenarios.md](scenarios.md)) over the Final, outside the camera. CueTake reads `duration` (seconds shown after the last press; pressing the same keys again meanwhile counts up) itself, fades the keycaps in and out and lifts them into place; a new Shortcut replaces the one showing. A key pressed without Control, Alt, Shift or Meta, such as Escape or Enter, shows only with `singleKeys: true`. The built-in draws the keycaps at the bottom right, level with the Subtitles, and shows `⌘ ⇧ ⌥ ⌃` and symbols for keys like Enter and Escape; `symbols: false` writes Cmd, Shift, Alt, Ctrl instead. `false` shows none.

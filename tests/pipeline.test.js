@@ -1,12 +1,12 @@
 import { test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import pkg from '../package.json' with { type: 'json' };
-import { scenarioSchema, summarizeFrames, captureWarnings, timelineWarnings, captureScale, narrationSchema } from '../src/pipeline.js';
+import { scenarioSchema, summarizeFrames, captureWarnings, timelineWarnings, captureScale, narrationSchema, timelineOf } from '../src/pipeline.js';
 import { placeRecords } from '../src/probe.js';
 import { captureSeconds } from '../src/tab-capture.js';
 import { drawsWithGpu } from '../src/environment.js';
 import { fitZoom, cropAround, zoomSegments, cameraTrack } from '../src/camera.js';
-import { cameraTargets, createEdit, DEFAULT_STYLE, withDefaults, addressBar, addressOf } from '../src/edit.js';
+import { cameraTargets, createEdit, DEFAULT_STYLE, withDefaults, addressBar, addressOf, merge } from '../src/edit.js';
 import { pointerAt, presses, sparksAt, heldSpans, pressScale, shapeAt, drawnShape, cursorTrack } from '../src/cursor.js';
 import { random, reachMs, reach, landing, pauseMs, typingDelays } from '../src/motion.js';
 import { atShortSide, layout, cameraView, brandHue, brandColor, previewSheet } from '../src/stage.js';
@@ -16,6 +16,7 @@ import { npxFolders, uninstall } from '../src/uninstall.js';
 import { subtitleRows, subtitleCues, lineProblems, toSrt, toVtt } from '../src/narration.js';
 import { shortcutKeys, keycapShows, keycapTrack } from '../src/shortcuts.js';
 import { timeMap, fastForwardProblems, retimed, linesInFinal, badgeAt } from '../src/time-map.js';
+import { windowMaps, tabTrack, inWindow, carried, seenBy } from '../src/tabs.js';
 import fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -59,8 +60,10 @@ test('places animation frames and navigations in seconds since Capture started',
   }, 13_300);
   // A paint before the start or after the stop is not counted; a second with none counts as zero.
   expect(counted.pageFrames).toEqual([3, 1, 1]);
-  // A navigation finished before the start is left out; one still loading at the stop ends there.
-  expect(counted.navigations).toEqual([{ t: 0.8, end: 1.65, commit: 1.1, url: 'https://cuetake.test/next' }, { t: 2.9, end: 3.3, url: 'https://cuetake.test/slow' }]);
+  // A navigation noted before the start, such as a popup's first, counts back from it; one still loading at the stop ends there.
+  expect(counted.navigations).toEqual([
+    { t: -1, end: -0.5, url: 'https://cuetake.test/before' }, { t: 0.8, end: 1.65, commit: 1.1, url: 'https://cuetake.test/next' }, { t: 2.9, end: 3.3, url: 'https://cuetake.test/slow' },
+  ]);
 });
 
 test('the address bar shows the host the page is on, changing when a navigation commits on another', () => {
@@ -73,10 +76,10 @@ test('the address bar shows the host the page is on, changing when a navigation 
     { type: 'navigate', t: 4, end: 4.1, url: 'https://files.example/report.pdf' }, // never committed: a download
     navigate(6.5, 'http://localhost:3000/orders/1?paid=1'),
   ] };
-  expect(addressBar(config, timeline)).toEqual({ url: 'localhost:3000', urls: [{ t: 3.2, url: 'checkout.stripe.test' }, { t: 6.5, url: 'localhost:3000' }] });
+  expect(addressBar(config, timeline)).toEqual({ url: 'localhost:3000', urls: [{ t: 3.2, url: 'checkout.stripe.test', tab: 0 }, { t: 6.5, url: 'localhost:3000', tab: 0 }] });
   // A url the Scenario names stands for the host Capture started on, also when the page comes back to it.
   const named = scenarioSchema.parse({ name: 'demo', url: 'http://localhost:3000/login', frame: { url: 'app.acme.com' } });
-  expect(addressBar(named, timeline)).toEqual({ url: 'app.acme.com', urls: [{ t: 3.2, url: 'checkout.stripe.test' }, { t: 6.5, url: 'app.acme.com' }] });
+  expect(addressBar(named, timeline)).toEqual({ url: 'app.acme.com', urls: [{ t: 3.2, url: 'checkout.stripe.test', tab: 0 }, { t: 6.5, url: 'app.acme.com', tab: 0 }] });
   // Without the start address, a Take of an older version starts from the Scenario's url.
   expect(addressBar(config, { events: [] })).toEqual({ url: 'localhost:3000', urls: [] });
   expect(addressOf('about:blank')).toBe('about:blank');
@@ -85,6 +88,29 @@ test('the address bar shows the host the page is on, changing when a navigation 
   // The changes belong to the Take: a Look leaves them out, and applying one keeps them.
   expect(lookFromEdit(edit).frame).not.toHaveProperty('urls');
   expect(applyLook(edit, lookFromEdit(withDefaults({})), 'localhost:3000').frame.urls).toEqual(edit.frame.urls);
+});
+
+test('each Tab\'s address bar shows its own host, and stays empty until a new Tab\'s first document commits', () => {
+  const config = scenarioSchema.parse({ name: 'demo', url: 'http://localhost:3000/', frame: { url: 'app.acme.com' } });
+  const timeline = {
+    url: 'http://localhost:3000/', viewport: { width: 1440, height: 900 },
+    tabs: [
+      { id: 0, opener: null, opened: 0, url: 'http://localhost:3000/' },
+      { id: 1, opener: 0, opened: 2, url: 'https://accounts.example.test/oauth' },
+      { id: 2, opener: 0, opened: 5, url: 'about:blank' },
+      { id: 3, opener: 0, opened: 6, url: 'http://localhost:3000/help' },
+    ],
+    events: [
+      { type: 'navigate', t: 2.8, end: 3.2, commit: 3, url: 'https://accounts.example.test/consent', tab: 1 },
+      { type: 'navigate', t: 5.2, end: 5.6, commit: 5.4, url: 'https://pay.example.test/x', tab: 2 },
+      { type: 'navigate', t: 6.2, end: 6.6, commit: 6.4, url: 'http://localhost:3000/done', tab: 0 },
+    ],
+  };
+  expect(addressBar(config, timeline)).toEqual({ url: 'app.acme.com', urls: [
+    { t: 2, url: 'accounts.example.test', tab: 1 },
+    { t: 5.4, url: 'pay.example.test', tab: 2 },
+    { t: 6, url: 'app.acme.com', tab: 3 },
+  ] });
 });
 
 test('warns when the page got too few animation frames during Capture, not when it merely sat still', () => {
@@ -100,6 +126,9 @@ test('warns when the page got too few animation frames during Capture, not when 
   expect(atOne).toContain('GPU');
   // Takes recorded before the page's frames were counted are not judged.
   expect(captureWarnings({ duration: 3, frames: [] }, 2)).toEqual([]);
+  // In a Take with several Tabs, each is judged over its own seconds and named.
+  const [inTab] = captureWarnings({ duration: 3, pageFrames: [9, 8, 7] }, 2, { id: 2, opened: 4.25 });
+  expect(inTab).toStartWith('In Tab 2, opened at 4.25 s, the browser fell behind');
 });
 
 test('places input from nested iframes in top-level CSS pixels, as each parent measured its iframe at the moment', () => {
@@ -202,6 +231,21 @@ test('the camera follows observed clicks, typing and drags, except during focus:
   expect(edit.camera).toMatchObject({ maxZoom: 2, follow: true, targets: expect.any(Array) });
 });
 
+test('the camera frames a popup as it opens and follows input in its Tab; Tabs switch with a cut by default', () => {
+  const timeline = { viewport: { width: 1440, height: 900 },
+    tabs: [{ id: 0, opener: null, viewport: { width: 1440, height: 900 } }, { id: 1, opener: 0, viewport: { width: 1440, height: 900 } }, { id: 2, opener: 0, viewport: { width: 500, height: 600 } }],
+    events: [
+      { type: 'front', t: 1, tab: 1 }, { type: 'click', t: 1.5, x: 2, y: 3, box, tab: 1 }, { type: 'front', t: 2, tab: 0 },
+      { type: 'front', t: 3, tab: 2 }, { type: 'type', t: 4, end: 5, box, tab: 2 }, { type: 'front', t: 6, tab: 0 },
+      { type: 'front', t: 7, tab: 2 },
+    ] };
+  expect(cameraTargets(timeline, [{ t: 9, box, tab: 0 }])).toEqual([
+    { t: 1.5, box, tab: 1 }, { t: 3, box: { x: 0, y: 0, width: 500, height: 600 }, tab: 2 }, { t: 4, box, until: 5, tab: 2 }, { t: 9, box, tab: 0 },
+  ]);
+  const edit = createEdit(scenarioSchema.parse({ name: 'demo', url: 'https://example.com' }), timeline, []);
+  expect(edit.tabs).toEqual({ transition: 'cut', popupAnimation: { duration: 0.2, scale: 0.9 }, placement: [] });
+});
+
 test('an explicit focus replaces only the automatic targets inside its own span', () => {
   const timeline = { events: [{ type: 'click', t: 1, x: 0, y: 0, box }, { type: 'click', t: 8, x: 0, y: 0, box }] };
   const focus = [{ t: 1.2, box: small(100, 100) }];
@@ -292,6 +336,129 @@ test('the camera eases into each move', () => {
   expect(zoomAt(track, 1.45)).toBeLessThan(1.01);
   const speeds = track.slice(84, 96).map((c, i, all) => i ? Math.abs(c.w - all[i - 1].w) : 0).slice(1);
   for (let i = 1; i < speeds.length; i++) expect(speeds[i]).toBeGreaterThan(speeds[i - 1]);
+});
+
+const main = { width: 1440, height: 900 };
+const tab = (id, opener, width, height, more = {}) => ({ id, opener, opened: id, closed: null, viewport: { width, height }, start: id, ...more });
+
+test('a popup window sits centered over its opener\'s page, scaled down only when it does not fit', () => {
+  const tabs = [tab(0, null, 1440, 900), tab(1, 0, 1440, 900), tab(2, 0, 500, 600), tab(3, 0, 800, 1200), tab(4, 2, 200, 100)];
+  const maps = windowMaps(tabs, main);
+  // A Tab the size of the viewport is a tab of the same window.
+  expect(maps.get(0)).toEqual({ x: 0, y: 0, scale: 1 });
+  expect(maps.get(1)).toEqual({ x: 0, y: 0, scale: 1 });
+  expect(maps.get(2)).toEqual({ x: 470, y: 150, scale: 1 });
+  // Too tall for the opener's page: scaled to its height, then centered.
+  expect(maps.get(3)).toEqual({ x: 420, y: 0, scale: 0.75 });
+  // A popup a popup opened sits over that popup.
+  expect(maps.get(4)).toEqual({ x: 620, y: 400, scale: 1 });
+  // The Edit places a popup in its opener's CSS pixels; the popups it opened move with it.
+  const placed = windowMaps(tabs, main, [{ tab: 2, x: 100, y: 50 }, { tab: 3, x: 10, y: 20 }]);
+  expect(placed.get(2)).toEqual({ x: 100, y: 50, scale: 1 });
+  expect(placed.get(3)).toEqual({ x: 10, y: 20, scale: 0.75 });
+  expect(placed.get(4)).toEqual({ x: 250, y: 300, scale: 1 });
+  // Inside a scaled popup, a nested one scales with it.
+  const nested = windowMaps([tab(0, null, 1440, 900), tab(1, 0, 800, 1200), tab(2, 1, 400, 200)], main);
+  expect(nested.get(2)).toEqual({ x: 570, y: 375, scale: 0.75 });
+});
+
+test('the Timeline joins each Tab\'s input with the path the Director wrote where no Tab saw the pointer, and notes which Tab is in front', () => {
+  const startedAtMs = 50_000, popup = { width: 500, height: 600 };
+  // Tab 1 closed before it could record, so the Tabs recorded are 0 and 2.
+  const stopped = { durationSeconds: 5, fronts: [{ t: 2, tab: 2 }, { t: 4, tab: 0 }], tabs: [
+    { id: 0, opener: null, opened: 0, closed: null, viewport: main, url: 'https://app.test/', start: 0, navigations: [] },
+    { id: 2, opener: 0, opened: 2, closed: 4, viewport: popup, url: 'about:blank', start: 2.1, navigations: [{ t: 2.05, end: 2.4, commit: 2.2, url: 'https://pay.test/' }] },
+  ] };
+  const observed = new Map([
+    [0, { pointer: [[1, 720, 100]], shapes: [[0, 'default']], events: [{ type: 'click', t: 1, x: 720, y: 100 }], turned: [], unplaced: [] }],
+    [2, { pointer: [[3, 40, 50]], shapes: [[3, 'pointer']], events: [{ type: 'click', t: 3, x: 40, y: 50 }], turned: [], unplaced: [] }],
+  ]);
+  const notes = { focus: [{ t: 3.5, box, tab: 2 }], wide: [], said: [], forwarded: [], pointer: [[startedAtMs + 2500, 250, -50, 2]] };
+  const timeline = timelineOf({ url: 'https://app.test/', viewport: main, scale: 2 }, stopped, observed, notes, startedAtMs);
+  expect(timeline.tabs.map(t => t.id)).toEqual([0, 2]);
+  expect(timeline.tabs[1]).toEqual({ id: 2, opener: 0, opened: 2, closed: 4, viewport: popup, url: 'about:blank', start: 2.1 });
+  expect(timeline.pointer).toEqual([[1, 720, 100, 0], [2.5, 250, -50, 2], [3, 40, 50, 2]]);
+  expect(timeline.shapes).toEqual([[0, 'default'], [3, 'pointer']]);
+  expect(timeline.events.map(({ type, t, tab }) => [type, t, tab])).toEqual([
+    ['click', 1, 0], ['front', 2, 2], ['navigate', 2.05, 2], ['click', 3, 2], ['focus', 3.5, 2], ['front', 4, 0],
+  ]);
+  // Over the window, the written path comes down into the popup from above it.
+  const placed = inWindow(timeline, [], windowMaps(timeline.tabs, main));
+  expect(placed.pointer.slice(1)).toEqual([[2.5, 720, 100], [3, 510, 200]]);
+});
+
+test('Render shows the Tab in front: a tab of the window replaces the page, a popup sits over its opener and animates', () => {
+  const tabs = [tab(0, null, 1440, 900), tab(1, 0, 1440, 900, { opened: 2 }), tab(2, 0, 500, 600, { opened: 5, closed: 7 })];
+  const events = [{ type: 'click', t: 1, tab: 0 }, { type: 'front', t: 2, tab: 1 }, { type: 'front', t: 4, tab: 0 }, { type: 'front', t: 5, tab: 2 }, { type: 'front', t: 7, tab: 0 }];
+  const style = { transition: 'cut', popupAnimation: { duration: 0.2, scale: 0.9 } };
+  const track = tabTrack({ tabs, events, viewport: main }, style, timeMap([], 9));
+  const shown = t => track.at(t).map(({ tab, opacity, scale }) => [tab, +opacity.toFixed(3), +scale.toFixed(3)]);
+  expect(shown(1)).toEqual([[0, 1, 1]]);
+  expect(shown(2)).toEqual([[1, 1, 1]]);
+  expect(shown(4.5)).toEqual([[0, 1, 1]]);
+  // The popup scales and fades in over its opener, which keeps playing behind it, and out as it closes.
+  expect(shown(5.1)).toEqual([[0, 1, 1], [2, 0.5, 0.95]]);
+  expect(shown(6)).toEqual([[0, 1, 1], [2, 1, 1]]);
+  expect(shown(7.1)).toEqual([[0, 1, 1], [2, 0.5, 0.95]]);
+  expect(shown(7.3)).toEqual([[0, 1, 1]]);
+  expect(track.at(6)[1]).toMatchObject({ popup: true });
+  // The camera cuts to wide where the window shows another tab.
+  expect(track.cuts).toEqual([2, 4]);
+  // A fade lays the next tab over the last; without a popup animation a popup simply appears.
+  const faded = tabTrack({ tabs, events, viewport: main }, { transition: { fade: 0.2 }, popupAnimation: false }, timeMap([], 9));
+  expect(faded.at(2.1).map(({ tab, opacity }) => [tab, +opacity.toFixed(3)])).toEqual([[0, 1], [1, 0.5]]);
+  expect(faded.at(5).map(({ tab, opacity, scale }) => [tab, opacity, scale])).toEqual([[0, 1, 1], [2, 1, 1]]);
+  expect(faded.at(7).map(({ tab }) => tab)).toEqual([0]);
+  // Switches happen in Source time; their transitions keep their pace in Final time.
+  const forwarded = tabTrack({ tabs, events, viewport: main }, style, timeMap([{ start: 2.5, end: 4.5, rate: 4 }], 9));
+  expect(forwarded.cuts[1]).toBeLessThan(3.5);
+  expect(forwarded.at(forwarded.cuts[1] + 0.05).map(({ tab }) => tab)).toEqual([0]);
+});
+
+test('input in each Tab is placed in the window\'s CSS pixels, through where its popup sits', () => {
+  const maps = windowMaps([tab(0, null, 1440, 900), tab(1, 0, 1440, 900), tab(2, 0, 800, 1200)], main, [{ tab: 2, x: 100, y: 0 }]);
+  const timeline = {
+    pointer: [[1, 10, 20, 0], [2, 10, 20, 1], [3, 0, 100, 2], [4, 400, 400, 2]],
+    events: [
+      { type: 'click', t: 1, x: 10, y: 20, box: { x: 0, y: 0, width: 40, height: 40 }, tab: 1 },
+      { type: 'drag', t: 3, end: 4, from: { x: 0, y: 100 }, to: { x: 400, y: 400 }, tab: 2 },
+      { type: 'type', t: 5, end: 6, box: { x: 40, y: 40, width: 400, height: 40 }, tab: 2 },
+      { type: 'shortcut', t: 7, keys: ['Meta', 'K'], tab: 2 },
+    ],
+  };
+  const targets = [{ t: 3, box: { x: 0, y: 0, width: 800, height: 1200 }, tab: 2 }, { t: 8, box: { x: 1, y: 2, width: 3, height: 4 } }];
+  const placed = inWindow(timeline, targets, maps);
+  expect(placed.pointer).toEqual([[1, 10, 20], [2, 10, 20], [3, 100, 75], [4, 400, 300]]);
+  expect(placed.events[0]).toMatchObject({ x: 10, y: 20, box: { x: 0, y: 0, width: 40, height: 40 } });
+  expect(placed.events[1]).toMatchObject({ from: { x: 100, y: 75 }, to: { x: 400, y: 300 } });
+  expect(placed.events[2].box).toEqual({ x: 130, y: 30, width: 300, height: 30 });
+  expect(placed.events[3]).toEqual(timeline.events[3]);
+  // A popup framed whole, and a target with no Tab, which is the first one's.
+  expect(placed.targets).toEqual([{ t: 3, box: { x: 100, y: 0, width: 600, height: 900 }, tab: 2 }, targets[1]]);
+});
+
+test('the Director carries its cursor between Tabs, and writes the part of its path the Tab in front cannot see', () => {
+  const tabs = [tab(0, null, 1440, 900), tab(1, 0, 1440, 900), tab(2, 0, 500, 600)];
+  const maps = windowMaps(tabs, main);
+  // Into a tab of the same window it stays where it was; into a popup, it is where the popup sits over it.
+  expect(carried({ x: 300, y: 200 }, 0, 1, maps)).toEqual({ x: 300, y: 200 });
+  expect(carried({ x: 300, y: 200 }, 0, 2, maps)).toEqual({ x: -170, y: 50 });
+  expect(carried({ x: 10, y: 10 }, 2, 0, maps)).toEqual({ x: 480, y: 160 });
+  // A popup sees the pointer only over its page; the Director writes the rest of a glide into it itself.
+  const glide = [[-170, 50], [-60, 80], [0, 100], [120, 150], [499.5, 599.5], [500, 300]];
+  expect(glide.map(([x, y]) => seenBy({ x, y }, tabs[2].viewport))).toEqual([false, false, true, true, true, false]);
+});
+
+test('the camera cuts to wide where the window shows another tab, then follows the next action as usual', () => {
+  const targets = [{ t: 2, box: small(240, 100) }, { t: 3, box: small(40, 100) }];
+  const track = cameraTrack({ targets, viewport, camera, duration: 8, fps: 60, cuts: [2.5] });
+  expect(zoomAt(track, 2.4)).toBeGreaterThan(1.9);
+  expect(zoomAt(track, 2.5)).toBe(1);
+  // The next action's zoom starts at the cut, not `lead` before its action, and eases in.
+  expect(zoomAt(track, 2.55)).toBeLessThan(1.05);
+  expect(zoomAt(track, 3.6)).toBeGreaterThan(1.9);
+  expect(centerAt(track, 3.6).x).toBeLessThan(100);
+  expect(zoomSegments(targets, viewport, camera, 8, [2.5]).map(s => [s.start, s.end])).toEqual([[1.4, 2.5], [2.5, 4.5]]);
 });
 
 const speedAt = (map, t) => (map.sourceAt(t + 1e-4) - map.sourceAt(t - 1e-4)) / 2e-4;
@@ -671,6 +838,13 @@ test('adopting a Look keeps camera targets, the frame rate and the address bar',
   expect(applyLook(edit, { cursor: { image: 'hand.png', hotspot: [4, 2] } }).cursor).toEqual({ image: 'hand.png', hotspot: [4, 2] });
   expect(edit.clickEffect).toBe(false);
   expect(applyLook(edit, { clickEffect: { draw: 'spark' } }).clickEffect).toEqual({ draw: 'spark' });
+});
+
+test('a Look carries how Tabs switch and popups animate, but not where this Take\'s popups sit', () => {
+  const edit = merge(takeEdit(), { tabs: { transition: { fade: 0.3 }, placement: [{ tab: 2, x: 10, y: 20 }] } });
+  expect(lookFromEdit(edit).tabs).toEqual({ transition: { fade: 0.3 }, popupAnimation: { duration: 0.2, scale: 0.9 } });
+  const next = applyLook(edit, { tabs: { popupAnimation: false, placement: [] } }, 'app.example.com');
+  expect(next.tabs).toEqual({ transition: { fade: 0.3 }, popupAnimation: false, placement: [{ tab: 2, x: 10, y: 20 }] });
 });
 
 test('fields the Scenario config names win over a Look', () => {

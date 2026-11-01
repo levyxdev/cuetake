@@ -23,6 +23,7 @@ const pageFiles = {
   '/narration.js': { path: fileURLToPath(new URL('./narration.js', import.meta.url)), type: 'text/javascript' },
   '/shortcuts.js': { path: fileURLToPath(new URL('./shortcuts.js', import.meta.url)), type: 'text/javascript' },
   '/time-map.js': { path: fileURLToPath(new URL('./time-map.js', import.meta.url)), type: 'text/javascript' },
+  '/tabs.js': { path: fileURLToPath(new URL('./tabs.js', import.meta.url)), type: 'text/javascript' },
   '/mediabunny.js': { path: mediabunnyBundle, type: 'text/javascript' },
 };
 
@@ -97,29 +98,42 @@ function servedLines(lines, files) {
 }
 
 /**
- * Composes the Final from a Source, Timeline and Edit; `files` serves the Edit's styling files (styles.js
- * forRender). `narration` ({ language, volume, lines }) adds its Lines' audio and Subtitles.
+ * The Timeline as the render page reads it, with each Tab's Source (`sources`, paths by Tab id) served
+ * from `files`. A Timeline without Tabs has one, the first, the viewport's size.
  */
-export async function renderFinal({ sourcePath, finalPath, timeline, edit, files = {}, narration = null }) {
+function forPage(timeline, sources, files) {
+  const tabs = timeline.tabs ?? [{ id: 0, opener: null, opened: 0, closed: null, viewport: timeline.viewport, start: 0 }];
+  for (const tab of tabs) files[`source-${tab.id}`] = sources[tab.id];
+  return {
+    duration: timeline.duration, viewport: timeline.viewport, tabs,
+    pointer: timeline.pointer ?? [], shapes: timeline.shapes ?? [], events: timeline.events ?? [],
+    sources: tabs.map(tab => ({ tab: tab.id, url: `${ORIGIN}/files/source-${tab.id}` })),
+  };
+}
+
+/**
+ * Composes the Final from each Tab's Source (`sources`, paths by Tab id), the Timeline and the Edit;
+ * `files` serves the Edit's styling files (styles.js forRender). `narration` ({ language, volume, lines })
+ * adds its Lines' audio and Subtitles.
+ */
+export async function renderFinal({ sources, finalPath, timeline, edit, files = {}, narration = null }) {
   const handle = await fs.open(finalPath, 'w');
-  const served = { ...files, source: sourcePath };
+  const served = { ...files };
   const spoken = narration && { ...narration, lines: servedLines(narration.lines, served) };
+  const take = forPage(timeline, sources, served);
   try {
     return await withRenderPage({ files: served, writable: { final: handle } }, page => page.evaluate(options => window.cuetakeRender(options), {
-      sourceUrl: `${ORIGIN}/files/source`, finalUrl: `${ORIGIN}/files/final`, duration: timeline.duration,
-      viewport: timeline.viewport, pointer: timeline.pointer ?? [], shapes: timeline.shapes ?? [], events: timeline.events ?? [], edit, narration: spoken,
+      ...take, finalUrl: `${ORIGIN}/files/final`, edit, narration: spoken,
     }));
   } finally { await handle.close(); }
 }
 
 /** A Preview PNG of `tiles` ([{ name, edit }]) at `at` seconds, or at the end with the camera wide. No Final is touched. */
-export async function composePreview({ sourcePath, timeline, tiles, at, files = {}, narration = null }) {
-  const served = { ...files, source: sourcePath };
+export async function composePreview({ sources, timeline, tiles, at, files = {}, narration = null }) {
+  const served = { ...files };
   const spoken = narration && { ...narration, lines: servedLines(narration.lines, served) };
-  const png = await withRenderPage({ files: served }, page => page.evaluate(options => window.cuetakePreview(options), {
-    sourceUrl: `${ORIGIN}/files/source`, duration: timeline.duration, viewport: timeline.viewport,
-    pointer: timeline.pointer ?? [], shapes: timeline.shapes ?? [], events: timeline.events ?? [], tiles, at: at ?? null, narration: spoken,
-  }));
+  const take = forPage(timeline, sources, served);
+  const png = await withRenderPage({ files: served }, page => page.evaluate(options => window.cuetakePreview(options), { ...take, tiles, at: at ?? null, narration: spoken }));
   return Buffer.from(png, 'base64');
 }
 

@@ -3,11 +3,13 @@
  * MP4, streamed back to Node in chunks.
  *
  * Each output frame is the Background (drawn once, still in output pixels), the window effects (drawn
- * every frame around the window as the camera moves it), the page, then the chrome, click effects and
- * Cursor, and outside the camera the Subtitles and keycaps. Everything but the page is agent-written
- * shaders, drawing code or images (ADR 0005).
+ * every frame around the window as the camera moves it), the page, then the chrome; each popup window
+ * over it the same way; then click effects and the Cursor, and outside the camera the Subtitles and
+ * keycaps. Everything but the pages is agent-written shaders, drawing code or images (ADR 0005). Each
+ * Tab has its own Source (ADR 0008); tabs.js says which show at each moment.
  *
- * Spaces: camera crops are CSS pixels of the viewport; the Source texture is sampled by UV only;
+ * Spaces: camera crops are CSS pixels of the viewport, the window's, which each Tab's input is moved
+ * into (tabs.js); the Source textures are sampled by UV only;
  * "stage" is the Final's pixels at camera zoom 1, laid out by stage.js.
  *
  * Times: the Timeline and the Edit are in Source time, the Final in its own, and time-map.js maps
@@ -22,6 +24,7 @@ import { layout, outputSize, cameraView, previewSheet, brandColor } from '/stage
 import { burnsIn, cuesFor, lineProblems } from '/narration.js';
 import { keycapTrack } from '/shortcuts.js';
 import { badgeAt, linesInFinal, retimed, timeMap } from '/time-map.js';
+import { inWindow, tabTrack, windowMaps } from '/tabs.js';
 
 const VERTEX = `#version 300 es
 in vec2 p; void main() { gl_Position = vec4(p, 0, 1); }`;
@@ -37,6 +40,7 @@ uniform vec4 uWindow;          // the window (chrome + page) in output pixels: l
 uniform float uRadius;         // the window's corner radius in output pixels
 uniform float uZoom;           // the camera zoom; 1 for Background layers
 out vec4 color;                // premultiplied RGBA
+#define main cuetakeMain
 vec2 pixel() { return vec2(gl_FragCoord.x, uResolution.y - gl_FragCoord.y); }
 vec4 previous(vec2 px) { return texture(uPrevious, vec2(px.x, uResolution.y - px.y) / uResolution); }
 float windowDistance(vec2 px) {
@@ -44,7 +48,12 @@ float windowDistance(vec2 px) {
   return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - uRadius;
 }
 `;
-const HEADER_UNIFORMS = new Set(['uResolution', 'uUnit', 'uBrand', 'uPrevious', 'uPage', 'uWindow', 'uRadius', 'uZoom']);
+const HEADER_UNIFORMS = new Set(['uResolution', 'uUnit', 'uBrand', 'uPrevious', 'uPage', 'uWindow', 'uRadius', 'uZoom', 'uOpacity']);
+/** Appended to every agent shader: CueTake fades its output, such as a popup window's shadow as it opens. */
+const SHADER_FOOTER = `
+#undef main
+uniform float uOpacity;
+void main() { cuetakeMain(); color *= uOpacity; }`;
 // An image layer is drawn over the layers below it.
 const IMAGE_LAYER = `uniform sampler2D image;
 void main() { vec4 top = texture(image, pixel() / uResolution); color = top + previous(pixel()) * (1.0 - top.a); }`;
@@ -52,10 +61,10 @@ const BLIT = `#version 300 es
 precision highp float;
 uniform sampler2D uImage; uniform vec2 uRes; out vec4 color;
 void main() { color = texture(uImage, gl_FragCoord.xy / uRes); }`;
-// The page inside the window's rounded rectangle, below the chrome, under the camera.
+// A page inside its window's rounded rectangle, below the chrome, under the camera.
 const PAGE = `#version 300 es
 precision highp float;
-uniform vec2 uRes; uniform vec3 uCam; uniform vec4 uPage; uniform vec4 uWindow; uniform float uRadius;
+uniform vec2 uRes; uniform vec3 uCam; uniform vec4 uPage; uniform vec4 uWindow; uniform float uRadius; uniform float uAlpha;
 uniform sampler2D uSource;
 out vec4 color;
 float roundedBox(vec2 p, vec4 rect, float r) {
@@ -67,7 +76,7 @@ void main() {
   vec2 stage = (pixel - uRes * 0.5) / uCam.z + uCam.xy;
   float inside = clamp(0.5 - roundedBox(stage, uWindow, uRadius) * uCam.z, 0.0, 1.0);
   if (inside <= 0.0 || stage.y < uPage.y) discard;
-  color = vec4(texture(uSource, clamp((stage - uPage.xy) / uPage.zw, 0.0, 1.0)).rgb, 1.0) * inside;
+  color = vec4(texture(uSource, clamp((stage - uPage.xy) / uPage.zw, 0.0, 1.0)).rgb, 1.0) * inside * uAlpha;
 }`;
 // Sprites (chrome, cursor, click effects) are premultiplied textures placed by a stage rectangle under the camera.
 const SPRITE_VERTEX = `#version 300 es
@@ -131,8 +140,8 @@ const canvas2d = (width, height) => {
   return canvas.getContext('2d');
 };
 
-/** The compositor for one stage: the Background drawn once, then per frame effects, page and sprites. */
-function createCompositor(stage, sourceWidth, sourceHeight, brand) {
+/** The compositor for one stage: the Background drawn once, then per frame each window's effects, page and chrome, and sprites. */
+function createCompositor(stage, brand) {
   const { width, height } = stage, unit = Math.min(width, height) / 1080;
   const canvas = new OffscreenCanvas(width, height);
   const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, depth: false });
@@ -175,13 +184,7 @@ function createCompositor(stage, sourceWidth, sourceHeight, brand) {
   gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
   gl.viewport(0, 0, width, height);
 
-  // Mipmaps keep zoomed-out text from aliasing when the 2× Source is minified.
-  const pageTexture = texture();
-  gl.texStorage2D(gl.TEXTURE_2D, Math.floor(Math.log2(Math.max(sourceWidth, sourceHeight))) + 1, gl.RGBA8, sourceWidth, sourceHeight);
   const pageProgram = program(VERTEX, PAGE);
-  gl.uniform4f(pageProgram.uniform('uPage'), stage.page.x, stage.page.y, stage.page.w, stage.page.h);
-  gl.uniform4f(pageProgram.uniform('uWindow'), stage.window.x, stage.window.y, stage.window.w, stage.window.h);
-  gl.uniform1f(pageProgram.uniform('uRadius'), stage.radius);
   const blitProgram = program(VERTEX, BLIT);
   const spriteProgram = program(SPRITE_VERTEX, SPRITE_FRAGMENT), spriteRect = spriteProgram.uniform('uRect'), spriteAlpha = spriteProgram.uniform('uAlpha');
 
@@ -193,8 +196,8 @@ function createCompositor(stage, sourceWidth, sourceHeight, brand) {
       ...params.filter(([name]) => !HEADER_UNIFORMS.has(name)).map(([name, [type]]) => `uniform ${type} ${name};`),
       ...images.flatMap(([name]) => [`uniform sampler2D ${name};`, `uniform vec2 ${name}Size;`]),
     ].join('\n');
-    const p = program(VERTEX, `${SHADER_HEADER}${declarations}\n#line 1\n${source}`, item);
-    gl.uniform1f(p.uniform('uUnit'), unit); gl.uniform3f(p.uniform('uBrand'), ...brand);
+    const p = program(VERTEX, `${SHADER_HEADER}${declarations}\n#line 1\n${source}\n${SHADER_FOOTER}`, item);
+    gl.uniform1f(p.uniform('uUnit'), unit); gl.uniform3f(p.uniform('uBrand'), ...brand); gl.uniform1f(p.uniform('uOpacity'), 1);
     gl.uniform1i(p.uniform('uPrevious'), 0); gl.uniform1i(p.uniform('uPage'), 1);
     for (const [name, [type, values]] of params) gl[`uniform${type === 'float' ? 1 : type.at(-1)}fv`](p.uniform(name), values);
     const textures = images.map(([name, image], i) => {
@@ -209,10 +212,10 @@ function createCompositor(stage, sourceWidth, sourceHeight, brand) {
     return response.text();
   };
   /** Draws one program over the full screen with uPrevious and uPage bound; window uniforms in output pixels. */
-  const run = (p, previous, windowRect, radius, zoom) => {
+  const run = (p, previous, page, windowRect, radius, zoom, opacity = 1) => {
     gl.useProgram(p.p);
-    gl.uniform4f(p.uniform('uWindow'), ...windowRect); gl.uniform1f(p.uniform('uRadius'), radius); gl.uniform1f(p.uniform('uZoom'), zoom);
-    bind(0, previous); bind(1, pageTexture);
+    gl.uniform4f(p.uniform('uWindow'), ...windowRect); gl.uniform1f(p.uniform('uRadius'), radius); gl.uniform1f(p.uniform('uZoom'), zoom); gl.uniform1f(p.uniform('uOpacity'), opacity);
+    bind(0, previous); bind(1, page);
     p.textures?.forEach((t, i) => bind(2 + i, t));
     gl.bindVertexArray(fullScreen); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     gl.activeTexture(gl.TEXTURE0);
@@ -230,13 +233,20 @@ function createCompositor(stage, sourceWidth, sourceHeight, brand) {
     maxTextureSize: gl.getParameter(gl.MAX_TEXTURE_SIZE),
     /** Frees the GPU context; a Preview makes one compositor per tile. */
     dispose() { gl.getExtension('WEBGL_lose_context')?.loseContext(); },
-    upload(frame) {
-      gl.bindTexture(gl.TEXTURE_2D, pageTexture);
+    /** A texture for a Source `width` × `height`, which `upload` fills with each frame. */
+    pageTexture(width, height) {
+      // Mipmaps keep zoomed-out text from aliasing when the 2× Source is minified.
+      const t = texture();
+      gl.texStorage2D(gl.TEXTURE_2D, Math.floor(Math.log2(Math.max(width, height))) + 1, gl.RGBA8, width, height);
+      return t;
+    },
+    upload(page, frame) {
+      gl.bindTexture(gl.TEXTURE_2D, page);
       gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, frame);
       gl.generateMipmap(gl.TEXTURE_2D);
     },
-    /** Draws the Background layers in order, each over the result so far, starting from black. */
-    async drawBackground(layers) {
+    /** Draws the Background layers in order, each over the result so far, starting from black; they see `page`. */
+    async drawBackground(layers, page) {
       let other = target();
       gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
       gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, background, 0);
@@ -255,7 +265,7 @@ function createCompositor(stage, sourceWidth, sourceHeight, brand) {
         gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
         gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, other, 0);
         gl.disable(gl.BLEND);
-        run(p, background, restWindow, stage.radius, 1);
+        run(p, background, page, restWindow, stage.radius, 1);
         [background, other] = [other, background];
       }
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -277,19 +287,28 @@ function createCompositor(stage, sourceWidth, sourceHeight, brand) {
       return t;
     },
     /**
-     * One frame with the camera at stage point (x, y) and `zoom`; `draw(texture, rect, opacity)` in
+     * One frame with the camera at stage point (x, y) and `zoom`. Each of `windows` is drawn in order,
+     * each `{ page, pageRect, window, radius, opacity, effects, chrome: { texture, rect } }` in stage
+     * pixels, with the window effects around it when `effects`. Then `draw(texture, rect, opacity)` in
      * `overlay` places sprites in stage pixels, and in `screen` in output pixels, outside the camera.
      */
-    frame(x, y, zoom, overlay, screen) {
+    frame(x, y, zoom, windows, overlay, screen) {
       gl.disable(gl.BLEND);
       gl.useProgram(blitProgram.p); bind(0, background); gl.bindVertexArray(fullScreen); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       gl.enable(gl.BLEND);
-      const shown = [(stage.window.x - x) * zoom + width / 2, (stage.window.y - y) * zoom + height / 2, stage.window.w * zoom, stage.window.h * zoom];
-      for (const p of effects) run(p, background, shown, stage.radius * zoom, zoom);
-      gl.useProgram(pageProgram.p); gl.uniform3f(pageProgram.camera, x, y, zoom);
-      bind(0, pageTexture); gl.bindVertexArray(fullScreen); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-      gl.useProgram(spriteProgram.p); gl.uniform3f(spriteProgram.camera, x, y, zoom); gl.bindVertexArray(unitQuad);
       const place = (t, rect, opacity = 1) => { gl.bindTexture(gl.TEXTURE_2D, t); gl.uniform4f(spriteRect, ...rect); gl.uniform1f(spriteAlpha, opacity); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); };
+      const sprites = () => { gl.useProgram(spriteProgram.p); gl.uniform3f(spriteProgram.camera, x, y, zoom); gl.bindVertexArray(unitQuad); };
+      for (const w of windows) {
+        const shown = [(w.window.x - x) * zoom + width / 2, (w.window.y - y) * zoom + height / 2, w.window.w * zoom, w.window.h * zoom];
+        if (w.effects) for (const p of effects) run(p, background, w.page, shown, w.radius * zoom, zoom, w.opacity);
+        gl.useProgram(pageProgram.p); gl.uniform3f(pageProgram.camera, x, y, zoom);
+        gl.uniform4f(pageProgram.uniform('uPage'), w.pageRect.x, w.pageRect.y, w.pageRect.w, w.pageRect.h);
+        gl.uniform4f(pageProgram.uniform('uWindow'), w.window.x, w.window.y, w.window.w, w.window.h);
+        gl.uniform1f(pageProgram.uniform('uRadius'), w.radius); gl.uniform1f(pageProgram.uniform('uAlpha'), w.opacity);
+        bind(0, w.page); gl.bindVertexArray(fullScreen); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        if (w.chrome) { sprites(); place(w.chrome.texture, w.chrome.rect, w.opacity); }
+      }
+      sprites();
       overlay(place);
       if (screen) { gl.uniform3f(spriteProgram.camera, width / 2, height / 2, 1); screen(place); }
       if (effects.length) checkGpu('A window effect');
@@ -299,27 +318,28 @@ function createCompositor(stage, sourceWidth, sourceHeight, brand) {
 
 /**
  * The chrome bar: drawing code exporting `height` (CSS px) and `draw(ctx, { width, height, radius, url,
- * params, files })`, or an image as wide as the window. `canvas(scale, radius, url)` rasterizes it with
- * the address bar showing `url`, clipped to the window's rounded top.
+ * params, files })`, or an image as wide as the window. `canvas(width, scale, radius, url)` rasterizes
+ * it `width` CSS px wide, the window's or a popup window's, with the address bar showing `url`, clipped
+ * to the window's rounded top.
  */
-async function loadChrome(item, width) {
+async function loadChrome(item, windowWidth) {
   let height, paint;
   if (item.kind === 'image') {
     const image = await loadImage(item, item.url);
-    height = item.height ?? image.naturalHeight * width / image.naturalWidth;
-    paint = ctx => ctx.drawImage(image, 0, 0, width, height);
+    height = item.height ?? image.naturalHeight * windowWidth / image.naturalWidth;
+    paint = (ctx, width) => ctx.drawImage(image, 0, 0, width, height);
   } else {
     const module = await loadModule(item), files = await loadFiles(item), params = paramsOf(item);
     height = item.height ?? (typeof module.height === 'function' ? module.height(params) : module.height) ?? 0;
-    paint = (ctx, radius, url) => module.draw(ctx, { width, height, radius, url, params, files });
+    paint = (ctx, width, radius, url) => module.draw(ctx, { width, height, radius, url, params, files });
   }
   return {
     height,
-    canvas(scale, radius, url) {
+    canvas(width, scale, radius, url) {
       const ctx = canvas2d(width * scale, height * scale);
       ctx.scale(scale, scale);
       ctx.beginPath(); ctx.roundRect(0, 0, width, height + radius, [radius, radius, 0, 0]); ctx.clip();
-      try { paint(ctx, radius, url); } catch (error) { throw fail(item, error); }
+      try { paint(ctx, width, radius, url); } catch (error) { throw fail(item, error); }
       return ctx.canvas;
     },
   };
@@ -485,39 +505,59 @@ async function encoderConfig(width, height, fps, quality) {
   throw new Error(`No H.264 encoder supports ${width}×${height} at ${fps} fps`);
 }
 
-/** The camera's crop for every frame of the Final: its targets move to Final time, and it follows the pointer at each moment's Source time. */
-function cameraPath(edit, viewport, pointer, map) {
-  const { camera } = edit, targets = retimed(camera.targets, map, ['t', 'until']);
-  return cameraTrack({ targets, viewport, camera, duration: map.duration, fps: edit.output.fps, pointerAt: t => pointerAt(pointer, map.sourceAt(t)) });
-}
-
 /**
- * Everything Render draws for one Edit (as forRender in styles.js serves it). `firstFrame` is the
- * Source's first frame: Background layers see it, and it picks the brand color. `map` is the Take's time map.
+ * Everything Render draws for one Edit (as forRender in styles.js serves it). `timeline` holds the
+ * pointer path, cursor shapes, events and Tabs; `sizes` maps each Tab to its Source's size. `firstFrame`
+ * is the first Tab's first frame: Background layers see it, and it picks the brand color. `map` is the
+ * Take's time map. Each Tab's input is moved into the window's CSS pixels by where its popup sits.
  */
-async function createScene(edit, viewport, { pointer, shapes, events }, firstFrame, sourceWidth, sourceHeight, cues, map) {
+async function createScene(edit, viewport, { pointer, shapes, events, tabs }, sizes, firstFrame, cues, map) {
   const { camera, cursor, clickEffect, keycaps, shortcuts, frame, subtitles, fastForwardBadge } = edit;
   const chrome = frame.chrome ? await loadChrome(frame.chrome, viewport.width) : null;
   const stage = layout(edit, viewport, chrome?.height ?? 0);
-  const compositor = createCompositor(stage, sourceWidth, sourceHeight, brandOf(firstFrame));
-  compositor.upload(firstFrame);
-  await compositor.drawBackground(frame.background ?? []);
+  const compositor = createCompositor(stage, brandOf(firstFrame));
+  const pages = new Map();
+  const upload = (tab, videoFrame) => {
+    if (!pages.has(tab)) pages.set(tab, compositor.pageTexture(sizes.get(tab).width, sizes.get(tab).height));
+    compositor.upload(pages.get(tab), videoFrame);
+  };
+  upload(tabs[0].id, firstFrame);
+  await compositor.drawBackground(frame.background ?? [], pages.get(tabs[0].id));
   await compositor.loadEffects(frame.effects ?? []);
-  // Page CSS pixels → stage pixels; sprites are rasterized for the closest zoom and mipmapped below it.
+  const maps = windowMaps(tabs, viewport, edit.tabs.placement), placed = inWindow({ pointer, events }, camera.targets, maps);
+  const shownTabs = tabTrack({ tabs, events, viewport }, edit.tabs, map), byId = new Map(tabs.map(tab => [tab.id, tab]));
+  // Window CSS pixels → stage pixels; sprites are rasterized for the closest zoom and mipmapped below it.
   const at = (x, y) => [stage.page.x + x * stage.scale, stage.page.y + y * stage.scale];
   const sharpest = stage.scale * camera.maxZoom * 2;
   // A sprite past the GPU's texture limit draws black, so a large one is rasterized only as sharp as fits.
   const fitting = (w, h) => Math.min(sharpest, compositor.maxTextureSize / Math.max(w, h, 1));
-  // The address bar shows `frame.url`, then each of `frame.urls` from its Source time; one sprite per text.
-  const addresses = [{ t: -Infinity, url: frame.url ?? '' }, ...(frame.urls ?? []).toSorted((a, b) => a.t - b.t)];
-  const chromeTextures = new Map(chrome ? addresses.map(({ url }) => [url, null]) : []);
-  for (const url of chromeTextures.keys()) chromeTextures.set(url, compositor.sprite(chrome.canvas(fitting(viewport.width, chrome.height), stage.radius / stage.scale, url)));
-  const addressAt = source => addresses.findLast(address => address.t <= source).url;
+  // Each Tab's address bar shows its text from `frame.urls` at each Source time; the first Tab starts on
+  // `frame.url`, any other empty. One sprite per width and text.
+  const addresses = (frame.urls ?? []).toSorted((a, b) => a.t - b.t);
+  const addressAt = (tab, source) => addresses.findLast(address => (address.tab ?? 0) === tab && address.t <= source)?.url ?? (tab === tabs[0].id ? frame.url ?? '' : '');
+  const chromeTextures = new Map();
+  const chromeFor = (width, url) => {
+    const key = `${width} ${url}`;
+    if (!chromeTextures.has(key)) chromeTextures.set(key, compositor.sprite(chrome.canvas(width, fitting(width, chrome.height), stage.radius / stage.scale, url)));
+    return chromeTextures.get(key);
+  };
+  /** A window as the compositor draws it: the window's own tab, or a popup window where it sits, scaled by its animation. */
+  const windowOf = ({ tab, popup, opacity, scale }, source, effects) => {
+    const url = addressAt(tab, source);
+    if (!popup) return { page: pages.get(tab), pageRect: stage.page, window: stage.window, radius: stage.radius, opacity, effects, chrome: chrome && { texture: chromeFor(viewport.width, url), rect: [stage.window.x, stage.window.y, stage.window.w, stage.chrome] } };
+    const m = maps.get(tab), { width, height } = byId.get(tab).viewport, bar = chrome ? chrome.height * m.scale : 0;
+    const [x, y] = at(m.x, m.y - bar), w = width * m.scale * stage.scale, h = (height * m.scale + bar) * stage.scale;
+    const window = { x: x + w * (1 - scale) / 2, y: y + h * (1 - scale) / 2, w: w * scale, h: h * scale }, top = bar * stage.scale * scale;
+    return {
+      page: pages.get(tab), pageRect: { x: window.x, y: window.y + top, w: window.w, h: window.h - top }, window, radius: stage.radius * m.scale * scale, opacity, effects,
+      chrome: chrome && { texture: chromeFor(width, url), rect: [window.x, window.y, window.w, top] },
+    };
+  };
   const cursorSprites = cursor ? await loadCursor(cursor) : {};
   const cursorTextures = Object.fromEntries(Object.entries(cursorSprites).map(([shape, sprite]) => [shape, sprite.canvases(fitting(sprite.size.w, sprite.size.h)).map(canvas => compositor.sprite(canvas))]));
-  const drawn = new Set(Object.keys(cursorSprites)), track = cursor && cursorTrack({ pointer, shapes, events }, cursor);
+  const drawn = new Set(Object.keys(cursorSprites)), track = cursor && cursorTrack({ pointer: placed.pointer, shapes, events: placed.events }, cursor);
   const effect = clickEffect ? await loadClickEffect(clickEffect, cursor ? Object.fromEntries(Object.entries(cursor).filter(([key]) => !['ref', 'kind', 'url', 'files'].includes(key))) : {}) : null;
-  const pressList = presses(events);
+  const pressList = presses(placed.events);
   const subtitleDrawing = burnsIn(subtitles) && cues.length ? await loadScreenDrawing(subtitles, 'Subtitles') : null;
   const keys = keycapTrack(retimed(shortcuts, map), keycaps), keycapDrawing = keys.shows.length ? await loadScreenDrawing(keycaps, 'Keycaps') : null;
   const badgeDrawing = fastForwardBadge && map.spans.length ? await loadScreenDrawing(fastForwardBadge, 'Fast-forward badges') : null;
@@ -525,12 +565,27 @@ async function createScene(edit, viewport, { pointer, shapes, events }, firstFra
   let effectTexture = null, subtitleTexture = null, shown = -1, keycapTexture = null, keycapsShown = null, badgeTexture = null, badgeShown = null;
   return {
     stage, compositor, keycapShows: keys.shows,
+    /** The Tabs shown at Final time `t`, in drawing order. */
+    shown: t => shownTabs.at(t),
+    /** Fills a Tab's page with a frame of its Source. */
+    upload,
+    /**
+     * The camera's crop for every frame of the Final: its targets move to the window's CSS pixels and to
+     * Final time, it follows the pointer at each moment's Source time, and it cuts to wide where the
+     * window shows another tab.
+     */
+    crops() {
+      const targets = retimed(placed.targets, map, ['t', 'until']);
+      return cameraTrack({ targets, viewport, camera, duration: map.duration, fps: edit.output.fps, pointerAt: t => pointerAt(placed.pointer, map.sourceAt(t)), cuts: shownTabs.cuts });
+    },
     /**
      * Draws Final time `t` with the camera showing `crop`, a viewport rectangle in CSS pixels; returns
      * the index of the cue it shows, or -1, the keycap show, or null, and the fast-forward badge, or null.
      */
     draw(t, crop) {
       const view = cameraView(crop, stage, viewport), source = map.sourceAt(t);
+      // The window's effects are drawn once, under the tab it shows first.
+      const windows = shownTabs.at(t).filter(({ tab }) => pages.has(tab)).map((shownTab, i) => windowOf(shownTab, source, i === 0 || shownTab.popup));
       const cue = subtitleDrawing ? cues.findIndex(c => t >= c.start && t < c.end) : -1;
       if (cue >= 0 && cue !== shown) subtitleTexture = compositor.sprite(subtitleDrawing.canvas(stage.width, stage.height, { rows: cues[cue].rows }), subtitleTexture, false);
       shown = cue;
@@ -542,8 +597,7 @@ async function createScene(edit, viewport, { pointer, shapes, events }, firstFra
       const badge = badgeDrawing && badgeAt(map, t);
       if (badge && badge.rate !== badgeShown) badgeTexture = compositor.sprite(badgeDrawing.canvas(stage.width, stage.height, { rate: badge.rate }), badgeTexture, false);
       badgeShown = badge ? badge.rate : badgeShown;
-      compositor.frame(view.x, view.y, view.zoom, draw => {
-        if (chrome) draw(chromeTextures.get(addressAt(source)), [stage.window.x, stage.window.y, stage.window.w, stage.chrome]);
+      compositor.frame(view.x, view.y, view.zoom, windows, draw => {
         for (const press of effect ? sparksAt(pressList, clickEffect, source) : []) {
           // Each click effect is drawn at its on-screen scale so thin strokes stay crisp.
           const scale = stage.scale * view.zoom, ctx = canvas2d(2 * effect.reach * scale, 2 * effect.reach * scale);
@@ -576,13 +630,40 @@ const uploadStream = url => new WritableStream({
   },
 });
 
-window.cuetakeRender = async ({ sourceUrl, finalUrl, duration, viewport, pointer, shapes, events, edit, narration }) => {
+/**
+ * Each Tab's Source read in order, for sample and hold: `at(seconds)` gives the latest frame at or
+ * before that Source time of the Take, or the first before it. A Tab that records nothing is left out.
+ */
+async function openSources(sources, tabs) {
+  const opened = new Map();
+  for (const { tab, url } of sources) {
+    const track = await new MB.Input({ formats: MB.ALL_FORMATS, source: new MB.UrlSource(url) }).getPrimaryVideoTrack();
+    const reader = frameReader(track, await track.getDecoderConfig());
+    const current = await reader.next();
+    if (!current) { reader.close(); continue; }
+    const start = tabs.find(t => t.id === tab)?.start ?? 0, state = { current, next: await reader.next(), origin: current.timestamp };
+    opened.set(tab, {
+      reader, size: { width: track.codedWidth, height: track.codedHeight }, first: current,
+      async at(seconds) {
+        const due = state.origin + Math.round((seconds - start) * 1e6);
+        while (state.next && state.next.timestamp <= due) {
+          if (state.current !== current) state.current.close();
+          state.current = state.next; state.next = await reader.next();
+        }
+        return state.current;
+      },
+      close() { if (state.current !== current) state.current.close(); state.next?.close(); current.close(); reader.close(); },
+    });
+  }
+  if (!opened.has(tabs[0].id)) throw new Error('Source has no video frames');
+  return opened;
+}
+
+window.cuetakeRender = async ({ sources: sourceUrls, finalUrl, duration, viewport, pointer, shapes, events, tabs, edit, narration }) => {
   const { quality, fps } = edit.output;
   const { width, height } = outputSize(edit);
   const started = performance.now();
-  const input = new MB.Input({ formats: MB.ALL_FORMATS, source: new MB.UrlSource(sourceUrl) });
-  const track = await input.getPrimaryVideoTrack();
-  const reader = frameReader(track, await track.getDecoderConfig());
+  const sources = await openSources(sourceUrls, tabs);
   const map = timeMap(edit.fastForward, duration);
   const frameCount = Math.round(map.duration * fps), seconds = frameCount / fps;
   const voice = await prepareNarration(narration, edit.subtitles, seconds, map);
@@ -622,19 +703,19 @@ window.cuetakeRender = async ({ sourceUrl, finalUrl, duration, viewport, pointer
   });
   encoder.configure(config);
 
-  let current = await reader.next(), next = await reader.next(), uploaded = null;
-  if (!current) throw new Error('Source has no video frames');
   const cues = voice?.cues ?? [], shownFrames = cues.map(() => null), keycapFrames = [], badgeFrames = [];
-  const scene = await createScene(edit, viewport, { pointer, shapes, events }, current, track.codedWidth, track.codedHeight, cues, map), { compositor } = scene;
-  const crops = cameraPath(edit, viewport, pointer, map);
-  const origin = current.timestamp;
+  const sizes = new Map([...sources].map(([tab, source]) => [tab, source.size]));
+  const recorded = tabs.filter(tab => sources.has(tab.id)), uploaded = new Map();
+  const scene = await createScene(edit, viewport, { pointer, shapes, events, tabs: recorded }, sizes, sources.get(recorded[0].id).first, cues, map), { compositor } = scene;
+  const crops = scene.crops();
   try {
     for (let i = 0; i < frameCount; i++) {
       if (failure) throw failure;
-      // Sample and hold: show the latest Source frame at or before this moment's Source time (VFR → CFR).
-      const due = origin + Math.round(map.sourceAt(i / fps) * 1e6);
-      while (next && next.timestamp <= due) { current.close(); current = next; next = await reader.next(); }
-      if (uploaded !== current) { compositor.upload(current); uploaded = current; }
+      // Sample and hold: each Tab shown shows the latest frame of its Source at or before this moment's Source time (VFR → CFR).
+      for (const { tab } of scene.shown(i / fps)) {
+        const frame = await sources.get(tab)?.at(map.sourceAt(i / fps));
+        if (frame && uploaded.get(tab) !== frame) { scene.upload(tab, frame); uploaded.set(tab, frame); }
+      }
       if (audio && i % fps === 0) await feedAudio(i / fps + 1);
       const { cue, keycap, badge } = scene.draw(i / fps, crops[i]);
       if (cue >= 0) shownFrames[cue] = [shownFrames[cue]?.[0] ?? i, i];
@@ -651,11 +732,11 @@ window.cuetakeRender = async ({ sourceUrl, finalUrl, duration, viewport, pointer
     if (audio) await feedAudio(Infinity);
     await output.finalize();
   } finally {
-    current?.close(); next?.close(); reader.close();
+    for (const source of sources.values()) source.close();
     if (encoder.state !== 'closed') encoder.close();
   }
   return {
-    width, height, frames: frameCount, sourceFrames: reader.stats().decoded, codec: config.codec,
+    width, height, frames: frameCount, sourceFrames: [...sources.values()].reduce((sum, source) => sum + source.reader.stats().decoded, 0), codec: config.codec,
     rateControl: quantizer ? `quantizer ${quantizer}` : `variable ${config.bitrate} bps`, gpu: compositor.gpu,
     seconds: +((performance.now() - started) / 1000).toFixed(2),
     // Each keycap show with the first and last output frame it was drawn on.
@@ -720,18 +801,25 @@ window.cuetakeMeasure = async lines => {
 };
 
 /**
- * A Preview as a base64 PNG: each tile's Edit composed by the same scene as Render, over the Source at
+ * A Preview as a base64 PNG: each tile's Edit composed by the same scene as Render, over the Sources at
  * `at` seconds with the Final's camera, or (`at` null) over the last moment with the camera wide.
  */
-window.cuetakePreview = async ({ sourceUrl, duration, viewport, pointer, shapes, events, tiles, at, narration }) => {
-  const input = new MB.Input({ formats: MB.ALL_FORMATS, source: new MB.UrlSource(sourceUrl) });
-  const track = await input.getPrimaryVideoTrack();
-  const sink = new MB.VideoSampleSink(track), origin = await track.getFirstTimestamp();
-  const map = timeMap(tiles[0]?.edit.fastForward, duration), t = at ?? map.duration;
-  const firstSample = await sink.getSample(origin), sample = await sink.getSample(origin + map.sourceAt(t));
-  if (!firstSample || !sample) throw new Error('Source has no video frames');
-  const firstFrame = firstSample.toVideoFrame(), frame = sample.toVideoFrame();
+window.cuetakePreview = async ({ sources: sourceUrls, duration, viewport, pointer, shapes, events, tabs, tiles, at, narration }) => {
+  const map = timeMap(tiles[0]?.edit.fastForward, duration), t = at ?? map.duration, source = map.sourceAt(t);
+  // Each Tab's first frame, and its frame at `t`, the latest at or before it or else its first.
+  const frames = new Map(), samples = [];
+  for (const { tab, url } of sourceUrls) {
+    const track = await new MB.Input({ formats: MB.ALL_FORMATS, source: new MB.UrlSource(url) }).getPrimaryVideoTrack();
+    const sink = new MB.VideoSampleSink(track), origin = await track.getFirstTimestamp(), start = tabs.find(other => other.id === tab)?.start ?? 0;
+    const first = await sink.getSample(origin);
+    if (!first) continue;
+    const latest = await sink.getSample(origin + Math.max(0, source - start)) ?? first;
+    samples.push(first, latest);
+    frames.set(tab, { size: { width: track.codedWidth, height: track.codedHeight }, first: first.toVideoFrame(), now: latest.toVideoFrame() });
+  }
   try {
+    if (!frames.has(tabs[0].id)) throw new Error('Source has no video frames');
+    const recorded = tabs.filter(tab => frames.has(tab.id)), sizes = new Map([...frames].map(([tab, { size }]) => [tab, size]));
     const sheet = previewSheet(tiles.map(({ edit }) => outputSize(edit)));
     const ctx = new OffscreenCanvas(sheet.width, sheet.height).getContext('2d');
     ctx.fillStyle = '#111114'; ctx.fillRect(0, 0, sheet.width, sheet.height);
@@ -739,13 +827,13 @@ window.cuetakePreview = async ({ sourceUrl, duration, viewport, pointer, shapes,
     ctx.font = '600 22px system-ui, -apple-system, sans-serif'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#e5e7eb';
     for (const [i, { name, edit }] of tiles.entries()) {
       const voice = await prepareNarration(narration, edit.subtitles, Math.round(map.duration * edit.output.fps) / edit.output.fps, map);
-      const scene = await createScene(edit, viewport, { pointer, shapes, events }, firstFrame, track.codedWidth, track.codedHeight, voice?.cues ?? [], map);
+      const scene = await createScene(edit, viewport, { pointer, shapes, events, tabs: recorded }, sizes, frames.get(recorded[0].id).first, voice?.cues ?? [], map);
       let crop = { x: 0, y: 0, w: viewport.width, h: viewport.height };
       if (at !== null) {
-        const path = cameraPath(edit, viewport, pointer, map);
+        const path = scene.crops();
         crop = path[Math.min(Math.round(at * edit.output.fps), path.length - 1)] ?? crop;
       }
-      scene.compositor.upload(frame);
+      for (const { tab } of scene.shown(t)) scene.upload(tab, frames.get(tab).now);
       scene.draw(t, crop);
       // Copy before yielding: the WebGL canvas does not keep its drawing buffer.
       const tile = sheet.tiles[i];
@@ -754,7 +842,10 @@ window.cuetakePreview = async ({ sourceUrl, duration, viewport, pointer, shapes,
       scene.compositor.dispose();
     }
     return await pngBase64(ctx.canvas);
-  } finally { firstFrame.close(); frame.close(); firstSample.close(); sample.close(); }
+  } finally {
+    for (const { first, now } of frames.values()) { first.close(); now.close(); }
+    for (const sample of samples) sample.close();
+  }
 };
 
 async function pngBase64(canvas) {

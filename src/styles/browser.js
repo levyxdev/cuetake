@@ -12,7 +12,8 @@ export function draw(ctx, { width, height, url, params }) {
     ctx.beginPath(); ctx.arc(20 + i * 20, height / 2, 6, 0, 2 * Math.PI);
     ctx.fillStyle = light; ctx.fill(); ctx.strokeStyle = '#0000001f'; ctx.lineWidth = 0.5; ctx.stroke();
   });
-  const w = 420, h = 28, x = (width - w) / 2, y = (height - h) / 2;
+  // The field narrows in a narrow window, such as a popup's, to stay clear of the lights.
+  const w = Math.min(420, width - 160), h = 28, x = (width - w) / 2, y = (height - h) / 2;
   ctx.beginPath(); ctx.roundRect(x, y, w, h, h / 2);
   ctx.fillStyle = t.field; ctx.fill(); ctx.strokeStyle = t.fieldLine; ctx.lineWidth = 0.8; ctx.stroke();
   ctx.font = '13px system-ui, -apple-system, sans-serif'; ctx.textBaseline = 'middle';
