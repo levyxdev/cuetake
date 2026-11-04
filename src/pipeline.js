@@ -16,7 +16,7 @@ import { burnsIn, cuesFor, isCjk, lineProblems, toSrt, toVtt } from './narration
 import { linesInFinal, timeMap } from './time-map.js';
 import pkg from '../package.json' with { type: 'json' };
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 /** Scenario config: capture settings, validated, plus styling that seeds each Take's Edit, which is not (ADR 0005). */
 export const scenarioSchema = z.object({
   name: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
@@ -97,6 +97,32 @@ export function captureScale(chosen, gpu) {
   return gpu?.accelerated === false ? { resolutionScale: 1, lowered: true } : { resolutionScale: 2, lowered: false };
 }
 
+/**
+ * The Timeline from `take` (its url, viewport and scale), what Capture observed in each Tab (`observed`,
+ * the probe's by Tab id), what the Director noted and what the recorder saw: every input and page load carries the Tab it happened in,
+ * in that Tab's CSS pixels, and `front` events note which Tab is in front from when.
+ */
+export function timelineOf(take, stopped, observed, notes, startedAtMs) {
+  const t = ms => Math.round(ms - startedAtMs) / 1000, inTab = (list, tab) => list.map(item => ({ ...item, tab }));
+  const pointer = [...[...observed].flatMap(([tab, seen]) => seen.pointer.map(sample => [...sample, tab])), ...notes.pointer.map(([ms, x, y, tab]) => [t(ms), x, y, tab])];
+  const shapes = [...observed.values()].flatMap(seen => seen.shapes).sort((a, b) => a[0] - b[0]);
+  const frameInput = { turned: [...observed.values()].flatMap(seen => seen.turned).sort((a, b) => a - b), unplaced: [...observed.values()].flatMap(seen => seen.unplaced).sort((a, b) => a - b) };
+  return {
+    schemaVersion: SCHEMA_VERSION, ...take, duration: stopped.durationSeconds,
+    tabs: stopped.tabs.map(({ id, opener, opened, closed, viewport, url, start }) => ({ id, opener, opened, closed, viewport, url, start })),
+    pointer: pointer.sort((a, b) => a[0] - b[0]), shapes, ...((frameInput.turned.length || frameInput.unplaced.length) && { frameInput }),
+    events: [
+      ...[...observed].flatMap(([tab, seen]) => inTab(seen.events, tab)),
+      ...notes.focus.map(f => ({ type: 'focus', ...f })), ...notes.said.map(line => ({ type: 'say', ...line })), ...notes.forwarded.map(span => ({ type: 'fastForward', ...span })),
+      ...stopped.tabs.flatMap(tab => inTab(tab.navigations.map(load => ({ type: 'navigate', ...load })), tab.id)),
+      ...stopped.fronts.filter(front => front.t > 0).map(front => ({ type: 'front', ...front })),
+    ].sort((a, b) => a.t - b.t),
+  };
+}
+
+/** The Source of each of a Take's Tabs, by Tab id. */
+const sourcesOf = (dir, timeline) => Object.fromEntries(timeline.tabs.map(tab => [tab.id, join(dir, `source-${tab.id}.webm`)]));
+
 /** New take directories are exclusive: reruns never overwrite a previous take. */
 export async function recordScenario(scenarioPath, outputDir, options = {}) {
   const scenario = await import(pathToFileURL(resolve(scenarioPath)).href);
@@ -130,18 +156,18 @@ export async function recordScenario(scenarioPath, outputDir, options = {}) {
     await page.evaluate(() => document.fonts.ready);
     const capture = await beginCapture(session.sessionId);
     const startedAtMs = Date.parse(capture.startedAt);
-    const focus = [], wide = [], said = [], forwarded = [];
-    const director = createDirector(page, startedAtMs, config.capture.fps, focus, wide, said, forwarded, imported && new Map(Object.entries(imported.durations)), config.director);
+    const notes = { focus: [], wide: [], said: [], forwarded: [], pointer: [] };
+    const director = createDirector(capture.tabs, { startedAt: startedAtMs, fps: config.capture.fps, voiced: imported && new Map(Object.entries(imported.durations)), ...config.director }, notes);
     const evidence = await scenario.run(director);
-    await page.screenshot({ path: join(dir, 'poster.png') });
-    const observed = await collectTimeline(page, startedAtMs);
+    await capture.tabs.started();
+    await capture.tabs.front.page.screenshot({ path: join(dir, 'poster.png') });
+    const observed = new Map();
+    for (const tab of capture.tabs.list()) if (tab.recorded) observed.set(tab.id, await collectTimeline(tab.page, startedAtMs));
     const stopped = await stopRecording(session.sessionId);
-    await fs.rename(stopped.webmPath, join(dir, 'source.webm'));
-    await fs.rename(stopped.webmPath.replace(/\.webm$/, '-capture.json'), join(dir, 'capture.json'));
-    const timeline = {
-      schemaVersion: SCHEMA_VERSION, url: capture.url, viewport: config.viewport, scale: config.capture.resolutionScale, duration: stopped.durationSeconds,
-      pointer: observed.pointer, shapes: observed.shapes, ...((observed.turned.length || observed.unplaced.length) && { frameInput: { turned: observed.turned, unplaced: observed.unplaced } }), events: [...observed.events, ...focus.map(f => ({ type: 'focus', ...f })), ...said.map(line => ({ type: 'say', ...line })), ...forwarded.map(span => ({ type: 'fastForward', ...span })), ...stopped.navigations.map(load => ({ type: 'navigate', ...load }))].sort((a, b) => a.t - b.t),
-    };
+    for (const tab of stopped.tabs) await fs.rename(tab.webmPath, join(dir, `source-${tab.id}.webm`));
+    await writeJson(join(dir, 'capture.json'), { tabs: stopped.tabs.map(tab => ({ tab: tab.id, ...tab.stats })) });
+    const timeline = timelineOf({ url: capture.url, viewport: config.viewport, scale: config.capture.resolutionScale }, stopped, observed, notes, startedAtMs);
+    const { focus, wide } = notes;
     await writeJson(join(dir, 'timeline.json'), timeline);
     let edit = createEdit(config, timeline, focus, wide);
     if (imported) ({ edit, unplaced } = placeLines(edit, imported.narration));
@@ -222,7 +248,7 @@ export async function previewTake(directory, refs = [], { at } = {}) {
   const looks = await Promise.all(refs.map(ref => loadLook(ref)));
   const tiles = [{ name: 'current', edit }, ...looks.map(look => ({ name: look.name, edit: applyLook(edit, resolvedLook(look), host) }))];
   const files = {}, shown = tiles.map(({ name, edit }) => ({ name, edit: forRender(atShortSide(edit, 1080), dir, files).edit }));
-  const png = await composePreview({ sourcePath: join(dir, 'source.webm'), timeline, at, tiles: shown, files, narration: narrationForRender(edit, narration, dir) });
+  const png = await composePreview({ sources: sourcesOf(dir, timeline), timeline, at, tiles: shown, files, narration: narrationForRender(edit, narration, dir) });
   const preview = join(dir, 'preview.png');
   await fs.writeFile(preview, png);
   return { preview, at: at ?? 'end, camera wide', tiles: tiles.map(({ name, edit }) => ({ name, summary: summarize(lookFromEdit(edit)) })) };
@@ -258,7 +284,7 @@ export async function renderTake(directory) {
   // Render to a temporary output; preserve the last complete final if encoding fails.
   const temporary = join(dir, 'final.pending.mp4');
   try {
-    const render = await renderFinal({ sourcePath: join(dir, 'source.webm'), finalPath: temporary, timeline, ...forRender(edit, dir), narration: spoken });
+    const render = await renderFinal({ sources: sourcesOf(dir, timeline), finalPath: temporary, timeline, ...forRender(edit, dir), narration: spoken });
     await fs.rename(temporary, join(dir, 'final.mp4'));
     await writeSubtitles(dir, render.subtitles?.map(({ frames, ...cue }) => cue) ?? null);
     await writeJson(join(dir, 'render.json'), render);
@@ -313,9 +339,10 @@ const SLOW_PAGE_FRAMES = 20;
  * Warns when the browser fell behind during Capture: the page got fewer than SLOW_PAGE_FRAMES animation
  * frames in at least two whole seconds. The Source's own frames cannot tell, since a still page sends few.
  * A second that a navigation or reload touches is left out, since no document draws while one loads.
- * At resolution scale 1 the Take cannot be helped by lowering it again.
+ * At resolution scale 1 the Take cannot be helped by lowering it again. `tab`, the Timeline's Tab,
+ * is named in a Take with several Tabs.
  */
-export function captureWarnings(capture, scale) {
+export function captureWarnings(capture, scale, tab = null) {
   const loading = second => (capture.navigations ?? []).some(load => load.t < second + 1 && load.end >= second);
   const whole = (capture.pageFrames ?? []).slice(0, Math.floor(capture.duration)).filter((_, second) => !loading(second));
   const slow = whole.filter(n => n < SLOW_PAGE_FRAMES);
@@ -323,7 +350,8 @@ export function captureWarnings(capture, scale) {
   const fix = scale > 1
     ? 'Record again with capture: { resolutionScale: 1 } in the Scenario, or close other work'
     : 'Capture already used resolutionScale 1: close other work, use a smaller viewport, or record on a machine with a GPU';
-  return [`The browser fell behind during Capture: the page got fewer than ${SLOW_PAGE_FRAMES} frames per second for ${slow.length} of ${whole.length} s (lowest ${Math.min(...slow)}), so the page in the Final jumps while the Cursor moves smoothly. ${fix}.`];
+  const lead = tab ? `In Tab ${tab.id}, opened at ${tab.opened.toFixed(2)} s, the browser` : 'The browser';
+  return [`${lead} fell behind during Capture: the page got fewer than ${SLOW_PAGE_FRAMES} frames per second for ${slow.length} of ${whole.length} s (lowest ${Math.min(...slow)}), so the page in the Final jumps while the Cursor moves smoothly. ${fix}.`];
 }
 
 /**
@@ -355,11 +383,13 @@ export async function verifyTake(directory) {
     ...(spoken ? await narrationProblems(dir, edit, spoken, media, map, expected.frames / fps) : []),
   ].filter(Boolean);
   if (problems.length) throw new Error(`Final failed verification: ${problems.join('; ')}`);
-  const capture = await readJson(join(dir, 'capture.json'));
+  const capture = await readJson(join(dir, 'capture.json')), several = capture.tabs.length > 1;
+  const tabOf = id => timeline.tabs.find(tab => tab.id === id);
   const { lines, ...final } = media;
   const verification = {
-    passed: true, checkedAt: new Date().toISOString(), warnings: [...captureWarnings(capture, config.capture.resolutionScale), ...timelineWarnings(timeline)], media: final,
-    source: { settings: capture.settings, ...summarizeFrames(capture.frames, capture.duration), ...(capture.pageFrames && { pageFramesPerSecond: capture.pageFrames }) }, fullDecode: 'passed',
+    passed: true, checkedAt: new Date().toISOString(), media: final,
+    warnings: [...capture.tabs.flatMap(stats => captureWarnings(stats, config.capture.resolutionScale, several ? tabOf(stats.tab) : null)), ...timelineWarnings(timeline)],
+    sources: capture.tabs.map(stats => ({ tab: stats.tab, settings: stats.settings, ...summarizeFrames(stats.frames, stats.duration), ...(stats.pageFrames && { pageFramesPerSecond: stats.pageFrames }) })), fullDecode: 'passed',
     ...(spoken && { narration: { lines: spoken.lines.map(({ id, start }) => ({ id, start, duration: lines.find(line => line.id === id).duration })), subtitles: SUBTITLE_FILES.map(([name]) => name), burned: burnsIn(edit.subtitles) } }),
   };
   await writeJson(join(dir, 'verification.json'), verification);

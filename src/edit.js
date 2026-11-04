@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isPopup } from './tabs.js';
 
 /**
  * An Edit holds every choice Render makes; a Scenario's config only seeds the first one. Styling is
@@ -36,6 +37,10 @@ export const DEFAULT_STYLE = {
   // Drawn over the Final, outside the camera, while it fast-forwards, such as { draw: 'fast-forward' };
   // `false` shows none.
   fastForwardBadge: false,
+  // How the Final shows the Tabs (tabs.js): the window cuts to a tab of its own size, or fades over
+  // `{ fade }` seconds; a popup window scales and fades in and out over `duration`, from `scale`, unless
+  // `popupAnimation` is false. Times are Final seconds.
+  tabs: { transition: 'cut', popupAnimation: { duration: 0.2, scale: 0.9 } },
 };
 
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -53,11 +58,12 @@ export function merge(base, over) {
 
 /** A complete Edit: the defaults under whatever `edit` names. */
 export function withDefaults(edit) {
-  return merge({ schemaVersion: EDIT_VERSION, ...DEFAULT_STYLE, output: { ...DEFAULT_STYLE.output, fps: 60 }, camera: { ...DEFAULT_STYLE.camera, targets: [] }, shortcuts: [], fastForward: [], narration: { volume: 1, lines: [] } }, edit);
+  return merge({ schemaVersion: EDIT_VERSION, ...DEFAULT_STYLE, output: { ...DEFAULT_STYLE.output, fps: 60 }, camera: { ...DEFAULT_STYLE.camera, targets: [] }, tabs: { ...DEFAULT_STYLE.tabs, placement: [] }, shortcuts: [], fastForward: [], narration: { volume: 1, lines: [] } }, edit);
 }
 
 /**
- * Camera targets: observed clicks, typing and drags, except those inside a `wide` window ({ start, end }
+ * Camera targets: observed clicks, typing and drags, each in the CSS pixels of its Tab, and each popup
+ * window's whole page as it first comes in front, except those inside a `wide` window ({ start, end }
  * seconds) from an action with `focus: false`. Like a manual zoom in Screen Studio, an explicit focus
  * target replaces only the automatic targets inside its own span (from `lead` before it to `hold` after).
  */
@@ -65,12 +71,19 @@ export function cameraTargets(timeline, focus, wide = [], camera = {}) {
   const { lead, hold } = { ...DEFAULT_STYLE.camera, ...camera };
   const spans = focus.map(f => ({ start: f.t - lead, end: (f.until ?? f.t) + hold }));
   const inside = (t, windows) => windows.some(w => t >= w.start && t <= w.end);
+  const tabs = new Map((timeline.tabs ?? []).map(tab => [tab.id, tab])), framed = new Set();
   const automatic = timeline.events.filter(event => !inside(event.t, wide) && !inside(event.t, spans)).flatMap(event => {
-    if (event.type === 'click' && event.box) return [{ t: event.t, box: event.box }];
-    if (event.type === 'type' && event.box) return [{ t: event.t, box: event.box, until: event.end }];
+    const tab = event.tab === undefined ? {} : { tab: event.tab };
+    if (event.type === 'click' && event.box) return [{ t: event.t, box: event.box, ...tab }];
+    if (event.type === 'type' && event.box) return [{ t: event.t, box: event.box, until: event.end, ...tab }];
     if (event.type === 'drag') {
       const x = Math.min(event.from.x, event.to.x), y = Math.min(event.from.y, event.to.y);
-      return [{ t: event.t, box: { x, y, width: Math.abs(event.to.x - event.from.x), height: Math.abs(event.to.y - event.from.y) }, until: event.end }];
+      return [{ t: event.t, box: { x, y, width: Math.abs(event.to.x - event.from.x), height: Math.abs(event.to.y - event.from.y) }, until: event.end, ...tab }];
+    }
+    const opened = tabs.get(event.tab);
+    if (event.type === 'front' && opened && isPopup(opened, timeline.viewport) && !framed.has(event.tab)) {
+      framed.add(event.tab);
+      return [{ t: event.t, box: { x: 0, y: 0, ...opened.viewport }, tab: event.tab }];
     }
     return [];
   });
@@ -84,20 +97,22 @@ export function addressOf(url) {
 
 /**
  * The address bar's text when Capture started (`url`), and each change after it (`urls`, as
- * { t, url } in Source time): a full navigation to another host shows the new one from the moment the
- * page took its address. The Scenario's `frame.url`, when set, names the host Capture started on,
- * also when a navigation comes back to it.
+ * { t, url, tab } in Source time): a full navigation to another host shows the new one from the moment
+ * the page took its address. A Tab the demo opens shows the host it opened on, or nothing until its
+ * first document commits when it opened on about:blank. The Scenario's `frame.url`, when set, names
+ * the host Capture started on, also when a navigation comes back to it.
  */
 export function addressBar(config, timeline) {
   const first = addressOf(timeline.url ?? config.url), shown = host => host === first ? config.frame?.url ?? first : host;
-  const urls = [];
-  let current = first;
-  for (const event of timeline.events ?? []) {
-    if (event.type !== 'navigate' || event.commit === undefined) continue;
-    const host = addressOf(event.url);
-    if (host !== current) urls.push({ t: event.commit, url: shown(host) });
-    current = host;
-  }
+  const urls = [], current = new Map([[0, first]]);
+  const change = (t, url, tab) => {
+    const host = !url || url === 'about:blank' ? '' : addressOf(url);
+    if (host !== (current.get(tab) ?? '')) urls.push({ t, url: shown(host), tab });
+    current.set(tab, host);
+  };
+  const opened = (timeline.tabs ?? []).slice(1).map(tab => ({ t: tab.opened, url: tab.url, tab: tab.id }));
+  const committed = (timeline.events ?? []).filter(event => event.type === 'navigate' && event.commit !== undefined).map(event => ({ t: event.commit, url: event.url, tab: event.tab ?? 0 }));
+  for (const { t, url, tab } of [...opened, ...committed].sort((a, b) => a.t - b.t)) change(t, url, tab);
   return { url: shown(first), urls };
 }
 
@@ -112,7 +127,7 @@ export function createEdit(config, timeline, focus, wide = []) {
     cursor: config.cursor, clickEffect: config.clickEffect, keycaps: config.keycaps, subtitles: config.subtitles, fastForwardBadge: config.fastForwardBadge, output: { ...config.output, fps: config.capture.fps },
     // The browser chrome shows the host the page is on, unless the config names something else.
     frame: { ...config.frame, ...addressBar(config, timeline) },
-    camera: { ...config.camera, targets: cameraTargets(timeline, focus, wide, config.camera) },
+    camera: { ...config.camera, targets: cameraTargets(timeline, focus, wide, config.camera) }, tabs: config.tabs,
     shortcuts: timeline.events.filter(event => event.type === 'shortcut').map(({ t, keys }) => ({ t, keys })),
     fastForward: timeline.events.filter(event => event.type === 'fastForward').map(({ t, end, rate }) => ({ start: t, end, rate })),
     narration: { lines: timeline.events.filter(event => event.type === 'say').map(event => ({ id: event.id, start: event.t })) },

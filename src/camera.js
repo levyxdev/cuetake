@@ -31,18 +31,20 @@ export function cropAround(x, y, zoom, viewport) {
  * its typing ends); targets whose windows touch or sit within `chainGap` share one segment. Segments
  * stop `endWide` before the Final ends, and targets that would barely zoom (below `minZoom`) stay wide.
  * A segment's zoom is the closest that fits all its targets, so the camera never zooms within one.
+ * No segment spans one of the `cuts`, the times the camera cuts to wide.
  */
-export function zoomSegments(targets, viewport, camera, duration) {
+export function zoomSegments(targets, viewport, camera, duration, cuts = []) {
   const { lead, hold, chainGap, minZoom, endWide } = camera;
   const last = duration - endWide;
+  const cutBefore = t => cuts.findLast(cut => cut <= t) ?? -Infinity;
   const segments = [];
   for (const target of targets.toSorted((a, b) => a.t - b.t)) {
     const zoom = target.zoom ?? fitZoom(target.box, viewport, camera);
     if (zoom < minZoom || target.t - lead >= last) continue;
     const shot = { t: target.t, box: target.box, zoom };
-    const start = Math.max(0, target.t - lead), end = Math.min(last, Math.max(target.t, target.until ?? target.t) + hold);
+    const start = Math.max(0, target.t - lead, cutBefore(target.t)), end = Math.min(last, cuts.find(cut => cut > target.t) ?? Infinity, Math.max(target.t, target.until ?? target.t) + hold);
     const segment = segments.at(-1);
-    if (segment && start - segment.end <= chainGap) {
+    if (segment && start - segment.end <= chainGap && cutBefore(segment.shots[0].t) === cutBefore(target.t)) {
       segment.shots.push(shot);
       segment.end = Math.max(segment.end, end);
       segment.zoom = Math.min(segment.zoom, zoom);
@@ -89,10 +91,10 @@ export function intents(segments, viewport, camera, pointerAt) {
 /**
  * The visible viewport crop for every output frame. The intent is followed by two critically damped
  * springs in series on center and log-zoom, which ease each move in and out and settle in about
- * `response` seconds.
+ * `response` seconds. At each of the `cuts` the camera is wide at once.
  */
-export function cameraTrack({ targets, viewport, camera, duration, fps, pointerAt }) {
-  const intentAt = intents(zoomSegments(targets, viewport, camera, duration), viewport, camera, pointerAt);
+export function cameraTrack({ targets, viewport, camera, duration, fps, pointerAt, cuts = [] }) {
+  const intentAt = intents(zoomSegments(targets, viewport, camera, duration, cuts), viewport, camera, pointerAt);
   // The pair settles about as fast as one spring with omega 4 / response.
   const omega = 6.8 / camera.response, steps = 4, dt = 1 / (fps * steps);
   const start = intentAt(0);
@@ -103,8 +105,15 @@ export function cameraTrack({ targets, viewport, camera, duration, fps, pointerA
     position[key] += velocity[key] * dt;
   };
   const track = [];
+  let cut = 0;
   for (let i = 0, frames = Math.round(duration * fps); i < frames; i++) {
     const goal = intentAt(i / fps);
+    if (cut < cuts.length && i / fps >= cuts[cut]) {
+      while (cut < cuts.length && i / fps >= cuts[cut]) cut++;
+      for (const { position, velocity } of [aim, view]) Object.assign(position, { x: viewport.width / 2, y: viewport.height / 2, z: 0 }), Object.assign(velocity, { x: 0, y: 0, z: 0 });
+      track.push(cropAround(viewport.width / 2, viewport.height / 2, 1, viewport));
+      continue;
+    }
     const target = { x: goal.x, y: goal.y, z: Math.log(goal.zoom) };
     for (let step = 0; step < steps; step++) for (const key of ['x', 'y', 'z']) {
       follow(aim, target, key);

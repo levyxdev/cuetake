@@ -44,7 +44,7 @@ Only `name` and `url` are required in config. Other fields use the shown default
 
 | API | Behavior |
 | --- | --- |
-| `page` | The isolated Playwright page; use its locators and assertions. A locator inside an iframe, such as `d.page.frameLocator('iframe[name=checkout]').getByLabel('Card number')`, works with every action, cross-origin and nested frames included. |
+| `page` | The Tab in front, an isolated Playwright page; use its locators and assertions. A locator inside an iframe, such as `d.page.frameLocator('iframe[name=checkout]').getByLabel('Card number')`, works with every action, cross-origin and nested frames included. |
 | `at(seconds)` | Wait until a time relative to the capture start. Past times return immediately. |
 | `wait(ms)` | Hold the current state. |
 | `move(x, y, durationMs?)` | Move along a slight arc using viewport CSS coordinates. `0` jumps there. |
@@ -56,6 +56,7 @@ Only `name` and `url` are required in config. Other fields use the shown default
 | `focus({x,y,width,height}, seconds?)` | Add a camera target; defaults to the current time. |
 | `say(id, text?)` | Start a Narration Line. With `--narration` it waits until the Line's audio ends; without, `text` is required and it does not wait. See [narration.md](narration.md). |
 | `fastForward(wait, { rate=4 })` | Run `wait`, a function that waits on the page, such as `() => reply.waitFor()`, and return its result; the Final plays that span `rate` times faster. |
+| `switchTo(page)` | Bring a Tab back in front, such as the first page after a new tab opened over it. See Tabs below. |
 | `time()` | Seconds elapsed since capture started. |
 
 The Director moves like a person. A move takes longer the farther and smaller its target is (Fitts's law), starts quickly and settles slowly, and at the default speed stays under about 2000 CSS px/s; it pauses briefly before pressing and after releasing, and holds a click's button for a moment, so the Cursor's press shows. A `duration` fixes one move's length in ms and `msPerChar` one field's typing pace; the arc, pauses and uneven typing stay. The same Scenario and `seed` move the same way on every recording. Changing any of this needs a new recording.
@@ -80,6 +81,21 @@ Each target is framed with `padding` CSS px around its box, zooming at most `max
 
 Wrap only dead time in `fastForward`: a page load, a server, an AI response streaming in. A deliberate hold such as `d.at(5)` on a result stays outside, so the viewer can read it. The Final eases into and out of the faster speed inside the span; the page, the Cursor and click effects speed up with it, while the camera, keycaps and Subtitles keep their pace. To show viewers the speed-up, turn on the Edit's `fastForwardBadge` ([styling.md](styling.md)). A Line cannot play faster, so `say` inside `fastForward` fails the Take: say it before the wait. Keep the cursor still inside `fastForward`: a move there plays `rate` times faster, and a zoomed camera can lose it. If it would cover what the viewer waits for, move it aside before the wait. Each span is copied into `edit.json` as `fastForward: [{ "start": 3.2, "end": 9.8, "rate": 4 }]` (Source seconds), where it can be retimed or removed without recording again.
 
+## Tabs
+
+Capture follows every page the demo opens, from a link with `target="_blank"`, `window.open`, or an iframe, such as an OAuth or payment popup, and records each as a Tab with its own Source. Pages a Scenario opens with `context.newPage()` are not followed. Get the new page with Playwright's idiom, before the click that opens it:
+
+```js
+const opened = d.page.waitForEvent('popup');
+await d.click(d.page.getByRole('link', { name: 'Open docs' }));
+const docs = await opened;   // now in front: d.page is docs
+await d.click(docs.getByRole('button', { name: 'Copy' }));
+```
+
+Which Tab is in front follows the browser: a new Tab comes in front when it opens, and when it closes, the Tab that opened it comes back. Bring back any other open Tab with `d.switchTo(page)`; keep a reference to the first page (`const app = d.page` at the start of `run`) to return to it. Every action works on the Tab in front, and an action on a locator of a Tab behind fails and names `d.switchTo`, since a person can't click a tab they can't see. A click that makes a popup close itself is fine.
+
+In the Final, a Tab the size of the viewport replaces the page in the same window, with a cut by default, and the camera cuts to wide. Any other Tab is a popup window over the Tab that opened it, which keeps playing behind it; the camera frames it as it opens. The Cursor stays one pointer across Tabs, where it was on the window. Each Tab's input is in its own CSS pixels in `timeline.json`, and each event names its `tab`.
+
 Use actual locators for clicks. Canvas drags often require coordinates; derive or validate them for the configured viewport. Keep setup outside capture, hold important states, and assert meaningful application changes. An exception marks the take failed and closes the isolated browser.
 
 ## Take folder
@@ -88,24 +104,24 @@ Use actual locators for clicks. Canvas drags often require coordinates; derive o
 <output>/<scenario>/<take>/
   project.json       Scenario config, status, application evidence, duration
   scenario.mjs       Snapshot of the original scenario module
-  source.webm        Source: original high-resolution VP9 capture
-  capture.json       Track settings, video frame callback observations and the page's animation frames per second
-  timeline.json      Timeline: pointer path, cursor shapes, clicks and drags with their release, typing, Shortcuts, focus, said Lines and fast-forwards, in seconds and top-level CSS pixels, plus any input inside an iframe it could not place exactly (`frameInput`)
-  edit.json          Edit: camera targets and settings, cursor, click effect, Shortcuts and keycaps, frame, fast-forwards, Line starts and volumes, Subtitles, output
+  source-<tab>.webm  Source of each Tab (0 is the first page): original high-resolution VP9 capture
+  capture.json       Per Tab: track settings, video frame callback observations and the page's animation frames per second, in seconds from its own start
+  timeline.json      Timeline: the Tabs (`tabs`: opener, when each opened, closed and started recording, viewport) and which is in front (`front` events), pointer path, cursor shapes, clicks and drags with their release, typing, Shortcuts, focus, said Lines, fast-forwards and page loads, in seconds and each Tab's top-level CSS pixels, plus any input inside an iframe it could not place exactly (`frameInput`)
+  edit.json          Edit: camera targets and settings, cursor, click effect, Shortcuts and keycaps, frame, how Tabs switch and where popups sit, fast-forwards, Line starts and volumes, Subtitles, output
   narration/         The Narration: narration.json (text, word timings) and each Line's audio, named by its id
   subtitles.srt/.vtt Subtitles of the placed Lines, from the last Render
   styles/            Shaders, drawing code and images the Edit names
-  poster.png         Final page state at native capture resolution
+  poster.png         The Tab in front at the end, at native capture resolution
   preview.png        Preview: the current Edit beside candidate Looks, from the last `preview`
   final.mp4          Final: H.264 camera composition
   render.json        Encoder, rate control and GPU used by the last Render; its times are seconds of the Final
-  verification.json Output metadata, decode result, capture observations, and warnings when the browser fell behind or iframe input could not be placed exactly
+  verification.json Output metadata, decode result, capture observations per Tab, and warnings when the browser fell behind or iframe input could not be placed exactly
 ```
 
 A copied scenario snapshot may import helper modules from its original project. It is a record of the scenario, not a bundled runnable archive. Keep business scenarios in their application repository.
 
-Times in `edit.json` and `timeline.json` are Source seconds, from the start of Capture; a fast-forward only changes when they happen in the Final. To edit a completed take, change `edit.json` (camera settings, target boxes and times, fast-forwards, the Shortcuts shown as `shortcuts: [{ "t": 2.4, "keys": ["Meta", "K"] }]`, and the styling in [styling.md](styling.md)), then run `cuetake render <take>`. To compare styling first, run `cuetake preview <take> --look <name|file.json>...`, which composes stills without touching `edit.json` or the Final. A Look is a partial Edit holding any styling and camera settings, but not camera targets, Shortcuts, fast-forwards, `frame.url`, `frame.urls` or `output.fps`. `cuetake look apply` merges one into `edit.json`, and `cuetake record --look` seeds a new take's Edit with it under the Scenario config. The Scenario config only seeds the first Edit. Changing what happens on the page requires recording again. `render` automatically runs verification; `verify` checks without rendering.
+Times in `edit.json` and `timeline.json` are Source seconds, from the start of Capture; a fast-forward only changes when they happen in the Final. To edit a completed take, change `edit.json` (camera settings, target boxes and times, fast-forwards, the Shortcuts shown as `shortcuts: [{ "t": 2.4, "keys": ["Meta", "K"] }]`, and the styling in [styling.md](styling.md)), then run `cuetake render <take>`. To compare styling first, run `cuetake preview <take> --look <name|file.json>...`, which composes stills without touching `edit.json` or the Final. A Look is a partial Edit holding any styling and camera settings, but not camera targets, Shortcuts, fast-forwards, `frame.url`, `frame.urls`, `tabs.placement` or `output.fps`. `cuetake look apply` merges one into `edit.json`, and `cuetake record --look` seeds a new take's Edit with it under the Scenario config. The Scenario config only seeds the first Edit. Changing what happens on the page requires recording again. `render` automatically runs verification; `verify` checks without rendering.
 
-`edit.json` also carries `output.fps`, the Final's frame rate, which a new Take takes from `capture.fps`, and `frame.url`, the address bar's text, which defaults to the host the page was on when Capture started; a Scenario's `frame.url` replaces that host's name. When the page navigates to another host, `frame.urls` lists each change as `{ "t": 3.2, "url": "checkout.stripe.com" }`, in Source time from when the page took the new address; edit or remove one and render again. Encoders without a quantizer mode fall back to a bitrate, recorded in `render.json`.
+`edit.json` also carries `output.fps`, the Final's frame rate, which a new Take takes from `capture.fps`, and `frame.url`, the address bar's text, which defaults to the host the page was on when Capture started; a Scenario's `frame.url` replaces that host's name. When a page navigates to another host, `frame.urls` lists each change as `{ "t": 3.2, "url": "checkout.stripe.com", "tab": 0 }`, in Source time from when the Tab took the new address; a Tab the demo opens starts with the address it opened on, or empty until its first page commits. Edit or remove one and render again. `tabs.placement: [{ "tab": 2, "x": 100, "y": 60 }]` moves a popup window, its page's top left in its opener's CSS pixels; by default it is centered over its opener and scaled down to fit. Encoders without a quantizer mode fall back to a bitrate, recorded in `render.json`.
 
 Login is passed separately as a named runtime auth profile, never embedded in scenario config; see [authentication.md](authentication.md).
