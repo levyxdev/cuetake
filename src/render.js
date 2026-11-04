@@ -24,6 +24,7 @@ const pageFiles = {
   '/shortcuts.js': { path: fileURLToPath(new URL('./shortcuts.js', import.meta.url)), type: 'text/javascript' },
   '/time-map.js': { path: fileURLToPath(new URL('./time-map.js', import.meta.url)), type: 'text/javascript' },
   '/tabs.js': { path: fileURLToPath(new URL('./tabs.js', import.meta.url)), type: 'text/javascript' },
+  '/shutter.js': { path: fileURLToPath(new URL('./shutter.js', import.meta.url)), type: 'text/javascript' },
   '/mediabunny.js': { path: mediabunnyBundle, type: 'text/javascript' },
 };
 

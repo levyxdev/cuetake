@@ -10,6 +10,7 @@ import { cameraTargets, createEdit, DEFAULT_STYLE, withDefaults, addressBar, add
 import { pointerAt, presses, sparksAt, heldSpans, pressScale, shapeAt, drawnShape, cursorTrack } from '../src/cursor.js';
 import { random, reachMs, reach, landing, pauseMs, typingDelays } from '../src/motion.js';
 import { atShortSide, layout, cameraView, brandHue, brandColor, previewSheet } from '../src/stage.js';
+import { exposure, moments, cropAt, shutterOf } from '../src/shutter.js';
 import { lookFromEdit, applyLook, mergeLook, summarize, saveLook, loadLook, listLooks, removeLook, resolvedLook } from '../src/look.js';
 import { bundle, codeRefs, forRender, BUILTIN_DIR } from '../src/styles.js';
 import { npxFolders, uninstall } from '../src/uninstall.js';
@@ -803,6 +804,50 @@ test('at zoom 1 the camera shows the whole stage; zoomed views stay inside it', 
   expect(corner.x).toBeCloseTo(stage.page.x + 360 * stage.scale, 6);
   expect(corner.y).toBeCloseTo(stage.page.y + 225 * stage.scale, 6);
   expect(corner.x - 3840 / 4).toBeGreaterThanOrEqual(0);
+});
+
+test('a frame exposes the last `shutter` of its time, and shows one sharp instant on the first frame, with no shutter, or across a cut', () => {
+  const half = exposure(1, 30, 0.5);
+  expect(half.start).toBeCloseTo(0.98333, 5);
+  expect(half.end).toBe(1);
+  expect(exposure(0, 30, 0.5)).toBeNull();
+  expect(exposure(1, 30, 0)).toBeNull();
+  // A cut since the frame before jumps the camera, so nothing is blurred across it.
+  expect(exposure(1, 30, 0.5, [0.99])).toBeNull();
+  expect(exposure(1, 30, 0.5, [1])).toBeNull();
+  expect(exposure(1, 30, 0.5, [0.95, 1.2])).not.toBeNull();
+  // A shutter past a whole frame exposes the whole frame; anything that is not a positive number is off.
+  expect(exposure(1, 30, 3).start).toBeCloseTo(0.96667, 5);
+  expect([3, 0.25, -1, '0.5', undefined].map(shutterOf)).toEqual([1, 0.25, 0, 0, 0]);
+});
+
+test('a frame averages one moment per `step` output pixels its content moves, up to 16, ending on its own moment', () => {
+  const span = { start: 0.98, end: 1 };
+  expect(moments(1, null, 50, 2)).toEqual([1]);
+  // Moving less than a step stays one sharp instant.
+  expect(moments(1, span, 1.5, 2)).toEqual([1]);
+  const four = moments(1, span, 6, 2);
+  expect(four).toHaveLength(4);
+  [0.98, 0.986667, 0.993333, 1].forEach((t, i) => expect(four[i]).toBeCloseTo(t, 5));
+  const fast = moments(1, span, 400, 2);
+  expect(fast).toHaveLength(16);
+  expect(fast[0]).toBeCloseTo(0.98, 9);
+  expect(fast.at(-1)).toBe(1);
+});
+
+test('between two frames the camera is part way from one frame\'s crop to the next', () => {
+  const crops = [{ x: 0, y: 0, w: 100, h: 50 }, { x: 10, y: 20, w: 80, h: 40 }];
+  expect(cropAt(crops, 30, 0)).toEqual(crops[0]);
+  expect(cropAt(crops, 30, 1 / 30)).toEqual(crops[1]);
+  const between = cropAt(crops, 30, 0.25 / 30);
+  [['x', 2.5], ['y', 5], ['w', 95], ['h', 47.5]].forEach(([key, value]) => expect(between[key]).toBeCloseTo(value, 9));
+  expect(cropAt(crops, 30, 2)).toEqual(crops[1]);
+});
+
+test('the Final blurs motion over half a frame by default; an Edit or Look can change or turn off the shutter', () => {
+  expect(withDefaults({}).output.shutter).toBe(0.5);
+  expect(withDefaults({ output: { shutter: 0 } }).output).toMatchObject({ shutter: 0, width: 3840, fps: 60 });
+  expect(lookFromEdit(withDefaults({ output: { shutter: 0.25 } })).output.shutter).toBe(0.25);
 });
 
 test('the brand color comes from the brand hue among neutral pixels, or is a neutral gray', () => {

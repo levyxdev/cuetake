@@ -18,8 +18,9 @@ export const DEFAULT_STYLE = {
   // Cursor, so no click effect is drawn unless named.
   cursor: { draw: 'arrow', size: 24, color: '#ffffff', press: 0.8 },
   clickEffect: false,
-  // quality is the H.264 quantizer (lower is sharper and larger).
-  output: { width: 3840, height: 2160, quality: 22 },
+  // quality is the H.264 quantizer (lower is sharper and larger). shutter is the fraction of each
+  // frame over which the camera and the Cursor blur as they move (shutter.js); 0 turns blur off.
+  output: { width: 3840, height: 2160, quality: 22, shutter: 0.5 },
   // padding is a fraction of the short side, one number or [top, right, bottom, left]; radius is in 1080p pixels.
   frame: { padding: 0.08, radius: 12, chrome: { draw: 'browser' }, background: [{ shader: 'fluted' }], effects: [{ shader: 'shadow' }] },
   // See camera.js. Each target is framed with `padding` CSS px around it, zooming at most `maxZoom`;
