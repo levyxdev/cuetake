@@ -6,7 +6,7 @@ Everything drawn around the page is code or images you write: CueTake fills in d
 
 ```json
 {
-  "output": { "width": 3840, "height": 2160, "quality": 22 },
+  "output": { "width": 3840, "height": 2160, "quality": 22, "shutter": 0.5 },
   "frame": {
     "padding": 0.08, "radius": 12,
     "chrome": { "draw": "browser" },
@@ -22,7 +22,7 @@ Everything drawn around the page is code or images you write: CueTake fills in d
 }
 ```
 
-- `output`: any even width and height; `quality` is the H.264 quantizer, lower is sharper.
+- `output`: any even width and height; `quality` is the H.264 quantizer, lower is sharper. `shutter` is the fraction of each frame over which motion blurs, as in a film camera: the window blurs while the camera pans and zooms, and the Cursor while it moves, so fast moves read as motion rather than strobing, most visibly at 30 fps. Still frames stay sharp, and motion inside the page, such as scrolling, is not blurred. `0` turns blur off; a higher value up to `1` gives longer streaks. `render.json` counts the frames it blurred.
 - `padding` is a fraction of the short side, one number or `[top, right, bottom, left]`; `radius` is in 1080p pixels. With `padding: 0`, `chrome: false`, `radius: 0` and an output at the viewport's proportions (2880×1800 for 1440×900), the page fills the Final.
 - `background` is a list of layers, each drawn over the one before. It stays still while the camera moves the window.
 - `effects` are drawn around the window every frame and follow it as the camera zooms and moves, and around each popup window, faded with it.

@@ -549,6 +549,72 @@ test('Render draws the Cursor in the shape the page asked for, pressed while hel
   } finally { await browser.close(); await fs.rm(dir, { recursive: true, force: true }); }
 }, 60_000);
 
+/** How wide part-lit red runs in a PNG's rows, as a sharp red edge blurred sideways over black does, and how many pixels are part-lit gray, as the white Cursor blurred is. */
+async function partLit(browser, png) {
+  const page = await browser.newPage();
+  try {
+    return await page.evaluate(async data => {
+      const image = new Image();
+      image.src = `data:image/png;base64,${data}`;
+      await image.decode();
+      const ctx = Object.assign(document.createElement('canvas'), { width: image.width, height: image.height }).getContext('2d');
+      ctx.drawImage(image, 0, 0);
+      const pixels = ctx.getImageData(0, 0, image.width, image.height).data, counts = { red: 0, gray: 0 };
+      for (let y = 0; y < image.height; y++) {
+        let row = 0, lit = false;
+        for (let x = 0; x < image.width; x++) {
+          const i = (y * image.width + x) * 4, [r, g, b] = pixels.slice(i, i + 3);
+          if (r > 50 && r < 200 && g < 30 && b < 30) row++;
+          if (r >= 200 && g < 30 && b < 30) lit = true;
+          if (r > 50 && r < 200 && Math.abs(r - g) < 20 && Math.abs(r - b) < 20) counts.gray++;
+        }
+        // Only rows through the square count, not those along its top and bottom edges.
+        if (lit) counts.red = Math.max(counts.red, row);
+      }
+      return counts;
+    }, png.toString('base64'));
+  } finally { await page.close(); }
+}
+
+test('Render blurs the window while the camera moves and the Cursor while it moves, and leaves still frames sharp', async () => {
+  const dir = await fs.mkdtemp(join(tmpdir(), 'cuetake-blur-'));
+  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
+  try {
+    const sourcePath = join(dir, 'source.webm');
+    await fs.writeFile(sourcePath, await syntheticSource(browser, 0.6));
+    // The Cursor sweeps across the page in a tenth of a second, then the camera zooms quickly onto the red square.
+    const timeline = { viewport: { width: 320, height: 240 }, duration: 3, pointer: [[0, 20, 200], [0.3, 20, 200], [0.4, 300, 200]], events: [] };
+    const camera = { response: 0.15, follow: false, hold: 0.5, endWide: 1, targets: [{ t: 1, box: { x: 230, y: 90, width: 40, height: 40 } }] };
+    const finals = {};
+    for (const shutter of [0.5, 0]) {
+      const finalPath = join(dir, `final-${shutter}.mp4`);
+      finals[shutter] = { path: finalPath, render: await renderFinal({ sources: [sourcePath], finalPath, timeline, ...forRender(bare({ camera, output: { shutter } }), dir) }) };
+    }
+    expect(finals[0.5].render.motionBlur.shutter).toBe(0.5);
+    expect(finals[0.5].render.motionBlur.frames.camera).toBeGreaterThan(3);
+    expect(finals[0.5].render.motionBlur.frames.cursor).toBeGreaterThan(1);
+    expect(finals[0].render.motionBlur.frames).toEqual({ camera: 0, cursor: 0 });
+    const lit = async (shutter, t) => partLit(browser, await extractFrame(finals[shutter].path, t));
+
+    // Mid-sweep, the blurred Cursor leaves a gray streak where the sharp one has only its edges.
+    const [sweeping, sweepingSharp] = [await lit(0.5, 0.35), await lit(0, 0.35)];
+    expect(sweeping.gray).toBeGreaterThan(sweepingSharp.gray * 3 + 20);
+
+    // Mid-zoom, the square's sharp sides spread sideways into part-lit red.
+    let zooming = 0, zoomingSharp = 0;
+    for (let t = 0.43; t < 0.65; t += 1 / 30) {
+      zooming = Math.max(zooming, (await lit(0.5, t)).red);
+      zoomingSharp = Math.max(zoomingSharp, (await lit(0, t)).red);
+    }
+    expect(zooming).toBeGreaterThan(zoomingSharp * 2 + 4);
+
+    // Settled on the square with the Cursor still, the frame is as sharp as without a shutter.
+    const [still, stillSharp] = [await lit(0.5, 1.2), await lit(0, 1.2)];
+    expect(Math.abs(still.red - stillSharp.red)).toBeLessThan(2);
+    expect(Math.abs(still.gray - stillSharp.gray)).toBeLessThan(6);
+  } finally { await browser.close(); await fs.rm(dir, { recursive: true, force: true }); }
+}, 90_000);
+
 test('Render shows keycaps for each Shortcut outside the camera, fading in and out', async () => {
   const dir = await fs.mkdtemp(join(tmpdir(), 'cuetake-keycaps-'));
   const browser = await chromium.launch({ headless: true, channel: 'chromium' });

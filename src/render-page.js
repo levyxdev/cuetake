@@ -25,6 +25,7 @@ import { burnsIn, cuesFor, lineProblems } from '/narration.js';
 import { keycapTrack } from '/shortcuts.js';
 import { badgeAt, linesInFinal, retimed, timeMap } from '/time-map.js';
 import { inWindow, tabTrack, windowMaps } from '/tabs.js';
+import { cropAt, exposure, moments, shutterOf } from '/shutter.js';
 
 const VERTEX = `#version 300 es
 in vec2 p; void main() { gl_Position = vec4(p, 0, 1); }`;
@@ -59,8 +60,8 @@ const IMAGE_LAYER = `uniform sampler2D image;
 void main() { vec4 top = texture(image, pixel() / uResolution); color = top + previous(pixel()) * (1.0 - top.a); }`;
 const BLIT = `#version 300 es
 precision highp float;
-uniform sampler2D uImage; uniform vec2 uRes; out vec4 color;
-void main() { color = texture(uImage, gl_FragCoord.xy / uRes); }`;
+uniform sampler2D uImage; uniform vec2 uRes; uniform float uAlpha; out vec4 color;
+void main() { color = texture(uImage, gl_FragCoord.xy / uRes) * uAlpha; }`;
 // A page inside its window's rounded rectangle, below the chrome, under the camera.
 const PAGE = `#version 300 es
 precision highp float;
@@ -222,12 +223,42 @@ function createCompositor(stage, brand) {
   };
   const checkGpu = what => { if (gl.isContextLost()) throw new Error(`${what} stopped the GPU; simplify the shader`); };
 
-  const target = () => { const t = texture(gl.LINEAR); gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, width, height); return t; };
+  const target = (format = gl.RGBA8) => { const t = texture(gl.LINEAR); gl.texStorage2D(gl.TEXTURE_2D, 1, format, width, height); return t; };
   const framebuffer = gl.createFramebuffer();
   let background = target(), effects = [];
   const restWindow = [stage.window.x, stage.window.y, stage.window.w, stage.window.h];
+  const blit = (image, alpha = 1) => { gl.useProgram(blitProgram.p); gl.uniform1f(blitProgram.uniform('uAlpha'), alpha); bind(0, image); gl.bindVertexArray(fullScreen); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); };
+  const drawInto = (buffer, image) => { gl.bindFramebuffer(gl.FRAMEBUFFER, buffer); if (buffer) gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, image, 0); };
+
+  // Motion blur averages moments in a half-float buffer, so many faint moments add up without banding.
+  // Without float render targets the Final shows one sharp moment per frame. The buffers are made on
+  // the first blurred frame, so a Final without blur holds no extra GPU memory.
+  const blurs = !!gl.getExtension('EXT_color_buffer_float');
+  const momentBuffer = gl.createFramebuffer(), sumBuffer = gl.createFramebuffer();
+  let layer = null, sum = null;
+  /**
+   * Draws `count` moments of premultiplied content over the frame so far, averaged: each moment over a
+   * clear layer, the layers summed at 1/count each, the sum drawn over the frame. Averaging the layers
+   * then drawing them over is the average of drawing each over, since the frame below is the same for
+   * all. `area`, [x, y, w, h] in output pixels with y down, bounds what the moments draw.
+   */
+  const averaged = (count, drawMoment, area) => {
+    if (count === 1) return drawMoment(0);
+    layer ??= target(); sum ??= target(gl.RGBA16F);
+    if (area) { gl.enable(gl.SCISSOR_TEST); gl.scissor(Math.floor(area[0]), Math.floor(height - area[1] - area[3]), Math.ceil(area[2]) + 1, Math.ceil(area[3]) + 1); }
+    drawInto(sumBuffer, sum); gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+    for (let i = 0; i < count; i++) {
+      drawInto(momentBuffer, layer); gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA); drawMoment(i);
+      drawInto(sumBuffer, sum); gl.blendFunc(gl.ONE, gl.ONE); blit(layer, 1 / count);
+    }
+    drawInto(null); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA); blit(sum);
+    gl.disable(gl.SCISSOR_TEST);
+  };
   return {
     canvas,
+    /** Whether the GPU can average moments for motion blur. */
+    blurs,
     gpu: (() => { const info = gl.getExtension('WEBGL_debug_renderer_info'); return info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : 'unknown'; })(),
     /** The widest and tallest texture the GPU holds; a larger sprite would draw black. */
     maxTextureSize: gl.getParameter(gl.MAX_TEXTURE_SIZE),
@@ -287,30 +318,36 @@ function createCompositor(stage, brand) {
       return t;
     },
     /**
-     * One frame with the camera at stage point (x, y) and `zoom`. Each of `windows` is drawn in order,
-     * each `{ page, pageRect, window, radius, opacity, effects, chrome: { texture, rect } }` in stage
-     * pixels, with the window effects around it when `effects`. Then `draw(texture, rect, opacity)` in
-     * `overlay` places sprites in stage pixels, and in `screen` in output pixels, outside the camera.
+     * One frame over the Background. Under each of `views`, the camera ({ x, y, zoom }: the stage point
+     * at the Final's center) at the moments the frame averages, each of `windows` is drawn in order, each
+     * `{ page, pageRect, window, radius, opacity, effects, chrome: { texture, rect } }` in stage pixels,
+     * with the window effects around it when `effects`, and `draw(texture, rect, opacity)` in `overlay`
+     * places sprites in stage pixels. Then each of `cursors`, `{ view, texture, rect }` at the moments
+     * the Cursor averages, within `cursorArea` in output pixels; and `screen` places sprites in output
+     * pixels, outside the camera. Several views or cursors need `blurs`.
      */
-    frame(x, y, zoom, windows, overlay, screen) {
-      gl.disable(gl.BLEND);
-      gl.useProgram(blitProgram.p); bind(0, background); gl.bindVertexArray(fullScreen); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-      gl.enable(gl.BLEND);
+    frame(views, windows, overlay, cursors, cursorArea, screen) {
+      drawInto(null);
+      gl.disable(gl.BLEND); blit(background); gl.enable(gl.BLEND);
       const place = (t, rect, opacity = 1) => { gl.bindTexture(gl.TEXTURE_2D, t); gl.uniform4f(spriteRect, ...rect); gl.uniform1f(spriteAlpha, opacity); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); };
-      const sprites = () => { gl.useProgram(spriteProgram.p); gl.uniform3f(spriteProgram.camera, x, y, zoom); gl.bindVertexArray(unitQuad); };
-      for (const w of windows) {
-        const shown = [(w.window.x - x) * zoom + width / 2, (w.window.y - y) * zoom + height / 2, w.window.w * zoom, w.window.h * zoom];
-        if (w.effects) for (const p of effects) run(p, background, w.page, shown, w.radius * zoom, zoom, w.opacity);
-        gl.useProgram(pageProgram.p); gl.uniform3f(pageProgram.camera, x, y, zoom);
-        gl.uniform4f(pageProgram.uniform('uPage'), w.pageRect.x, w.pageRect.y, w.pageRect.w, w.pageRect.h);
-        gl.uniform4f(pageProgram.uniform('uWindow'), w.window.x, w.window.y, w.window.w, w.window.h);
-        gl.uniform1f(pageProgram.uniform('uRadius'), w.radius); gl.uniform1f(pageProgram.uniform('uAlpha'), w.opacity);
-        bind(0, w.page); gl.bindVertexArray(fullScreen); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-        if (w.chrome) { sprites(); place(w.chrome.texture, w.chrome.rect, w.opacity); }
-      }
-      sprites();
-      overlay(place);
-      if (screen) { gl.uniform3f(spriteProgram.camera, width / 2, height / 2, 1); screen(place); }
+      const sprites = ({ x, y, zoom }) => { gl.useProgram(spriteProgram.p); gl.uniform3f(spriteProgram.camera, x, y, zoom); gl.bindVertexArray(unitQuad); };
+      averaged(views.length, i => {
+        const view = views[i], { x, y, zoom } = view;
+        for (const w of windows) {
+          const shown = [(w.window.x - x) * zoom + width / 2, (w.window.y - y) * zoom + height / 2, w.window.w * zoom, w.window.h * zoom];
+          if (w.effects) for (const p of effects) run(p, background, w.page, shown, w.radius * zoom, zoom, w.opacity);
+          gl.useProgram(pageProgram.p); gl.uniform3f(pageProgram.camera, x, y, zoom);
+          gl.uniform4f(pageProgram.uniform('uPage'), w.pageRect.x, w.pageRect.y, w.pageRect.w, w.pageRect.h);
+          gl.uniform4f(pageProgram.uniform('uWindow'), w.window.x, w.window.y, w.window.w, w.window.h);
+          gl.uniform1f(pageProgram.uniform('uRadius'), w.radius); gl.uniform1f(pageProgram.uniform('uAlpha'), w.opacity);
+          bind(0, w.page); gl.bindVertexArray(fullScreen); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+          if (w.chrome) { sprites(view); place(w.chrome.texture, w.chrome.rect, w.opacity); }
+        }
+        sprites(view);
+        overlay(place);
+      });
+      if (cursors.length) averaged(cursors.length, i => { sprites(cursors[i].view); place(cursors[i].texture, cursors[i].rect); }, cursorArea);
+      if (screen) { sprites({ x: width / 2, y: height / 2, zoom: 1 }); screen(place); }
       if (effects.length) checkGpu('A window effect');
     },
   };
@@ -561,8 +598,29 @@ async function createScene(edit, viewport, { pointer, shapes, events, tabs }, si
   const subtitleDrawing = burnsIn(subtitles) && cues.length ? await loadScreenDrawing(subtitles, 'Subtitles') : null;
   const keys = keycapTrack(retimed(shortcuts, map), keycaps), keycapDrawing = keys.shows.length ? await loadScreenDrawing(keycaps, 'Keycaps') : null;
   const badgeDrawing = fastForwardBadge && map.spans.length ? await loadScreenDrawing(fastForwardBadge, 'Fast-forward badges') : null;
-  const unit = Math.min(stage.width, stage.height) / 1080;
-  let effectTexture = null, subtitleTexture = null, shown = -1, keycapTexture = null, keycapsShown = null, badgeTexture = null, badgeShown = null;
+  const unit = Math.min(stage.width, stage.height) / 1080, spacing = 2 * unit; // on-screen pixels between the moments a frame averages
+  /** Where stage point `p` shows on screen, in output pixels, under the camera `view`. */
+  const onScreen = (p, view) => [(p[0] - view.x) * view.zoom + stage.width / 2, (p[1] - view.y) * view.zoom + stage.height / 2];
+  const apart = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]); // the distance between two points
+  const corners = [[0, 0], [stage.width, 0], [0, stage.height], [stage.width, stage.height]];
+  /** How far, in output pixels, what the camera shows at view `to` has moved on screen since view `from`: the most at any corner of the Final. */
+  const cameraMoved = (from, to) => Math.max(...corners.map(c => apart(onScreen([(c[0] - stage.width / 2) / to.zoom + to.x, (c[1] - stage.height / 2) / to.zoom + to.y], from), c)));
+  /** The Cursor at Final time `time` under `view`, as the compositor places it, with its tip in stage pixels; null before the first pointer sample. */
+  const cursorAt = (time, view) => {
+    const now = track && track.at(map.sourceAt(time));
+    if (!now) return null;
+    // The Cursor scales around its hotspot, so a press keeps its tip on the target.
+    const shape = drawnShape(now.shape, drawn), sprite = cursorSprites[shape], k = now.scale, frames = cursorTextures[shape];
+    return { view, tip: at(now.x, now.y), texture: frames[Math.floor(time * frames.length) % frames.length], rect: [...at(now.x + sprite.offset.x * k, now.y + sprite.offset.y * k), sprite.size.w * k * stage.scale, sprite.size.h * k * stage.scale] };
+  };
+  /** The output pixels the Cursor covers at its moments, [x, y, w, h], inside the Final. */
+  const areaOf = cursors => {
+    const points = cursors.flatMap(({ view, rect: [x, y, w, h] }) => [onScreen([x, y], view), onScreen([x + w, y + h], view)]);
+    const left = Math.max(0, Math.min(...points.map(p => p[0]))), top = Math.max(0, Math.min(...points.map(p => p[1])));
+    return [left, top, Math.max(0, Math.min(stage.width, Math.max(...points.map(p => p[0]))) - left), Math.max(0, Math.min(stage.height, Math.max(...points.map(p => p[1]))) - top)];
+  };
+  const effectTextures = [];
+  let subtitleTexture = null, shown = -1, keycapTexture = null, keycapsShown = null, badgeTexture = null, badgeShown = null;
   return {
     stage, compositor, keycapShows: keys.shows,
     /** The Tabs shown at Final time `t`, in drawing order. */
@@ -579,11 +637,22 @@ async function createScene(edit, viewport, { pointer, shapes, events, tabs }, si
       return cameraTrack({ targets, viewport, camera, duration: map.duration, fps: edit.output.fps, pointerAt: t => pointerAt(placed.pointer, map.sourceAt(t)), cuts: shownTabs.cuts });
     },
     /**
-     * Draws Final time `t` with the camera showing `crop`, a viewport rectangle in CSS pixels; returns
-     * the index of the cue it shows, or -1, the keycap show, or null, and the fast-forward badge, or null.
+     * Draws Final time `t` with the camera showing `camera(time)`, a viewport rectangle in CSS pixels at
+     * any Final time; returns the index of the cue it shows, or -1, the keycap show, or null, the
+     * fast-forward badge, or null, and how many moments the camera and the Cursor averaged (`averaged`).
+     *
+     * Motion blur: over the frame's exposure (shutter.js) the window and what moves with it are composed
+     * under the camera at several moments, and the Cursor at several points of its path, each one moment
+     * per two 1080p pixels it moves on screen. The Background stays still, and the page shows one Source
+     * frame, so motion inside the page is not blurred.
      */
-    draw(t, crop) {
-      const view = cameraView(crop, stage, viewport), source = map.sourceAt(t);
+    draw(t, camera) {
+      const viewAt = time => cameraView(camera(time), stage, viewport), view = viewAt(t), source = map.sourceAt(t);
+      const span = compositor.blurs ? exposure(t, edit.output.fps, edit.output.shutter, shownTabs.cuts) : null, startView = span && viewAt(span.start);
+      const views = moments(t, span, span ? cameraMoved(startView, view) : 0, spacing).map(time => time === t ? view : viewAt(time));
+      const cursorEnd = cursorAt(t, view), cursorStart = span && cursorEnd && cursorAt(span.start, startView);
+      const cursors = moments(t, cursorStart ? span : null, cursorStart ? apart(onScreen(cursorStart.tip, startView), onScreen(cursorEnd.tip, view)) : 0, spacing)
+        .map(time => time === t ? cursorEnd : cursorAt(time, viewAt(time))).filter(Boolean);
       // The window's effects are drawn once, under the tab it shows first.
       const windows = shownTabs.at(t).filter(({ tab }) => pages.has(tab)).map((shownTab, i) => windowOf(shownTab, source, i === 0 || shownTab.popup));
       const cue = subtitleDrawing ? cues.findIndex(c => t >= c.start && t < c.end) : -1;
@@ -597,27 +666,20 @@ async function createScene(edit, viewport, { pointer, shapes, events, tabs }, si
       const badge = badgeDrawing && badgeAt(map, t);
       if (badge && badge.rate !== badgeShown) badgeTexture = compositor.sprite(badgeDrawing.canvas(stage.width, stage.height, { rate: badge.rate }), badgeTexture, false);
       badgeShown = badge ? badge.rate : badgeShown;
-      compositor.frame(view.x, view.y, view.zoom, windows, draw => {
-        for (const press of effect ? sparksAt(pressList, clickEffect, source) : []) {
-          // Each click effect is drawn at its on-screen scale so thin strokes stay crisp.
-          const scale = stage.scale * view.zoom, ctx = canvas2d(2 * effect.reach * scale, 2 * effect.reach * scale);
-          ctx.scale(scale, scale); ctx.translate(effect.reach, effect.reach);
-          effect.paint(ctx, press.progress);
-          effectTexture = compositor.sprite(ctx.canvas, effectTexture, false);
-          draw(effectTexture, [...at(press.x - effect.reach, press.y - effect.reach), 2 * effect.reach * stage.scale, 2 * effect.reach * stage.scale]);
-        }
-        // The Cursor scales around its hotspot, so a press keeps its tip on the target.
-        const now = track && track.at(source);
-        if (now) {
-          const shape = drawnShape(now.shape, drawn), sprite = cursorSprites[shape], k = now.scale, frames = cursorTextures[shape];
-          draw(frames[Math.floor(t * frames.length) % frames.length], [...at(now.x + sprite.offset.x * k, now.y + sprite.offset.y * k), sprite.size.w * k * stage.scale, sprite.size.h * k * stage.scale]);
-        }
-      }, cue >= 0 || keycap || badge ? draw => {
+      // Each click effect is drawn once a frame, at its on-screen scale so thin strokes stay crisp, then placed under each view.
+      const sparks = (effect ? sparksAt(pressList, clickEffect, source) : []).map((press, i) => {
+        const scale = stage.scale * view.zoom, ctx = canvas2d(2 * effect.reach * scale, 2 * effect.reach * scale);
+        ctx.scale(scale, scale); ctx.translate(effect.reach, effect.reach);
+        effect.paint(ctx, press.progress);
+        effectTextures[i] = compositor.sprite(ctx.canvas, effectTextures[i], false);
+        return [effectTextures[i], [...at(press.x - effect.reach, press.y - effect.reach), 2 * effect.reach * stage.scale, 2 * effect.reach * stage.scale]];
+      });
+      compositor.frame(views, windows, draw => { for (const [texture, rect] of sparks) draw(texture, rect); }, cursors, cursors.length > 1 ? areaOf(cursors) : null, cue >= 0 || keycap || badge ? draw => {
         if (cue >= 0) draw(subtitleTexture, [0, 0, stage.width, stage.height]);
         if (keycap) draw(keycapTexture, [0, keycap.rise * unit, stage.width, stage.height], keycap.opacity);
         if (badge) draw(badgeTexture, [0, 0, stage.width, stage.height], badge.opacity);
       } : null);
-      return { cue, keycap, badge };
+      return { cue, keycap, badge, averaged: { camera: views.length, cursor: cursors.length } };
     },
   };
 }
@@ -707,7 +769,7 @@ window.cuetakeRender = async ({ sources: sourceUrls, finalUrl, duration, viewpor
   const sizes = new Map([...sources].map(([tab, source]) => [tab, source.size]));
   const recorded = tabs.filter(tab => sources.has(tab.id)), uploaded = new Map();
   const scene = await createScene(edit, viewport, { pointer, shapes, events, tabs: recorded }, sizes, sources.get(recorded[0].id).first, cues, map), { compositor } = scene;
-  const crops = scene.crops();
+  const crops = scene.crops(), camera = time => cropAt(crops, fps, time), blurred = { camera: 0, cursor: 0 };
   try {
     for (let i = 0; i < frameCount; i++) {
       if (failure) throw failure;
@@ -717,7 +779,9 @@ window.cuetakeRender = async ({ sources: sourceUrls, finalUrl, duration, viewpor
         if (frame && uploaded.get(tab) !== frame) { scene.upload(tab, frame); uploaded.set(tab, frame); }
       }
       if (audio && i % fps === 0) await feedAudio(i / fps + 1);
-      const { cue, keycap, badge } = scene.draw(i / fps, crops[i]);
+      const { cue, keycap, badge, averaged } = scene.draw(i / fps, camera);
+      if (averaged.camera > 1) blurred.camera++;
+      if (averaged.cursor > 1) blurred.cursor++;
       if (cue >= 0) shownFrames[cue] = [shownFrames[cue]?.[0] ?? i, i];
       if (keycap) keycapFrames[keycap.index] = [keycapFrames[keycap.index]?.[0] ?? i, i];
       if (badge) badgeFrames[badge.index] = [badgeFrames[badge.index]?.[0] ?? i, i];
@@ -738,6 +802,8 @@ window.cuetakeRender = async ({ sources: sourceUrls, finalUrl, duration, viewpor
   return {
     width, height, frames: frameCount, sourceFrames: [...sources.values()].reduce((sum, source) => sum + source.reader.stats().decoded, 0), codec: config.codec,
     rateControl: quantizer ? `quantizer ${quantizer}` : `variable ${config.bitrate} bps`, gpu: compositor.gpu,
+    // How many frames blurred the camera's and the Cursor's motion; a GPU without float render targets blurs none.
+    motionBlur: { shutter: compositor.blurs ? shutterOf(edit.output.shutter) : 0, ...(!compositor.blurs && shutterOf(edit.output.shutter) > 0 && { note: 'This GPU cannot render to float textures, so the Final has no motion blur' }), frames: blurred },
     seconds: +((performance.now() - started) / 1000).toFixed(2),
     // Each keycap show with the first and last output frame it was drawn on.
     // Each fast-forward in Final seconds, with the first and last frame its badge was drawn on (null without a badge).
@@ -828,13 +894,10 @@ window.cuetakePreview = async ({ sources: sourceUrls, duration, viewport, pointe
     for (const [i, { name, edit }] of tiles.entries()) {
       const voice = await prepareNarration(narration, edit.subtitles, Math.round(map.duration * edit.output.fps) / edit.output.fps, map);
       const scene = await createScene(edit, viewport, { pointer, shapes, events, tabs: recorded }, sizes, frames.get(recorded[0].id).first, voice?.cues ?? [], map);
-      let crop = { x: 0, y: 0, w: viewport.width, h: viewport.height };
-      if (at !== null) {
-        const path = scene.crops();
-        crop = path[Math.min(Math.round(at * edit.output.fps), path.length - 1)] ?? crop;
-      }
+      // At `at` the camera moves as in the Final, blurred the same way; otherwise it is wide and still.
+      const wide = { x: 0, y: 0, w: viewport.width, h: viewport.height }, path = at === null ? [] : scene.crops();
       for (const { tab } of scene.shown(t)) scene.upload(tab, frames.get(tab).now);
-      scene.draw(t, crop);
+      scene.draw(t, path.length ? time => cropAt(path, edit.output.fps, time) : () => wide);
       // Copy before yielding: the WebGL canvas does not keep its drawing buffer.
       const tile = sheet.tiles[i];
       ctx.drawImage(scene.compositor.canvas, tile.x, tile.y, tile.w, tile.h);
