@@ -159,14 +159,12 @@ export async function recordScenario(scenarioPath, outputDir, options = {}) {
     const notes = { focus: [], wide: [], said: [], forwarded: [], pointer: [] };
     const director = createDirector(capture.tabs, { startedAt: startedAtMs, fps: config.capture.fps, voiced: imported && new Map(Object.entries(imported.durations)), ...config.director }, notes);
     const evidence = await scenario.run(director);
+    await capture.tabs.started();
     await capture.tabs.front.page.screenshot({ path: join(dir, 'poster.png') });
     const observed = new Map();
     for (const tab of capture.tabs.list()) if (tab.recorded) observed.set(tab.id, await collectTimeline(tab.page, startedAtMs));
     const stopped = await stopRecording(session.sessionId);
-    for (const tab of stopped.tabs) {
-      await fs.rename(tab.webmPath, join(dir, `source-${tab.id}.webm`));
-      await fs.rm(tab.webmPath.replace(/\.webm$/, '-capture.json'), { force: true });
-    }
+    for (const tab of stopped.tabs) await fs.rename(tab.webmPath, join(dir, `source-${tab.id}.webm`));
     await writeJson(join(dir, 'capture.json'), { tabs: stopped.tabs.map(tab => ({ tab: tab.id, ...tab.stats })) });
     const timeline = timelineOf({ url: capture.url, viewport: config.viewport, scale: config.capture.resolutionScale }, stopped, observed, notes, startedAtMs);
     const { focus, wide } = notes;

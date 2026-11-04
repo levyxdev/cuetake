@@ -22,7 +22,8 @@ export function createDirector(tabs, { startedAt, fps, voiced = null, speed = 1,
   /** Moves the front Tab's mouse; where its page cannot see the pointer, the Director notes the path itself. */
   async function point(front, x, y) {
     if (!seenBy({ x, y }, front.viewport)) pointer.push([Date.now(), x, y, front.id]);
-    await front.page.mouse.move(x, y);
+    // A popup may close itself while the cursor is on its way; the next action carries the cursor on.
+    await front.page.mouse.move(x, y).catch(error => { if (!front.page.isClosed()) throw error; });
   }
   /**
    * The Tab in front, once it records. The cursor follows a change of Tab: it stays where it was over

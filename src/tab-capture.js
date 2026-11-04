@@ -231,7 +231,6 @@ export async function stopTabCapture(page, outputPath) {
     }, state.key);
     const stats = { ...result.stats, ...captureSeconds(state, result.stoppedAtMs) };
     await writeFile(outputPath, Buffer.from(result.data, 'base64'));
-    await writeFile(outputPath.replace(/\.webm$/, '-capture.json'), JSON.stringify(stats, null, 2));
     return stats;
   } finally { stopListening(page); }
 }

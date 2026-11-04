@@ -51,6 +51,8 @@ export function followTabs(first, { watch = () => {}, start = async () => {} } =
     of,
     /** Resolves once the Tab showing `page` records. */
     ready: page => of(page)?.ready ?? Promise.reject(new Error('This page is not a Tab of the Take')),
+    /** Resolves once every Tab opened so far records or has closed unrecorded; rejects if one failed to start. */
+    started: () => Promise.all(tabs.map(tab => tab.ready)),
     async switchTo(page) {
       const tab = of(page);
       if (!tab) throw new Error('d.switchTo needs a Tab of the Take: the first page or one the demo opened. Capture does not follow pages opened with context.newPage()');

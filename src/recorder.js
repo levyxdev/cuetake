@@ -69,6 +69,8 @@ export async function beginCapture(sessionId) {
 export async function stopRecording(sessionId) {
   const session = sessions.get(sessionId);
   if (!session?.tabs) throw new Error('Session has not started recording');
+  // A Tab the demo opened just before the end may still be starting.
+  await session.tabs.started();
   const tabs = session.tabs.list().filter(tab => tab.recorded);
   const startedAtMs = Date.parse(tabs[0].capture.startedAt), t = ms => ms === null ? null : Math.round(Math.max(0, ms - startedAtMs)) / 1000;
   const stopped = await Promise.all(tabs.map(async tab => {
@@ -82,7 +84,9 @@ export async function stopRecording(sessionId) {
   const recorded = new Set(tabs.map(tab => tab.id));
   await session.context.close();
   sessions.delete(sessionId);
-  return { durationSeconds: stopped[0].stats.duration, tabs: stopped, fronts: session.tabs.fronts.filter(front => recorded.has(front.tab)).map(front => ({ t: t(front.ms), tab: front.tab })) };
+  // The Take lasts until the last Tab stops, even when the first one closed before.
+  const durationSeconds = Math.max(...stopped.map(tab => Math.round((tab.start + tab.stats.duration) * 1000) / 1000));
+  return { durationSeconds, tabs: stopped, fronts: session.tabs.fronts.filter(front => recorded.has(front.tab)).map(front => ({ t: t(front.ms), tab: front.tab })) };
 }
 
 export async function cleanup() {
