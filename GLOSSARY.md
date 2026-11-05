@@ -1,29 +1,33 @@
 # CueTake
 
-CueTake records browser product demos for AI agents: an agent writes a Scenario, CueTake captures a Take and renders its Final video.
+CueTake records product demos of web pages and desktop Apps for AI agents: an agent writes a Scenario, CueTake captures a Take and renders its Final video.
 
 ## Language
 
 ### Recording
 
 **Scenario**:
-A trusted script describing one demo: the start page, the timed interactions, and the evidence that the demonstrated change happened.
+A trusted script describing one demo: the start page or App, the timed interactions, and the evidence that the demonstrated change happened.
 _Avoid_: script, flow file, recipe
 
 **Director**:
-What a Scenario's `run` is handed to act on the page like a person: it moves the cursor, clicks, types and drags at a human pace, and marks camera targets and Lines.
+What a Scenario's `run` is handed to act on the page or App like a person: it moves the cursor, clicks, types and drags at a human pace, and marks camera targets and Lines.
 _Avoid_: driver, bot, automation
+
+**App**:
+An installed desktop application that a Scenario starts instead of opening a start page.
+_Avoid_: client, program, binary
 
 **Take**:
 One recording attempt and everything it produces, kept together in its own folder.
 _Avoid_: recording, run, project
 
 **Tab**:
-One page a Take shows: the start page, or one the demo opened, as a new tab or a popup window. One Tab is in front at each moment.
+One page or App window a Take shows: the start page or the App's first window, or one the demo opened, as a new tab, a popup window or another App window. One Tab is in front at each moment.
 _Avoid_: page, window, popup
 
 **Capture**:
-The phase that drives the page through a Scenario and produces the Source and the Timeline.
+The phase that drives the page or App through a Scenario and produces the Source and the Timeline.
 _Avoid_: recording phase
 
 **Source**:
