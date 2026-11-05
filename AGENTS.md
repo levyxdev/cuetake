@@ -1,6 +1,6 @@
 # CueTake development
 
-CueTake records browser product demos for AI agents. Use the vocabulary in `GLOSSARY.md`, respect the decisions in `docs/adr/`, and read `skills/cuetake/scenarios.md` before changing the Scenario API.
+CueTake records product demos of web pages and desktop Apps for AI agents. Use the vocabulary in `GLOSSARY.md`, respect the decisions in `docs/adr/`, and read `skills/cuetake/scenarios.md` before changing the Scenario API.
 
 - Use Bun for development and keep `bun.lock` in sync. Users run the CLI on Node, so runtime code uses Node APIs only (`node:*` modules, no `Bun.*`).
 - The CLI is the only interface; the skill drives it. Capture produces the Source and Timeline; Render reads only Source, Timeline, Edit and the Narration (ADRs 0002, 0006).

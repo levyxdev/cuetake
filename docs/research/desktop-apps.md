@@ -334,13 +334,19 @@ Answers the questions in [issue #23](https://github.com/levyxdev/cuetake/issues/
 
 ## Open questions for the user
 
-1. **Grant identity across updates.** The grant went to a binary whose path holds the Claude Code CLI version. Does it survive the next CLI update, or must users grant again after each one? If not, a signed helper `.app` as its own responsible process (section 6) moves up.
-2. **Which Electron apps matter most?** Slack, Notion, Linear and Figma desktop are not installed here. Their fuses decide whether they get the cheap path (section 1) or wait for native capture.
-3. **Unattended Mac during native Takes.** The native Director moves the real pointer, and an Electron window takes real input. Is "do not touch the Mac during Capture" acceptable, or should native work wait for a separate macOS user or VM?
-4. **Signing the helper.** Shipping `cuetake-capture` prebuilt means signing it at release (an Apple Developer ID), which is a new release step.
-5. **Shape fallback.** Accept AX-role inference once `currentSystemCursor` returns `nil`, or drop exact native cursor shapes (always `default`)?
+Settled with the user on 2026-11-05, while grilling the follow-up issues; [ADR 0009](../adr/0009-desktop-apps-are-captured-behind-the-same-source-and-timeline.md) records the result.
+
+1. **Grant identity across updates.** Settled: the grants survive. Accessibility and Input Monitoring, granted while the CLI was 2.1.309, still worked at 2.1.317 (the AX observer and the event tap in section 7), so the grant follows the CLI's signature, not its path. The helper runs as a child process; no `.app`.
+2. **Which apps matter most?** TextEdit, LocalSend (Flutter) and Claude. None of them would use the Electron path, so every App, Electron included, is recorded natively, and the Electron path is dropped.
+3. **Unattended Mac during Takes.** Accepted: the Mac is not used during a Take. CueTake says so before Capture, and `verify` warns about input the Director did not make.
+4. **Signing the helper.** No Developer ID: run as a child process, an ad-hoc signature is enough. It is built on a Mac before publishing.
+5. **Shape fallback.** Accepted: infer the shape from the AX role when `currentSystemCursor` gives nothing.
+
+The grilling also replaced single-window capture (section 5) with a Desktop: a region of the screen filtered to the Take's Apps, so menus, sheets, several windows and switching between Apps are recorded. Whether that filter shows context menus and pop-up lists, and whether hardware idle time can detect the user's input without Input Monitoring, are checked on a Mac in issue #30.
 
 ## Proposed ADR direction
+
+Superseded by ADR 0009 as settled above. As first proposed:
 
 "**Desktop apps are a second and third Capture method behind the same Source and Timeline**" (extends ADRs 0002 and 0008):
 
