@@ -18,12 +18,16 @@ _Avoid_: driver, bot, automation
 An installed desktop application that a Scenario starts instead of opening a start page.
 _Avoid_: client, program, binary
 
+**Desktop**:
+The part of the screen a Take of Apps shows: the windows of the Apps it records, where they are and in their order, with nothing else on the screen.
+_Avoid_: screen, display, stage
+
 **Take**:
 One recording attempt and everything it produces, kept together in its own folder.
 _Avoid_: recording, run, project
 
 **Tab**:
-One page or App window a Take shows: the start page or the App's first window, or one the demo opened, as a new tab, a popup window or another App window. One Tab is in front at each moment.
+One page or Desktop a Take shows: the start page, or one the demo opened, as a new tab or a popup window; a Take of Apps shows a single Tab, its Desktop. One Tab is in front at each moment.
 _Avoid_: page, window, popup
 
 **Capture**:
