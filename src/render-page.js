@@ -454,6 +454,8 @@ async function loadScreenDrawing(item, name) {
 }
 
 const SAMPLE_RATE = 48000, AUDIO_BITRATE = 128000;
+/** WebCodecs microseconds as samples at SAMPLE_RATE. */
+const samplesIn = microseconds => Math.round(microseconds * SAMPLE_RATE / 1e6);
 /** Each Line's audio decoded at 48 kHz; the error names a Line whose audio cannot be read. */
 async function decodeLines(lines) {
   const context = new OfflineAudioContext(1, 1, SAMPLE_RATE);
@@ -488,6 +490,62 @@ function mixLines({ placed, buffers }, volume, seconds) {
     source.start(line.start);
   });
   return context.startRendering();
+}
+
+/** The first audio encoder config the browser supports: AAC where the platform encodes it (macOS, Windows), else Opus. */
+async function audioConfig() {
+  for (const [codec, codecString] of [['aac', 'mp4a.40.2'], ['opus', 'opus']]) {
+    const config = { codec: codecString, numberOfChannels: 1, sampleRate: SAMPLE_RATE, bitrate: AUDIO_BITRATE };
+    if ((await AudioEncoder.isConfigSupported(config).catch(() => ({}))).supported) return { codec, config };
+  }
+  throw new Error('This browser encodes neither AAC nor Opus audio');
+}
+
+/**
+ * How many samples `config`'s encoder delays its input, measured: a burst of noise is encoded, decoded
+ * and lined up against itself. AAC encoders start with priming (2112 samples on macOS) yet stamp the
+ * first packet 0; Opus declares its own pre-skip, so it measures 0. Lengths here are in samples.
+ */
+async function encoderDelay(config) {
+  const burst = 4096, longest = 8192, sent = new Float32Array(burst + longest + 2048);
+  for (let i = 0, seed = 1; i < burst; i++) { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; sent[i] = seed / 2 ** 32 - 0.5; }
+  const chunks = [];
+  let decoderConfig = null, failure = null;
+  const encoder = new AudioEncoder({ output: (chunk, meta) => { chunks.push(chunk); decoderConfig ??= meta?.decoderConfig; }, error: error => { failure ??= error; } });
+  const received = new Float32Array(sent.length + longest);
+  const decoder = new AudioDecoder({
+    output: data => {
+      // Each decoded sample goes where its timestamp says, so a delay the encoder declares itself counts as none.
+      const at = samplesIn(data.timestamp), samples = new Float32Array(data.numberOfFrames);
+      data.copyTo(samples, { planeIndex: 0, format: 'f32-planar' });
+      data.close();
+      const from = Math.max(0, -at);
+      received.set(samples.subarray(from, Math.max(from, received.length - at)), at + from);
+    },
+    error: error => { failure ??= error; },
+  });
+  try {
+    encoder.configure(config);
+    const input = new AudioData({ format: 'f32-planar', sampleRate: SAMPLE_RATE, numberOfFrames: sent.length, numberOfChannels: 1, timestamp: 0, data: sent });
+    encoder.encode(input); input.close();
+    await encoder.flush();
+    decoder.configure(decoderConfig);
+    for (const chunk of chunks) decoder.decode(chunk);
+    await decoder.flush();
+  } finally {
+    if (encoder.state !== 'closed') encoder.close();
+    if (decoder.state !== 'closed') decoder.close();
+  }
+  if (failure) throw failure;
+  let best = 0, delay = -1;
+  for (let lag = 0; lag <= longest; lag++) {
+    let sum = 0;
+    for (let i = 0; i < burst; i++) sum += sent[i] * received[i + lag];
+    if (sum > best) { best = sum; delay = lag; }
+  }
+  const energy = sent.reduce((sum, v) => sum + v * v, 0);
+  if (best < energy / 2) throw new Error(`Could not measure the ${config.codec} encoder's delay`);
+  return delay;
 }
 
 /** The page's brand color from the Source's first frame. */
@@ -732,27 +790,39 @@ window.cuetakeRender = async ({ sources: sourceUrls, finalUrl, duration, viewpor
   const output = new MB.Output({ format: new MB.Mp4OutputFormat({ fastStart: 'reserve' }), target: new MB.StreamTarget(uploadStream(finalUrl), { chunked: true }) });
   const packets = new MB.EncodedVideoPacketSource('avc');
   output.addVideoTrack(packets, { frameRate: fps, maximumPacketCount: frameCount });
-  // AAC where the platform encodes it (macOS, Windows), else Opus; fed a second ahead of the video.
+  let failure = null, muxed = Promise.resolve();
+  // The mix is fed a second ahead of the video.
   let audio = null;
   if (voice) {
-    const codec = await MB.getFirstEncodableAudioCodec(['aac', 'opus'], { numberOfChannels: 1, sampleRate: SAMPLE_RATE, bitrate: AUDIO_BITRATE });
-    if (!codec) throw new Error('This browser encodes neither AAC nor Opus audio');
-    const source = new MB.AudioBufferSource({ codec, bitrate: AUDIO_BITRATE });
+    const { codec, config } = await audioConfig(), source = new MB.EncodedAudioPacketSource(codec);
     // Mediabunny's bound: a packet per 10 ms at most, plus a third for safety.
     output.addAudioTrack(source, { maximumPacketCount: Math.ceil(seconds * 100 * 4 / 3) + 16 });
-    audio = { codec, source, mix: await mixLines(voice, narration.volume, seconds), fed: 0 };
+    // Both in samples: the encoder's delay, and the mix, as long as the video.
+    const delay = await encoderDelay(config), mix = await mixLines(voice, narration.volume, seconds);
+    const encoder = new AudioEncoder({
+      output(chunk, meta) {
+        // Each packet is stamped by the input it encodes: the priming falls before 0, which the MP4's
+        // edit list then skips, and packets that start after the video are left out.
+        const start = samplesIn(chunk.timestamp) - delay;
+        if (start >= mix.length) return;
+        const packet = MB.EncodedPacket.fromEncodedChunk(chunk).clone({ timestamp: start / SAMPLE_RATE, duration: samplesIn(chunk.duration) / SAMPLE_RATE });
+        muxed = muxed.then(() => source.add(packet, meta)).catch(error => { failure ??= error; });
+      },
+      error(error) { failure ??= error; },
+    });
+    encoder.configure(config);
+    audio = { codec, delay, encoder, mix, fed: 0 };
   }
   const feedAudio = async until => {
     const end = Math.min(audio.mix.length, Math.round(until * SAMPLE_RATE));
     if (end <= audio.fed) return;
-    const chunk = new AudioBuffer({ length: end - audio.fed, numberOfChannels: 1, sampleRate: SAMPLE_RATE });
-    chunk.copyToChannel(audio.mix.getChannelData(0).subarray(audio.fed, end), 0);
+    const data = new AudioData({ format: 'f32-planar', sampleRate: SAMPLE_RATE, numberOfFrames: end - audio.fed, numberOfChannels: 1, timestamp: Math.round(audio.fed * 1e6 / SAMPLE_RATE), data: audio.mix.getChannelData(0).slice(audio.fed, end) });
     audio.fed = end;
-    await audio.source.add(chunk);
+    audio.encoder.encode(data); data.close();
+    while (audio.encoder.encodeQueueSize > 2) await new Promise(resolve => audio.encoder.addEventListener('dequeue', resolve, { once: true }));
   };
   await output.start();
   const { config, quantizer } = await encoderConfig(width, height, fps, quality);
-  let failure = null, muxed = Promise.resolve();
   const encoder = new VideoEncoder({
     output(chunk, meta) {
       // Chromium tags the stream sRGB; the pixels are BT.709, so label them as such.
@@ -791,13 +861,15 @@ window.cuetakeRender = async ({ sources: sourceUrls, finalUrl, duration, viewpor
       while (encoder.encodeQueueSize > 4) await new Promise(resolve => encoder.addEventListener('dequeue', resolve, { once: true }));
     }
     await encoder.flush();
+    if (failure) throw failure;
+    if (audio) { await feedAudio(Infinity); await audio.encoder.flush(); }
     await muxed;
     if (failure) throw failure;
-    if (audio) await feedAudio(Infinity);
     await output.finalize();
   } finally {
     for (const source of sources.values()) source.close();
     if (encoder.state !== 'closed') encoder.close();
+    if (audio && audio.encoder.state !== 'closed') audio.encoder.close();
   }
   return {
     width, height, frames: frameCount, sourceFrames: [...sources.values()].reduce((sum, source) => sum + source.reader.stats().decoded, 0), codec: config.codec,
@@ -810,7 +882,8 @@ window.cuetakeRender = async ({ sources: sourceUrls, finalUrl, duration, viewpor
     ...(map.spans.length && { fastForwards: map.spans.map((span, i) => ({ ...span, frames: badgeFrames[i] ?? null })) }),
     ...(scene.keycapShows.length && { keycaps: scene.keycapShows.map((show, i) => ({ t: show.t, keys: show.keys, presses: show.presses.length, frames: keycapFrames[i] ?? null })) }),
     ...(voice && {
-      audio: { codec: audio.codec, sampleRate: SAMPLE_RATE, channels: 1, bitrate: AUDIO_BITRATE },
+      // `encoderDelay`: the samples the encoder delays its input by (AAC's priming), which the MP4's edit list skips.
+      audio: { codec: audio.codec, sampleRate: SAMPLE_RATE, channels: 1, bitrate: AUDIO_BITRATE, encoderDelay: audio.delay },
       lines: voice.placed.map(({ id, start, duration }) => ({ id, start, duration })),
       // Each cue with the first and last output frame it was drawn on (null when Subtitles are not burned in).
       subtitles: cues.map((cue, i) => ({ ...cue, frames: shownFrames[i] })),

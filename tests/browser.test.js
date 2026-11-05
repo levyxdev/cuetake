@@ -761,23 +761,38 @@ function toneWav(seconds, rate = 24000) {
   return data;
 }
 
-/** The RMS level of a Final's audio in each [from, to] window of seconds. */
-async function audioLevels(browser, path, windows) {
+/**
+ * Runs `measure(samples, sampleRate, arg)` in a page over a Final's audio as the browser decodes it.
+ * `measure` is sent as source, so it can use nothing from outside itself.
+ */
+async function finalAudio(browser, path, measure, arg) {
   const page = await browser.newPage();
   try {
     await page.route('**/*', route => route.request().url().endsWith('/final.mp4')
       ? fs.readFile(path).then(body => route.fulfill({ body, contentType: 'video/mp4' }))
       : route.fulfill({ body: '<!doctype html>', contentType: 'text/html' }));
     await page.goto('https://levels.invalid/');
-    return await page.evaluate(async windows => {
+    return await page.evaluate(async ([source, arg]) => {
       const buffer = await new OfflineAudioContext(1, 1, 48000).decodeAudioData(await (await fetch('/final.mp4')).arrayBuffer());
-      const samples = buffer.getChannelData(0);
-      return windows.map(([from, to]) => {
-        const part = samples.subarray(Math.round(from * buffer.sampleRate), Math.round(to * buffer.sampleRate));
-        return Math.sqrt(part.reduce((sum, v) => sum + v * v, 0) / part.length);
-      });
-    }, windows);
+      return (0, eval)(source)(buffer.getChannelData(0), buffer.sampleRate, arg);
+    }, [measure.toString(), arg]);
   } finally { await page.close(); }
+}
+
+/** The RMS level of a Final's audio in each [from, to] window of seconds. */
+function audioLevels(browser, path, windows) {
+  return finalAudio(browser, path, (samples, rate, windows) => windows.map(([from, to]) => {
+    const part = samples.subarray(Math.round(from * rate), Math.round(to * rate));
+    return Math.sqrt(part.reduce((sum, v) => sum + v * v, 0) / part.length);
+  }), windows);
+}
+
+/** The first moment at or after each of `froms` (seconds) that a Final's audio is audible. */
+function audioOnsets(browser, path, froms) {
+  return finalAudio(browser, path, (samples, rate, froms) => froms.map(from => {
+    for (let i = Math.round(from * rate); i < samples.length; i++) if (Math.abs(samples[i]) > 0.05) return i / rate;
+    return null;
+  }), froms);
 }
 
 test('Render mixes each Line in at its start, as long as the video, and burns in its Subtitles outside the camera', async () => {
@@ -802,8 +817,13 @@ test('Render mixes each Line in at its start, as long as the video, and burns in
     ]);
     const media = await inspectFinal(outputPath, [{ id: 'a', path: join(dir, 'a.wav') }]);
     expect(media.audio).toMatchObject({ channels: 1, sampleRate: 48000 });
-    expect(media.audio.duration).toBeCloseTo(2, 1);
+    // The encoder's priming is declared, not played, and the audio ends within one AAC frame of the video.
+    expect(media.audio.duration).toBeGreaterThanOrEqual(2);
+    expect(media.audio.duration).toBeLessThan(2 + 1024 / 48000);
     expect(media.audio.decoded).toBeGreaterThan(0);
+    const [aStarts, bStarts] = await audioOnsets(browser, outputPath, [0, 1.35]);
+    expect(Math.abs(aStarts - 0.3)).toBeLessThan(0.005);
+    expect(Math.abs(bStarts - 1.4)).toBeLessThan(0.005);
     expect(media.lines).toEqual([{ id: 'a', duration: 0.5 }]);
     const [silent, first, gap, second] = await audioLevels(browser, outputPath, [[0, 0.25], [0.4, 0.7], [0.9, 1.3], [1.5, 1.7]]);
     expect(silent).toBeLessThan(0.01);
