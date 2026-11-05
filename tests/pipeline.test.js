@@ -1310,6 +1310,10 @@ test('verification warns when a window leaves the Desktop, the first window move
   expect(desktopWarnings(timeline(moved), { frames: frames(2), dropped: 0 })).toEqual([
     'At 3.00 s the App\'s first window moved or resized, to 40, 20, 1200×760 points; Render does not correct it, so leave it where the Take put it.',
   ]);
+  // The first window is the first layer-0 window to show, even when a dialog shows before it.
+  const late = [{ t: 0, shown: [{ ...appWindow, id: 3, layer: 8, width: 260, height: 266 }] }, { t: 20.9, shown: [{ ...appWindow, width: 586, height: 488 }] }];
+  expect(desktopWarnings(timeline(late), { frames: frames(2), dropped: 0 })[0]).toBe(
+    'The App\'s first window is 586×488 points, not the Desktop\'s 1200×760, so the Background shows around it: the App may limit its size; choose a viewport it can fill.');
   const small = [{ t: 0, shown: [{ ...appWindow, width: 800, height: 600 }] }];
   expect(desktopWarnings(timeline(small), { frames: frames(1), dropped: 3 })).toEqual([
     'The App\'s first window is 800×600 points, not the Desktop\'s 1200×760, so the Background shows around it: the App may limit its size; choose a viewport it can fill.',

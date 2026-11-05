@@ -43,7 +43,9 @@ const inside = (w, viewport) => w.x >= 0 && w.y >= 0 && w.x + w.width <= viewpor
  * encoder dropped. `capture` is the Tab's stats in capture.json.
  */
 export function desktopWarnings({ viewport, windows = [] }, { frames = [], dropped = 0 }) {
-  const warnings = [], first = windowsAt(windows, 0).filter(w => w.layer === 0).sort((a, b) => b.width * b.height - a.width * a.height)[0];
+  // The first window is the largest of the first layer-0 windows to show: a dialog may show before it.
+  const layer0 = state => state.shown.filter(w => w.layer === 0);
+  const warnings = [], first = layer0(windows.find(state => layer0(state).length) ?? { shown: [] }).sort((a, b) => b.width * b.height - a.width * a.height)[0];
   const same = (a, b) => a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
   if (first && !same(first, { x: 0, y: 0, ...viewport })) warnings.push(`The App's first window is ${size(first)} points, not the Desktop's ${size(viewport)}, so the Background shows around it: the App may limit its size; choose a viewport it can fill.`);
   const moved = first && windows.find(state => state.shown.some(w => w.id === first.id && !same(w, first)));

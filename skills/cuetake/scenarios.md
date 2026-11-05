@@ -136,13 +136,15 @@ On macOS a Scenario can record a desktop App instead of a page. CueTake starts t
 ```js
 export const config = {
   name: 'notes-demo',
-  app: { path: 'com.apple.TextEdit', args: ['/Users/me/demo/notes.txt'] },  // a bundle id or a .app path; args go to the App
-  viewport: { width: 1200, height: 760 },                                   // the Desktop, in points
+  // A bundle id or a .app path; args are the App's command line. These two, which any Cocoa App takes for
+  // one launch only, open an untitled document rather than the Open panel and restore no earlier windows.
+  app: { path: 'com.apple.TextEdit', args: ['-NSShowAppCentricOpenPanelInsteadOfUntitledFile', 'NO', '-ApplePersistenceIgnoreState', 'YES'] },
+  viewport: { width: 1200, height: 760 },   // the Desktop, in points
 };
 
 export async function run(d) {
-  await d.say('intro', 'Notes open where we left them.');
-  d.focus({ x: 0, y: 0, width: 600, height: 200 });                         // Desktop points, from its top-left corner
+  await d.say('intro', 'A fresh note in TextEdit.');
+  d.focus({ x: 0, y: 0, width: 600, height: 200 });   // Desktop points, from its top-left corner
   await d.at(8);
 }
 ```
@@ -150,7 +152,7 @@ export async function run(d) {
 - **Before recording, tell the user** that the Mac cannot be used until the Take ends, and that the Scenario acts on their real App, with their own login and data. CueTake also prints this when Capture starts.
 - **The App must not be running.** `record` refuses and names it; ask the user to quit it, and never quit it for them. CueTake quits the App it started when the Take ends; if the App asks to save first, `record` reports it. To record the agent's own host app, run the agent from a terminal.
 - **Permissions.** Recording needs the Screen Recording and Accessibility grants of the app CueTake runs in (the terminal, or the agent's host). `doctor` reports both under `apps` without asking for them; follow its fix, with the user's agreement.
-- **Refused for an App:** `--auth-profile` (the App starts with the login it already has), `--headed`, `capture.resolutionScale` (the Desktop records at its display's scale, 2 on a Retina display, which `record` reports under `capture`) and `prepare`. Start the App in the state the demo needs, for example by passing a document in `args`.
+- **Refused for an App:** `--auth-profile` (the App starts with the login it already has), `--headed`, `capture.resolutionScale` (the Desktop records at its display's scale, 2 on a Retina display, which `record` reports under `capture`) and `prepare`. Start the App in the state the demo needs through `args`. A sandboxed App, such as TextEdit, refuses a document passed there with a dialog; `record` then refuses too, since only a standard window fills the Desktop. A Cocoa App also reopens the windows and panels of its last session unless `args` holds `-ApplePersistenceIgnoreState YES`.
 - **What the Director does so far:** `at`, `wait`, `time`, `say`, `fastForward` and `focus`, in Desktop points. Clicking, typing and the other actions throw for now.
 - A Take of an App has no browser chrome by default (`frame.chrome: false`); a `frame.chrome` the Scenario names still applies. A window that leaves the Desktop is cut off where it does, and the first window moving or resizing is not corrected; `verify` warns about both, and about a Desktop recorded at scale 1. Menus opened from the menu bar sit outside the Desktop and are not recorded.
 

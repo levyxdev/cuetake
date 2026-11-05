@@ -62,8 +62,10 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     self.request = request
     guard CGPreflightScreenCaptureAccess() else { fail("screen-recording", "The app CueTake runs in has no Screen Recording grant; run cuetake doctor, which names it") }
     guard AXIsProcessTrusted() else { fail("accessibility", "The app CueTake runs in has no Accessibility grant; run cuetake doctor, which names it") }
+    var ready = false
     do {
       emit(["ready": try await launch()])
+      ready = true
       while let line = await lines.next() {
         if line.contains("\"start\"") { emit(["started": ["epochMs": try await start()]]) }
         if line.contains("\"stop\"") { break }
@@ -72,7 +74,8 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
       exit(0)
     } catch {
       let refusal = error as? Refusal
-      await quitApp()
+      // Before ready the Scenario has not touched the App, so one stuck on a dialog may be forced to quit.
+      await quitApp(force: !ready)
       fail(refusal?.code ?? "capture", failure ?? refusal?.message ?? "\(error)")
     }
   }
@@ -103,14 +106,20 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     let app = try await NSWorkspace.shared.openApplication(at: url, configuration: configuration)
     running = app
     let ax = AXUIElementCreateApplication(app.processIdentifier)
-    var window: AXUIElement?
+    // Only a standard window fills the Desktop: an App may show a dialog first, which the Take must not frame.
+    var window: AXUIElement?, others = 0
     for _ in 0..<300 {
       let windows = AX.windows(ax)
-      window = windows.first { AX.value($0, kAXSubroleAttribute) as? String == kAXStandardWindowSubrole } ?? windows.first
+      window = windows.first { AX.value($0, kAXSubroleAttribute) as? String == kAXStandardWindowSubrole }
+      others = windows.count
       if window != nil { break }
       try await Task.sleep(nanoseconds: 100_000_000)
     }
-    guard let window else { throw Refusal("window", "\(name) opened no window within 30 s") }
+    guard let window else {
+      throw Refusal("window", others > 0
+        ? "\(name) showed a dialog and no window within 30 s. Open it yourself, answer the dialog, quit it, then record again; an App given a document in args may not be allowed to open it."
+        : "\(name) opened no window within 30 s; open it yourself to see why, quit it, then record again.")
+    }
     AX.setFrame(window, desktop)
     app.activate()
     try await Task.sleep(nanoseconds: 500_000_000)
@@ -232,8 +241,11 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
             "size": ["width": Int(desktop.width * scale), "height": Int(desktop.height * scale)], "windows": windows, "quit": quit]
   }
 
-  /** Quits the App this Take started, closing any open menu first; true once it has quit. */
-  @discardableResult @MainActor private func quitApp() async -> Bool {
+  /**
+   * Quits the App this Take started, closing any open menu first; true once it has quit. With `force`,
+   * an App that does not quit within 5 s, as one holding a dialog open, is forced to.
+   */
+  @discardableResult @MainActor private func quitApp(force: Bool = false) async -> Bool {
     guard let app = running, !app.isTerminated else { return true }
     if tracker?.menuOpen() ?? WindowTracker(pid: app.processIdentifier, desktop: desktop).menuOpen() {
       let source = CGEventSource(stateID: .combinedSessionState)
@@ -242,6 +254,10 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     }
     app.terminate()
     for _ in 0..<50 where !app.isTerminated { try? await Task.sleep(nanoseconds: 100_000_000) }
+    if force && !app.isTerminated {
+      app.forceTerminate()
+      for _ in 0..<20 where !app.isTerminated { try? await Task.sleep(nanoseconds: 100_000_000) }
+    }
     return app.isTerminated
   }
 }
