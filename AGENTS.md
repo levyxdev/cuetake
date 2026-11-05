@@ -7,7 +7,7 @@ CueTake records browser product demos for AI agents. Use the vocabulary in `GLOS
 - Install scripts download nothing. The browser is installed only by `cuetake install-browser`, after the user agrees.
 - Keep timing and coordinate spaces explicit: Scenario boxes and the Timeline use CSS pixels; the Source uses device pixels; output dimensions are independent.
 - Check git status first. Keep product-specific Scenarios, Takes and Auth profiles outside this repository. `origin` is the public repository, `levyxdev/cuetake`.
-- `main` is what users install, since the skill is installed from it, so it matches the published package. `dev` collects work between releases. Start each issue on its own branch from `origin/dev`, open its PR against `dev`, and never push to `main` directly. A release bumps the version in `package.json`, `.claude-plugin/plugin.json` and `skills/cuetake/scripts/cuetake` on `dev`, then merges `dev` into `main` and tags it.
+- `main` is what users install, since the skill is installed from it, so it changes only in a release, run with `/release` when the user asks. Work lands on `dev`, committed directly or through a branch and a PR against `dev`. A commit that finishes an issue says `Closes #N`, otherwise `Part of #N`; the issue then gets the `on-dev` label (`docs/agents/triage-labels.md`).
 - Run `bun test tests/pipeline.test.js` for pipeline and Render changes. For Capture or Render changes, also record a short real Scenario and inspect the Final's frame metadata and cursor position.
 - Do not publish packages, push code, create releases, or start a website server unless requested.
 
