@@ -5,8 +5,8 @@
  * Each output frame is the Background (drawn once, still in output pixels), the window effects (drawn
  * every frame around the window as the camera moves it), the page, then the chrome; each popup window
  * over it the same way; then click effects and the Cursor, and outside the camera the Subtitles and
- * keycaps. Masks (masks.js) blur or cover parts of a page as it is drawn, and spotlights dim around
- * part of one over its chrome. Everything but the pages and masks is agent-written shaders, drawing code or images (ADR 0005). Each
+ * keycaps. Masks (masks.js) blur or cover parts of a page as it is drawn, and spotlights dim the windows
+ * and the Background around parts of them, all in one pass after the last window. Everything but the pages and masks is agent-written shaders, drawing code or images (ADR 0005). Each
  * Tab has its own Source (ADR 0008); tabs.js says which show at each moment.
  *
  * Spaces: camera crops are CSS pixels of the viewport, the window's, which each Tab's input is moved
@@ -108,27 +108,46 @@ void main() {
   }
   color = vec4(rgb, 1.0) * inside * uAlpha;
 }`;
-// A spotlight: everything outside its boxes dimmed, the light falling off over `uFeather` stage pixels across their edge.
+// Every spotlight showing, in one pass: the frame dimmed by `uColor.a`, and lit inside each box by its
+// weight, the light falling off over its feather in stage pixels across its edge. Each box's style is
+// its corner radius, its feather and its weight.
 const SPOTLIGHT = `#version 300 es
 precision highp float;
-uniform vec2 uRes; uniform vec3 uCam; uniform int uCount; uniform vec4 uRects[${MASK_BOXES}];
-uniform float uCorner; uniform float uFeather; uniform vec4 uColor; uniform float uAlpha;
+uniform vec2 uRes; uniform vec3 uCam; uniform int uCount; uniform vec4 uRects[${MASK_BOXES}]; uniform vec4 uStyles[${MASK_BOXES}];
+uniform vec4 uColor;
 out vec4 color;
 ${ROUNDED_BOX}
 void main() {
   vec2 pixel = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y);
   vec2 stage = (pixel - uRes * 0.5) / uCam.z + uCam.xy;
-  float d = 1e9;
+  float lit = 0.0;
   for (int i = 0; i < ${MASK_BOXES}; i++) {
     if (i >= uCount) break;
-    vec4 r = uRects[i];
-    d = min(d, roundedBox(stage, r, min(uCorner, 0.5 * min(r.z, r.w))));
+    vec4 r = uRects[i], style = uStyles[i];
+    // The light falls off across the box's edge, half inside it and half out.
+    float soft = max(style.y, 1.0 / uCam.z) * 0.5;
+    lit = max(lit, style.z * (1.0 - smoothstep(-soft, soft, roundedBox(stage, r, min(style.x, 0.5 * min(r.z, r.w))))));
   }
-  // The light falls off across the region's edge, half inside it and half out.
-  float soft = max(uFeather, 1.0 / uCam.z) * 0.5;
-  float a = uColor.a * uAlpha * smoothstep(-soft, soft, d);
+  float a = uColor.a * (1.0 - lit);
   color = vec4(uColor.rgb * a, a);
 }`;
+
+/**
+ * The spotlights showing (`{ rects, corner, feather, color, dim, opacity }`, in stage pixels) as one
+ * pass, so none dims another's region: the frame dims as much as the strongest, in its color, and each
+ * lights its boxes as far as it has eased in beside the furthest. Null when none dims.
+ */
+function spotlightPass(lights) {
+  const strongest = lights.reduce((a, b) => (b.dim * b.opacity > a.dim * a.opacity ? b : a), lights[0]);
+  if (!strongest || strongest.dim * strongest.opacity <= 0) return null;
+  const furthest = Math.max(...lights.map(light => light.opacity));
+  const boxes = mergedPast(lights.flatMap(light => light.rects.map(([x, y, width, height]) => ({ rect: { x, y, width, height }, light }))), MASK_BOXES);
+  return {
+    count: boxes.length, rects: new Float32Array(boxes.flatMap(({ rect }) => [rect.x, rect.y, rect.width, rect.height])),
+    styles: new Float32Array(boxes.flatMap(({ light }) => [light.corner, light.feather, light.opacity / furthest, 0])),
+    color: [...strongest.color, strongest.dim * strongest.opacity],
+  };
+}
 // Sprites (chrome, cursor, click effects) are premultiplied textures placed by a stage rectangle under the camera.
 const SPRITE_VERTEX = `#version 300 es
 in vec2 p;
@@ -371,10 +390,10 @@ function createCompositor(stage, brand) {
      * One frame over the Background. Under each of `views`, the camera ({ x, y, zoom }: the stage point
      * at the Final's center) at the moments the frame averages, each of `windows` is drawn in order, each
      * `{ page, pageRect, window, radius, opacity, effects, chrome: { texture, rect }, hidden, spotlights }`
-     * in stage pixels, with the window effects around it when `effects`, its blurred and covered boxes
-     * (`hidden`: `{ count, rects, styles, colors }`) drawn with the page and its `spotlights` (`{ count,
-     * rects, corner, feather, color, opacity }`) over it and its chrome, and `draw(texture, rect, opacity)` in `overlay`
-     * places sprites in stage pixels. Then each of `cursors`, `{ view, texture, rect }` at the moments
+     * in stage pixels, with the window effects around it when `effects` and its blurred and covered boxes
+     * (`hidden`: `{ count, rects, styles, colors }`) drawn with the page. Every window's `spotlights`
+     * (`{ rects, corner, feather, color, dim, opacity }`) then dim the windows and the Background together
+     * in one pass, and `draw(texture, rect, opacity)` in `overlay` places sprites in stage pixels. Then each of `cursors`, `{ view, texture, rect }` at the moments
      * the Cursor averages, within `cursorArea` in output pixels; and `screen` places sprites in output
      * pixels, outside the camera. Several views or cursors need `blurs`.
      */
@@ -383,6 +402,7 @@ function createCompositor(stage, brand) {
       gl.disable(gl.BLEND); blit(background); gl.enable(gl.BLEND);
       const place = (t, rect, opacity = 1) => { gl.bindTexture(gl.TEXTURE_2D, t); gl.uniform4f(spriteRect, ...rect); gl.uniform1f(spriteAlpha, opacity); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); };
       const sprites = ({ x, y, zoom }) => { gl.useProgram(spriteProgram.p); gl.uniform3f(spriteProgram.camera, x, y, zoom); gl.bindVertexArray(unitQuad); };
+      const spotlight = spotlightPass(windows.flatMap(w => (w.spotlights ?? []).map(light => ({ ...light, opacity: light.opacity * w.opacity }))));
       averaged(views.length, i => {
         const view = views[i], { x, y, zoom } = view;
         for (const w of windows) {
@@ -398,13 +418,12 @@ function createCompositor(stage, brand) {
           }
           bind(0, w.page); gl.bindVertexArray(fullScreen); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
           if (w.chrome) { sprites(view); place(w.chrome.texture, w.chrome.rect, w.opacity); }
-          for (const light of w.spotlights ?? []) {
-            gl.useProgram(spotlightProgram.p); gl.uniform3f(spotlightProgram.camera, x, y, zoom);
-            gl.uniform1i(spotlightProgram.uniform('uCount'), light.count); gl.uniform4fv(spotlightProgram.uniform('uRects'), light.rects);
-            gl.uniform1f(spotlightProgram.uniform('uCorner'), light.corner); gl.uniform1f(spotlightProgram.uniform('uFeather'), light.feather);
-            gl.uniform4f(spotlightProgram.uniform('uColor'), ...light.color); gl.uniform1f(spotlightProgram.uniform('uAlpha'), light.opacity * w.opacity);
-            gl.bindVertexArray(fullScreen); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-          }
+        }
+        if (spotlight) {
+          gl.useProgram(spotlightProgram.p); gl.uniform3f(spotlightProgram.camera, x, y, zoom);
+          gl.uniform1i(spotlightProgram.uniform('uCount'), spotlight.count); gl.uniform4fv(spotlightProgram.uniform('uRects'), spotlight.rects);
+          gl.uniform4fv(spotlightProgram.uniform('uStyles'), spotlight.styles); gl.uniform4f(spotlightProgram.uniform('uColor'), ...spotlight.color);
+          gl.bindVertexArray(fullScreen); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
         }
         sprites(view);
         overlay(place);
@@ -733,10 +752,9 @@ async function createScene(edit, viewport, { pointer, shapes, events, tabs, elem
         styles: new Float32Array(hidden.flatMap(({ mask }) => [mask.radius * sx, mask.effect === 'cover' ? 1 : 0, Math.max(0, Math.log2(mask.blur * devicePerCss / 2) || 0), 0])),
         colors: new Float32Array(hidden.flatMap(({ mask }) => [...(mask.effect === 'cover' ? color(mask.color) : [0, 0, 0]), 1])),
       } : null,
-      spotlights: own.filter(mask => mask.effect === 'spotlight').map(mask => {
-        const rects = mergedPast(mask.rects.map(rect => ({ rect })), MASK_BOXES);
-        return { count: rects.length, rects: new Float32Array(rects.flatMap(({ rect }) => toStage(rect))), corner: mask.radius * sx, feather: mask.feather * sx, color: [...color(mask.color), mask.dim], opacity: mask.opacity };
-      }),
+      spotlights: own.filter(mask => mask.effect === 'spotlight').map(mask => ({
+        rects: mask.rects.map(toStage), corner: mask.radius * sx, feather: mask.feather * sx, color: color(mask.color), dim: mask.dim, opacity: mask.opacity,
+      })),
     };
   };
   const cursorSprites = cursor ? await loadCursor(cursor) : {};

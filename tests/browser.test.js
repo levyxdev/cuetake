@@ -587,6 +587,41 @@ test('Render covers a masked element where it moves, blurs a fixed box past read
   } finally { await browser.close(); await fs.rm(dir, { recursive: true, force: true }); }
 }, 60_000);
 
+test('Render dims every window around the spotlights showing together, popups too, and lights each one\'s region', async () => {
+  const dir = await fs.mkdtemp(join(tmpdir(), 'cuetake-spotlights-'));
+  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
+  try {
+    const sources = [join(dir, 'source-0.webm'), join(dir, 'source-1.webm')], outputPath = join(dir, 'final.mp4');
+    // Each Source is black with a red square: at 240, 100 on the page, 20 CSS px wide, and at 120, 50 in
+    // the popup, 10 wide. The popup sits centered over the page, at 80, 60, so its square is at 200, 110.
+    for (const path of sources) await fs.writeFile(path, await syntheticSource(browser, 1));
+    const timeline = { viewport: { width: 320, height: 240 }, duration: 0.9, events: [{ type: 'front', t: 0, tab: 1 }],
+      tabs: [{ id: 0, opener: null, viewport: { width: 320, height: 240 } }, { id: 1, opener: 0, viewport: { width: 160, height: 120 } }] };
+    const light = { effect: 'spotlight', start: 0.4, ease: 0, feather: 0, dim: 0.5 };
+    const edit = bare({ masks: [
+      { effect: 'cover', box: { x: 20, y: 20, width: 40, height: 40 }, color: '#0000ff', padding: 0 },
+      { effect: 'cover', box: { x: 20, y: 180, width: 40, height: 40 }, color: '#0000ff', padding: 0 },
+      { ...light, box: { x: 20, y: 20, width: 40, height: 40 } },
+      { ...light, box: { x: 236, y: 96, width: 28, height: 28 } },
+    ] });
+    await renderFinal({ sources, finalPath: outputPath, timeline, ...forRender(edit, dir) });
+    const at = [[40, 40], [250, 110], [40, 200], [205, 115]];
+    const [cover, square, other, popup] = await pixelsAt(browser, await extractFrame(outputPath, 0.3), at);
+    expect(cover[2]).toBeGreaterThan(200);
+    expect(square[0]).toBeGreaterThan(180);
+    expect(other[2]).toBeGreaterThan(200);
+    expect(popup[0]).toBeGreaterThan(180);
+    // Both spotlights light their own region; neither dims the other's. The rest dims, the popup with it.
+    const [litCover, litSquare, dimCover, dimPopup] = await pixelsAt(browser, await extractFrame(outputPath, 0.7), at);
+    expect(litCover[2]).toBeGreaterThan(200);
+    expect(litSquare[0]).toBeGreaterThan(180);
+    for (const [value] of [[dimCover[2]], [dimPopup[0]]]) {
+      expect(value).toBeGreaterThan(90);
+      expect(value).toBeLessThan(170);
+    }
+  } finally { await browser.close(); await fs.rm(dir, { recursive: true, force: true }); }
+}, 60_000);
+
 test('Render draws the built-in cursor at the pointer and a spark around each click', async () => {
   const dir = await fs.mkdtemp(join(tmpdir(), 'cuetake-cursor-'));
   const browser = await chromium.launch({ headless: true, channel: 'chromium' });
