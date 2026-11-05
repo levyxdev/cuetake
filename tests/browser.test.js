@@ -134,7 +134,8 @@ test('probe records the cursor shape the page asks for, as the browser resolves 
 
 /**
  * Serves `pages` (path → HTML, with PORT replaced) on every loopback name, so 127.0.0.1, localhost and
- * 127.0.0.2 are three sites and Chromium puts each one's iframes in its own process.
+ * checkout.localhost are three sites and Chromium puts each one's iframes in its own process. Chromium
+ * resolves every *.localhost name to loopback itself; 127.0.0.2 would not do, as macOS routes only 127.0.0.1.
  */
 async function sites(pages) {
   const server = createServer((request, response) => {
@@ -150,8 +151,8 @@ test('probe follows input inside cross-origin, nested, late and removed iframes,
   const server = await sites({
     '/': `<body style="margin:0;height:2000px"><div style="height:150px"></div>
       <iframe id="outer" src="http://localhost:PORT/outer" style="border:5px solid;padding:3px;width:400px;height:300px;margin-left:60px"></iframe>
-      <div style="position:fixed;left:50%;top:70%;transform:translate(-50%,-50%)"><iframe id="modal" src="http://127.0.0.2:PORT/checkout" style="border:0;width:200px;height:120px"></iframe></div></body>`,
-    '/outer': '<body style="margin:0;height:1000px"><div style="height:40px"></div><iframe id="inner" src="http://127.0.0.2:PORT/checkout" style="border:0;width:300px;height:150px;margin-left:30px"></iframe></body>',
+      <div style="position:fixed;left:50%;top:70%;transform:translate(-50%,-50%)"><iframe id="modal" src="http://checkout.localhost:PORT/checkout" style="border:0;width:200px;height:120px"></iframe></div></body>`,
+    '/outer': '<body style="margin:0;height:1000px"><div style="height:40px"></div><iframe id="inner" src="http://checkout.localhost:PORT/checkout" style="border:0;width:300px;height:150px;margin-left:30px"></iframe></body>',
     '/checkout': checkout,
   });
   const browser = await chromium.launch({ headless: true, channel: 'chromium' });
@@ -249,11 +250,12 @@ test('probe scales input inside a scaled iframe, and notes one that is rotated',
     expect(scaled.x).toBeCloseTo(small.x + 5, 0);
     expect(scaled.y).toBeCloseTo(small.y + 5, 0);
     for (const key of ['x', 'y', 'width', 'height']) expect(scaled.box[key]).toBeCloseTo(small[key], 0);
-    // Placed as if only scaled, so near but not exactly where it landed, and noted with both keys of Meta+K.
+    // Placed as if only scaled, so near but not exactly where it landed, and noted with both keys of Meta+K
+    // (Meta starts the typing, K is the Shortcut). The two often share a millisecond, which is noted once.
     expect(Math.hypot(rotated.x - (tilted.x + tilted.width / 2), rotated.y - (tilted.y + tilted.height / 2))).toBeLessThan(15);
-    expect(timeline.turned).toHaveLength(3);
-    expect(timeline.turned[0]).toBe(rotated.t);
-    expect(timeline.turned).toContain(timeline.events.find(e => e.type === 'shortcut').t);
+    const keys = timeline.events.filter(e => e.type === 'type' || e.type === 'shortcut').map(e => e.t);
+    expect(keys).toHaveLength(2);
+    expect(timeline.turned).toEqual([...new Set([rotated.t, ...keys])]);
     expect(timeline.unplaced).toEqual([]);
   } finally { await browser.close(); server.close(); }
 }, 30_000);
@@ -268,7 +270,7 @@ test('the Director lands inside bordered, nested and scaled cross-origin iframes
       <iframe id="outer" src="http://localhost:PORT/outer" style="border:6px solid;padding:4px;width:300px;height:200px;margin:20px"></iframe>
       <iframe id="small" src="http://localhost:PORT/form" style="border:4px solid;width:400px;height:200px;transform:scale(0.5);transform-origin:0 0;position:absolute;left:20px;top:300px"></iframe>
       <iframe id="zoomed" src="http://localhost:PORT/form" style="border:4px solid;width:400px;height:200px;scale:0.5;transform-origin:0 0;position:absolute;left:300px;top:300px"></iframe></body>`,
-    '/outer': '<body style="margin:0"><iframe id="inner" src="http://127.0.0.2:PORT/form" style="border:2px solid;padding:5px;width:220px;height:120px;margin:10px"></iframe></body>',
+    '/outer': '<body style="margin:0"><iframe id="inner" src="http://checkout.localhost:PORT/form" style="border:2px solid;padding:5px;width:220px;height:120px;margin:10px"></iframe></body>',
     '/form': form,
   });
   const browser = await chromium.launch({ headless: true, channel: 'chromium' });
