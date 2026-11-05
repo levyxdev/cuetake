@@ -59,7 +59,7 @@ export function merge(base, over) {
 
 /** A complete Edit: the defaults under whatever `edit` names. */
 export function withDefaults(edit) {
-  return merge({ schemaVersion: EDIT_VERSION, ...DEFAULT_STYLE, output: { ...DEFAULT_STYLE.output, fps: 60 }, camera: { ...DEFAULT_STYLE.camera, targets: [] }, tabs: { ...DEFAULT_STYLE.tabs, placement: [] }, shortcuts: [], fastForward: [], narration: { volume: 1, lines: [] } }, edit);
+  return merge({ schemaVersion: EDIT_VERSION, ...DEFAULT_STYLE, output: { ...DEFAULT_STYLE.output, fps: 60 }, camera: { ...DEFAULT_STYLE.camera, targets: [] }, tabs: { ...DEFAULT_STYLE.tabs, placement: [] }, shortcuts: [], fastForward: [], masks: [], narration: { volume: 1, lines: [] } }, edit);
 }
 
 /**
@@ -121,7 +121,8 @@ export function addressBar(config, timeline) {
  * The first Edit of a Take. Each Line starts where the Scenario said it (`d.say`); its text, audio and
  * word timings stay in the Take's Narration, since they change only with new audio. The Shortcuts the
  * Timeline recorded are the ones shown, so one can be relabeled or removed without recording again, and
- * so are the waits the Scenario fast-forwarded (`d.fastForward`), so one can be retimed (time-map.js).
+ * so are the waits the Scenario fast-forwarded (`d.fastForward`), so one can be retimed (time-map.js),
+ * and the elements it masked (`d.mask`), so a mask can be retimed, restyled or removed (masks.js).
  */
 export function createEdit(config, timeline, focus, wide = []) {
   return withDefaults({
@@ -131,6 +132,7 @@ export function createEdit(config, timeline, focus, wide = []) {
     camera: { ...config.camera, targets: cameraTargets(timeline, focus, wide, config.camera) }, tabs: config.tabs,
     shortcuts: timeline.events.filter(event => event.type === 'shortcut').map(({ t, keys }) => ({ t, keys })),
     fastForward: timeline.events.filter(event => event.type === 'fastForward').map(({ t, end, rate }) => ({ start: t, end, rate })),
+    masks: timeline.events.filter(event => event.type === 'mask').map(({ type, t, end, effect, element, ...params }) => ({ effect, element, start: t, ...(end !== null && end !== undefined && { end }), ...params })),
     narration: { lines: timeline.events.filter(event => event.type === 'say').map(event => ({ id: event.id, start: event.t })) },
   });
 }

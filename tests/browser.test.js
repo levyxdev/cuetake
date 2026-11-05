@@ -501,6 +501,92 @@ test('the Director marks a fast-forwarded wait, and refuses Lines and fast-forwa
   } finally { await browser.close(); }
 }, 30_000);
 
+test('the Director masks every element a locator matches, following it as the page scrolls, inside iframes and when it is replaced', async () => {
+  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
+  try {
+    const page = await browser.newPage({ viewport: { width: 640, height: 480 } });
+    await page.setContent(`<div style="height:2000px"><input data-testid="email" style="position:absolute;left:100px;top:300px;width:200px;height:30px;margin:0;border:0;padding:0">
+      <iframe srcdoc="<p id=card style='margin:0;position:absolute;left:10px;top:20px;width:50px;height:10px'>4242</p>" style="position:absolute;left:300px;top:100px;width:200px;height:100px;border:0"></iframe></div>`);
+    const startedAtMs = Date.now();
+    await installProbe(page);
+    const notes = { focus: [], wide: [], said: [], forwarded: [], pointer: [] }, ran = new AbortController();
+    const d = createDirector(followTabs(page), { startedAt: startedAtMs, fps: 60, signal: ran.signal }, notes);
+    await expect(d.mask(d.page.getByTestId('email'), { effect: 'pixelate' })).rejects.toThrow("d.mask needs effect blur, cover or spotlight, not 'pixelate'");
+    const email = await d.mask(d.page.getByTestId('email'));
+    await d.mask(d.page.frameLocator('iframe').locator('#card'), { effect: 'cover', color: '#ff0000' });
+    await d.wait(200);
+    await page.evaluate(() => scrollTo(0, 100));
+    await d.wait(300);
+    email.end();
+    // The page replaces the field with a new one, lower down; the mask follows the new one.
+    await page.evaluate(() => { const old = document.querySelector('[data-testid=email]'), next = old.cloneNode(); next.style.top = '500px'; old.replaceWith(next); });
+    await d.wait(600);
+    ran.abort();
+    const spotlight = await d.mask(d.page.getByTestId('email'), { effect: 'spotlight' });
+    expect(spotlight.end).toBeFunction();
+    expect(notes.elements.slice(0, 2)).toEqual([{ id: 0, tab: 0, name: "getByTestId('email')" }, { id: 1, tab: 0, name: "locator('iframe').contentFrame().locator('#card')" }]);
+    // Made before the Director first waited, a blur or cover masks from the start of Capture; a spotlight from when it was made.
+    expect(notes.masks.slice(0, 2)).toEqual([{ t: 0, end: expect.any(Number), element: 0, effect: 'blur' }, { t: 0, end: null, element: 1, effect: 'cover', color: '#ff0000' }]);
+    expect(notes.masks[0].end).toBeGreaterThan(0.45);
+    expect(notes.masks[2].t).toBeGreaterThan(1);
+    const { watched } = await collectTimeline(page, startedAtMs);
+    const ys = id => watched.find(w => w.id === id).boxes.map(([, ...boxes]) => boxes.map(box => box.join(' ')).join());
+    expect(ys(0)[0]).toBe('100 300 200 30');
+    expect(ys(0)).toContain('100 200 200 30');
+    expect(ys(0).at(-1)).toBe('100 400 200 30');
+    // The card is placed through its iframe, and moves up with it as the page scrolls.
+    expect(ys(1)[0]).toBe('310 120 50 10');
+    expect(ys(1).at(-1)).toBe('310 20 50 10');
+  } finally { await browser.close(); }
+}, 30_000);
+
+test('Render covers a masked element where it moves, blurs a fixed box past reading, spotlights a box, and Previews show them', async () => {
+  const dir = await fs.mkdtemp(join(tmpdir(), 'cuetake-masks-'));
+  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
+  try {
+    const sourcePath = join(dir, 'source.webm'), outputPath = join(dir, 'final.mp4');
+    // A black page with a red square at 240, 100, 20 CSS px wide.
+    await fs.writeFile(sourcePath, await syntheticSource(browser, 1.6));
+    const elements = [{ id: 0, tab: 0, name: "getByTestId('email')", boxes: [[0, [20, 150, 40, 40]], [0.7, [100, 150, 40, 40]]] }];
+    const timeline = { viewport: { width: 320, height: 240 }, duration: 1.5, elements };
+    const edit = bare({ masks: [
+      { effect: 'cover', element: 0, color: '#0000ff', padding: 0 },
+      { effect: 'blur', box: { x: 236, y: 96, width: 28, height: 28 }, end: 0.6 },
+      { effect: 'spotlight', box: { x: 230, y: 90, width: 40, height: 40 }, start: 1.2, ease: 0, feather: 0, dim: 0.5 },
+    ] });
+    const render = await renderFinal({ sources: [sourcePath], finalPath: outputPath, timeline, ...forRender(edit, dir) });
+    expect(render.masks).toEqual([
+      { effect: 'cover', element: 0, start: 0, end: 1.5, frames: [0, 44] },
+      { effect: 'blur', box: { x: 236, y: 96, width: 28, height: 28 }, start: 0, end: 0.6, frames: [0, 17] },
+      { effect: 'spotlight', box: { x: 230, y: 90, width: 40, height: 40 }, start: 1.2, end: 1.5, frames: [36, 44] },
+    ]);
+    // The cover sits on the element, and the red square's center is blurred into the black around it.
+    const [covered, left, square] = await pixelsAt(browser, await extractFrame(outputPath, 0.3), [[40, 170], [120, 170], [250, 110]]);
+    expect(covered[2]).toBeGreaterThan(200);
+    expect(Math.max(...left)).toBeLessThan(40);
+    expect(square[0]).toBeGreaterThan(15);
+    expect(square[0]).toBeLessThan(150);
+    // After the element moves the cover follows it, and the blur has ended.
+    const [moved, gone, sharp] = await pixelsAt(browser, await extractFrame(outputPath, 1), [[120, 170], [40, 170], [250, 110]]);
+    expect(moved[2]).toBeGreaterThan(200);
+    expect(Math.max(...gone)).toBeLessThan(40);
+    expect(sharp[0]).toBeGreaterThan(180);
+    // The spotlight dims the cover outside its box, and leaves the square inside it.
+    const [lit, dimmed] = await pixelsAt(browser, await extractFrame(outputPath, 1.35), [[250, 110], [120, 170]]);
+    expect(lit[0]).toBeGreaterThan(180);
+    expect(dimmed[2]).toBeGreaterThan(90);
+    expect(dimmed[2]).toBeLessThan(170);
+    // A Preview shows the masks as the Final does.
+    const { files, tiles } = previewOf(dir, [['current', edit]]);
+    const preview = await composePreview({ sources: [sourcePath], timeline, tiles, files, at: 0.3 });
+    const [previewed] = await pixelsAt(browser, preview, [[40, 170]]);
+    expect(previewed[2]).toBeGreaterThan(200);
+    // A mask Render cannot draw stops it, naming the mask.
+    await expect(renderFinal({ sources: [sourcePath], finalPath: outputPath, timeline, ...forRender(bare({ masks: [{ effect: 'blur', element: 4 }] }), dir) }))
+      .rejects.toThrow('The masks cannot be drawn: Mask 0 (blur) follows element 4, which the Timeline does not record');
+  } finally { await browser.close(); await fs.rm(dir, { recursive: true, force: true }); }
+}, 60_000);
+
 test('Render draws the built-in cursor at the pointer and a spark around each click', async () => {
   const dir = await fs.mkdtemp(join(tmpdir(), 'cuetake-cursor-'));
   const browser = await chromium.launch({ headless: true, channel: 'chromium' });

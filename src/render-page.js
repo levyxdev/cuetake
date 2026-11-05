@@ -5,7 +5,8 @@
  * Each output frame is the Background (drawn once, still in output pixels), the window effects (drawn
  * every frame around the window as the camera moves it), the page, then the chrome; each popup window
  * over it the same way; then click effects and the Cursor, and outside the camera the Subtitles and
- * keycaps. Everything but the pages is agent-written shaders, drawing code or images (ADR 0005). Each
+ * keycaps. Masks (masks.js) blur or cover parts of a page as it is drawn, and spotlights dim around
+ * part of one over its chrome. Everything but the pages and masks is agent-written shaders, drawing code or images (ADR 0005). Each
  * Tab has its own Source (ADR 0008); tabs.js says which show at each moment.
  *
  * Spaces: camera crops are CSS pixels of the viewport, the window's, which each Tab's input is moved
@@ -26,6 +27,7 @@ import { keycapTrack } from '/shortcuts.js';
 import { badgeAt, linesInFinal, retimed, timeMap } from '/time-map.js';
 import { inWindow, tabTrack, windowMaps } from '/tabs.js';
 import { cropAt, exposure, moments, shutterOf } from '/shutter.js';
+import { mergedPast, maskProblems, maskTrack } from '/masks.js';
 
 const VERTEX = `#version 300 es
 in vec2 p; void main() { gl_Position = vec4(p, 0, 1); }`;
@@ -62,22 +64,70 @@ const BLIT = `#version 300 es
 precision highp float;
 uniform sampler2D uImage; uniform vec2 uRes; uniform float uAlpha; out vec4 color;
 void main() { color = texture(uImage, gl_FragCoord.xy / uRes) * uAlpha; }`;
-// A page inside its window's rounded rectangle, below the chrome, under the camera.
+// Rounded boxes in stage pixels, shared by the page and the spotlight.
+const ROUNDED_BOX = `
+float roundedBox(vec2 p, vec4 rect, float r) {
+  vec2 q = abs(p - rect.xy - rect.zw * 0.5) - (rect.zw * 0.5 - r);
+  return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+}`;
+/** How many boxes one pass of the page or a spotlight takes; more are merged into the last (masks.js). */
+const MASK_BOXES = 32;
+// A page inside its window's rounded rectangle, below the chrome, under the camera. Its blurred and
+// covered masks are drawn with it, replacing the page where they sit, so a page fading in or out never
+// shows what they hide. Each hidden box has a style: its corner radius, 0 to blur or 1 to cover, and
+// the blur's mip level; covers have a color.
 const PAGE = `#version 300 es
 precision highp float;
 uniform vec2 uRes; uniform vec3 uCam; uniform vec4 uPage; uniform vec4 uWindow; uniform float uRadius; uniform float uAlpha;
 uniform sampler2D uSource;
+uniform int uHidden; uniform vec4 uHideRect[${MASK_BOXES}]; uniform vec4 uHideStyle[${MASK_BOXES}]; uniform vec4 uHideColor[${MASK_BOXES}];
 out vec4 color;
-float roundedBox(vec2 p, vec4 rect, float r) {
-  vec2 q = abs(p - rect.xy - rect.zw * 0.5) - (rect.zw * 0.5 - r);
-  return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+${ROUNDED_BOX}
+// A Gaussian over 7×7 taps of a mip level, two taps to a standard deviation: unreadable, and cheap at any size.
+vec3 blurred(vec2 uv, float lod) {
+  vec2 step = exp2(lod) / vec2(textureSize(uSource, 0));
+  vec3 sum = vec3(0.0); float total = 0.0;
+  for (int i = -3; i <= 3; i++) for (int j = -3; j <= 3; j++) {
+    float w = exp(-float(i * i + j * j) / 8.0);
+    sum += textureLod(uSource, clamp(uv + vec2(i, j) * step, 0.0, 1.0), lod).rgb * w; total += w;
+  }
+  return sum / total;
 }
 void main() {
   vec2 pixel = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y);
   vec2 stage = (pixel - uRes * 0.5) / uCam.z + uCam.xy;
   float inside = clamp(0.5 - roundedBox(stage, uWindow, uRadius) * uCam.z, 0.0, 1.0);
   if (inside <= 0.0 || stage.y < uPage.y) discard;
-  color = vec4(texture(uSource, clamp((stage - uPage.xy) / uPage.zw, 0.0, 1.0)).rgb, 1.0) * inside * uAlpha;
+  vec2 uv = clamp((stage - uPage.xy) / uPage.zw, 0.0, 1.0);
+  vec3 rgb = texture(uSource, uv).rgb;
+  for (int i = 0; i < ${MASK_BOXES}; i++) {
+    if (i >= uHidden) break;
+    vec4 r = uHideRect[i], style = uHideStyle[i];
+    float hidden = clamp(0.5 - roundedBox(stage, r, min(style.x, 0.5 * min(r.z, r.w))) * uCam.z, 0.0, 1.0);
+    if (hidden > 0.0) rgb = mix(rgb, style.y > 0.5 ? uHideColor[i].rgb : blurred(uv, style.z), hidden);
+  }
+  color = vec4(rgb, 1.0) * inside * uAlpha;
+}`;
+// A spotlight: everything outside its boxes dimmed, the light falling off over `uFeather` stage pixels across their edge.
+const SPOTLIGHT = `#version 300 es
+precision highp float;
+uniform vec2 uRes; uniform vec3 uCam; uniform int uCount; uniform vec4 uRects[${MASK_BOXES}];
+uniform float uCorner; uniform float uFeather; uniform vec4 uColor; uniform float uAlpha;
+out vec4 color;
+${ROUNDED_BOX}
+void main() {
+  vec2 pixel = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y);
+  vec2 stage = (pixel - uRes * 0.5) / uCam.z + uCam.xy;
+  float d = 1e9;
+  for (int i = 0; i < ${MASK_BOXES}; i++) {
+    if (i >= uCount) break;
+    vec4 r = uRects[i];
+    d = min(d, roundedBox(stage, r, min(uCorner, 0.5 * min(r.z, r.w))));
+  }
+  // The light falls off across the region's edge, half inside it and half out.
+  float soft = max(uFeather, 1.0 / uCam.z) * 0.5;
+  float a = uColor.a * uAlpha * smoothstep(-soft, soft, d);
+  color = vec4(uColor.rgb * a, a);
 }`;
 // Sprites (chrome, cursor, click effects) are premultiplied textures placed by a stage rectangle under the camera.
 const SPRITE_VERTEX = `#version 300 es
@@ -185,7 +235,7 @@ function createCompositor(stage, brand) {
   gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
   gl.viewport(0, 0, width, height);
 
-  const pageProgram = program(VERTEX, PAGE);
+  const pageProgram = program(VERTEX, PAGE), spotlightProgram = program(VERTEX, SPOTLIGHT);
   const blitProgram = program(VERTEX, BLIT);
   const spriteProgram = program(SPRITE_VERTEX, SPRITE_FRAGMENT), spriteRect = spriteProgram.uniform('uRect'), spriteAlpha = spriteProgram.uniform('uAlpha');
 
@@ -320,8 +370,10 @@ function createCompositor(stage, brand) {
     /**
      * One frame over the Background. Under each of `views`, the camera ({ x, y, zoom }: the stage point
      * at the Final's center) at the moments the frame averages, each of `windows` is drawn in order, each
-     * `{ page, pageRect, window, radius, opacity, effects, chrome: { texture, rect } }` in stage pixels,
-     * with the window effects around it when `effects`, and `draw(texture, rect, opacity)` in `overlay`
+     * `{ page, pageRect, window, radius, opacity, effects, chrome: { texture, rect }, hidden, spotlights }`
+     * in stage pixels, with the window effects around it when `effects`, its blurred and covered boxes
+     * (`hidden`: `{ count, rects, styles, colors }`) drawn with the page and its `spotlights` (`{ count,
+     * rects, corner, feather, color, opacity }`) over it and its chrome, and `draw(texture, rect, opacity)` in `overlay`
      * places sprites in stage pixels. Then each of `cursors`, `{ view, texture, rect }` at the moments
      * the Cursor averages, within `cursorArea` in output pixels; and `screen` places sprites in output
      * pixels, outside the camera. Several views or cursors need `blurs`.
@@ -340,8 +392,19 @@ function createCompositor(stage, brand) {
           gl.uniform4f(pageProgram.uniform('uPage'), w.pageRect.x, w.pageRect.y, w.pageRect.w, w.pageRect.h);
           gl.uniform4f(pageProgram.uniform('uWindow'), w.window.x, w.window.y, w.window.w, w.window.h);
           gl.uniform1f(pageProgram.uniform('uRadius'), w.radius); gl.uniform1f(pageProgram.uniform('uAlpha'), w.opacity);
+          gl.uniform1i(pageProgram.uniform('uHidden'), w.hidden?.count ?? 0);
+          if (w.hidden?.count) {
+            gl.uniform4fv(pageProgram.uniform('uHideRect'), w.hidden.rects); gl.uniform4fv(pageProgram.uniform('uHideStyle'), w.hidden.styles); gl.uniform4fv(pageProgram.uniform('uHideColor'), w.hidden.colors);
+          }
           bind(0, w.page); gl.bindVertexArray(fullScreen); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
           if (w.chrome) { sprites(view); place(w.chrome.texture, w.chrome.rect, w.opacity); }
+          for (const light of w.spotlights ?? []) {
+            gl.useProgram(spotlightProgram.p); gl.uniform3f(spotlightProgram.camera, x, y, zoom);
+            gl.uniform1i(spotlightProgram.uniform('uCount'), light.count); gl.uniform4fv(spotlightProgram.uniform('uRects'), light.rects);
+            gl.uniform1f(spotlightProgram.uniform('uCorner'), light.corner); gl.uniform1f(spotlightProgram.uniform('uFeather'), light.feather);
+            gl.uniform4f(spotlightProgram.uniform('uColor'), ...light.color); gl.uniform1f(spotlightProgram.uniform('uAlpha'), light.opacity * w.opacity);
+            gl.bindVertexArray(fullScreen); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+          }
         }
         sprites(view);
         overlay(place);
@@ -602,12 +665,16 @@ async function encoderConfig(width, height, fps, quality) {
 
 /**
  * Everything Render draws for one Edit (as forRender in styles.js serves it). `timeline` holds the
- * pointer path, cursor shapes, events and Tabs; `sizes` maps each Tab to its Source's size. `firstFrame`
+ * pointer path, cursor shapes, events, Tabs and the boxes of masked elements; `sizes` maps each Tab to its Source's size. `firstFrame`
  * is the first Tab's first frame: Background layers see it, and it picks the brand color. `map` is the
  * Take's time map. Each Tab's input is moved into the window's CSS pixels by where its popup sits.
  */
-async function createScene(edit, viewport, { pointer, shapes, events, tabs }, sizes, firstFrame, cues, map) {
+async function createScene(edit, viewport, { pointer, shapes, events, tabs, elements = [] }, sizes, firstFrame, cues, map) {
   const { camera, cursor, clickEffect, keycaps, shortcuts, frame, subtitles, fastForwardBadge } = edit;
+  // A mask Render cannot draw would show what it hides, so it stops the Render.
+  const maskIssues = maskProblems(edit.masks, elements, tabs.map(tab => tab.id));
+  if (maskIssues.length) throw new Error(`The masks cannot be drawn: ${maskIssues.join('; ')}`);
+  const masks = maskTrack(edit.masks, elements, map);
   const chrome = frame.chrome ? await loadChrome(frame.chrome, viewport.width) : null;
   const stage = layout(edit, viewport, chrome?.height ?? 0);
   const compositor = createCompositor(stage, brandOf(firstFrame));
@@ -646,6 +713,30 @@ async function createScene(edit, viewport, { pointer, shapes, events, tabs }, si
     return {
       page: pages.get(tab), pageRect: { x: window.x, y: window.y + top, w: window.w, h: window.h - top }, window, radius: stage.radius * m.scale * scale, opacity, effects,
       chrome: chrome && { texture: chromeFor(width, url), rect: [window.x, window.y, window.w, top] },
+    };
+  };
+  /**
+   * A window with the masks on its Tab (`shown`, maskTrack's) in stage pixels: blurs and covers hidden
+   * with its page, a blur at the mip level of its strength in the Tab's Source, and its spotlights.
+   */
+  const masked = (w, tab, now) => {
+    const own = now.filter(mask => mask.tab === tab);
+    if (!own.length) return w;
+    const { width, height } = byId.get(tab).viewport, sx = w.pageRect.w / width, sy = w.pageRect.h / height, devicePerCss = sizes.get(tab).width / width;
+    const toStage = r => [w.pageRect.x + r.x * sx, w.pageRect.y + r.y * sy, r.width * sx, r.height * sy];
+    const hidden = mergedPast(own.filter(mask => mask.effect !== 'spotlight').flatMap(mask => mask.rects.map(rect => ({ rect, mask }))), MASK_BOXES);
+    const color = value => uniformOf(value)?.[1] ?? [0, 0, 0];
+    return {
+      ...w, masks: own.map(mask => mask.index),
+      hidden: hidden.length ? {
+        count: hidden.length, rects: new Float32Array(hidden.flatMap(({ rect }) => toStage(rect))),
+        styles: new Float32Array(hidden.flatMap(({ mask }) => [mask.radius * sx, mask.effect === 'cover' ? 1 : 0, Math.max(0, Math.log2(mask.blur * devicePerCss / 2) || 0), 0])),
+        colors: new Float32Array(hidden.flatMap(({ mask }) => [...(mask.effect === 'cover' ? color(mask.color) : [0, 0, 0]), 1])),
+      } : null,
+      spotlights: own.filter(mask => mask.effect === 'spotlight').map(mask => {
+        const rects = mergedPast(mask.rects.map(rect => ({ rect })), MASK_BOXES);
+        return { count: rects.length, rects: new Float32Array(rects.flatMap(({ rect }) => toStage(rect))), corner: mask.radius * sx, feather: mask.feather * sx, color: [...color(mask.color), mask.dim], opacity: mask.opacity };
+      }),
     };
   };
   const cursorSprites = cursor ? await loadCursor(cursor) : {};
@@ -697,7 +788,8 @@ async function createScene(edit, viewport, { pointer, shapes, events, tabs }, si
     /**
      * Draws Final time `t` with the camera showing `camera(time)`, a viewport rectangle in CSS pixels at
      * any Final time; returns the index of the cue it shows, or -1, the keycap show, or null, the
-     * fast-forward badge, or null, and how many moments the camera and the Cursor averaged (`averaged`).
+     * fast-forward badge, or null, the indexes of the masks it drew, and how many moments the camera
+     * and the Cursor averaged (`averaged`).
      *
      * Motion blur: over the frame's exposure (shutter.js) the window and what moves with it are composed
      * under the camera at several moments, and the Cursor at several points of its path, each one moment
@@ -711,8 +803,9 @@ async function createScene(edit, viewport, { pointer, shapes, events, tabs }, si
       const cursorEnd = cursorAt(t, view), cursorStart = span && cursorEnd && cursorAt(span.start, startView);
       const cursors = moments(t, cursorStart ? span : null, cursorStart ? apart(onScreen(cursorStart.tip, startView), onScreen(cursorEnd.tip, view)) : 0, spacing)
         .map(time => time === t ? cursorEnd : cursorAt(time, viewAt(time))).filter(Boolean);
-      // The window's effects are drawn once, under the tab it shows first.
-      const windows = shownTabs.at(t).filter(({ tab }) => pages.has(tab)).map((shownTab, i) => windowOf(shownTab, source, i === 0 || shownTab.popup));
+      // The window's effects are drawn once, under the tab it shows first. Each window carries the masks on its Tab.
+      const maskedNow = masks.at(t);
+      const windows = shownTabs.at(t).filter(({ tab }) => pages.has(tab)).map((shownTab, i) => masked(windowOf(shownTab, source, i === 0 || shownTab.popup), shownTab.tab, maskedNow));
       const cue = subtitleDrawing ? cues.findIndex(c => t >= c.start && t < c.end) : -1;
       if (cue >= 0 && cue !== shown) subtitleTexture = compositor.sprite(subtitleDrawing.canvas(stage.width, stage.height, { rows: cues[cue].rows }), subtitleTexture, false);
       shown = cue;
@@ -737,7 +830,7 @@ async function createScene(edit, viewport, { pointer, shapes, events, tabs }, si
         if (keycap) draw(keycapTexture, [0, keycap.rise * unit, stage.width, stage.height], keycap.opacity);
         if (badge) draw(badgeTexture, [0, 0, stage.width, stage.height], badge.opacity);
       } : null);
-      return { cue, keycap, badge, averaged: { camera: views.length, cursor: cursors.length } };
+      return { cue, keycap, badge, masks: [...new Set(windows.flatMap(w => w.masks ?? []))], averaged: { camera: views.length, cursor: cursors.length } };
     },
   };
 }
@@ -779,7 +872,7 @@ async function openSources(sources, tabs) {
   return opened;
 }
 
-window.cuetakeRender = async ({ sources: sourceUrls, finalUrl, duration, viewport, pointer, shapes, events, tabs, edit, narration }) => {
+window.cuetakeRender = async ({ sources: sourceUrls, finalUrl, duration, viewport, pointer, shapes, events, tabs, elements, edit, narration }) => {
   const { quality, fps } = edit.output;
   const { width, height } = outputSize(edit);
   const started = performance.now();
@@ -835,10 +928,10 @@ window.cuetakeRender = async ({ sources: sourceUrls, finalUrl, duration, viewpor
   });
   encoder.configure(config);
 
-  const cues = voice?.cues ?? [], shownFrames = cues.map(() => null), keycapFrames = [], badgeFrames = [];
+  const cues = voice?.cues ?? [], shownFrames = cues.map(() => null), keycapFrames = [], badgeFrames = [], maskFrames = [];
   const sizes = new Map([...sources].map(([tab, source]) => [tab, source.size]));
   const recorded = tabs.filter(tab => sources.has(tab.id)), uploaded = new Map();
-  const scene = await createScene(edit, viewport, { pointer, shapes, events, tabs: recorded }, sizes, sources.get(recorded[0].id).first, cues, map), { compositor } = scene;
+  const scene = await createScene(edit, viewport, { pointer, shapes, events, tabs: recorded, elements }, sizes, sources.get(recorded[0].id).first, cues, map), { compositor } = scene;
   const crops = scene.crops(), camera = time => cropAt(crops, fps, time), blurred = { camera: 0, cursor: 0 };
   try {
     for (let i = 0; i < frameCount; i++) {
@@ -849,7 +942,8 @@ window.cuetakeRender = async ({ sources: sourceUrls, finalUrl, duration, viewpor
         if (frame && uploaded.get(tab) !== frame) { scene.upload(tab, frame); uploaded.set(tab, frame); }
       }
       if (audio && i % fps === 0) await feedAudio(i / fps + 1);
-      const { cue, keycap, badge, averaged } = scene.draw(i / fps, camera);
+      const { cue, keycap, badge, masks, averaged } = scene.draw(i / fps, camera);
+      for (const index of masks) maskFrames[index] = [maskFrames[index]?.[0] ?? i, i];
       if (averaged.camera > 1) blurred.camera++;
       if (averaged.cursor > 1) blurred.cursor++;
       if (cue >= 0) shownFrames[cue] = [shownFrames[cue]?.[0] ?? i, i];
@@ -880,6 +974,8 @@ window.cuetakeRender = async ({ sources: sourceUrls, finalUrl, duration, viewpor
     // Each keycap show with the first and last output frame it was drawn on.
     // Each fast-forward in Final seconds, with the first and last frame its badge was drawn on (null without a badge).
     ...(map.spans.length && { fastForwards: map.spans.map((span, i) => ({ ...span, frames: badgeFrames[i] ?? null })) }),
+    // Each mask with its span in Final seconds and the first and last frame it was drawn on (null when its element never showed).
+    ...(edit.masks?.length && { masks: edit.masks.map(({ effect, element, box, start = 0, end }, i) => ({ effect, ...(element !== undefined ? { element } : { box }), start: map.outputAt(start), end: end === undefined ? seconds : map.outputAt(end), frames: maskFrames[i] ?? null })) }),
     ...(scene.keycapShows.length && { keycaps: scene.keycapShows.map((show, i) => ({ t: show.t, keys: show.keys, presses: show.presses.length, frames: keycapFrames[i] ?? null })) }),
     ...(voice && {
       // `encoderDelay`: the samples the encoder delays its input by (AAC's priming), which the MP4's edit list skips.
@@ -943,7 +1039,7 @@ window.cuetakeMeasure = async lines => {
  * A Preview as a base64 PNG: each tile's Edit composed by the same scene as Render, over the Sources at
  * `at` seconds with the Final's camera, or (`at` null) over the last moment with the camera wide.
  */
-window.cuetakePreview = async ({ sources: sourceUrls, duration, viewport, pointer, shapes, events, tabs, tiles, at, narration }) => {
+window.cuetakePreview = async ({ sources: sourceUrls, duration, viewport, pointer, shapes, events, tabs, elements, tiles, at, narration }) => {
   const map = timeMap(tiles[0]?.edit.fastForward, duration), t = at ?? map.duration, source = map.sourceAt(t);
   // Each Tab's first frame, and its frame at `t`, the latest at or before it or else its first.
   const frames = new Map(), samples = [];
@@ -966,7 +1062,7 @@ window.cuetakePreview = async ({ sources: sourceUrls, duration, viewport, pointe
     ctx.font = '600 22px system-ui, -apple-system, sans-serif'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#e5e7eb';
     for (const [i, { name, edit }] of tiles.entries()) {
       const voice = await prepareNarration(narration, edit.subtitles, Math.round(map.duration * edit.output.fps) / edit.output.fps, map);
-      const scene = await createScene(edit, viewport, { pointer, shapes, events, tabs: recorded }, sizes, frames.get(recorded[0].id).first, voice?.cues ?? [], map);
+      const scene = await createScene(edit, viewport, { pointer, shapes, events, tabs: recorded, elements }, sizes, frames.get(recorded[0].id).first, voice?.cues ?? [], map);
       // At `at` the camera moves as in the Final, blurred the same way; otherwise it is wide and still.
       const wide = { x: 0, y: 0, w: viewport.width, h: viewport.height }, path = at === null ? [] : scene.crops();
       for (const { tab } of scene.shown(t)) scene.upload(tab, frames.get(tab).now);

@@ -12,7 +12,8 @@ import { contentOf } from './frames.js';
  * their content starts and how much they are scaled whenever that changes. Node maps a frame's
  * coordinates up through its parents to top-level CSS pixels, so scrolling, fixed and sticky
  * positioning, translation and scaling are all followed. A rotated, skewed or 3D-transformed iframe is
- * placed as if it were only scaled, and noted.
+ * placed as if it were only scaled, and noted. Each document also measures the elements a mask follows
+ * (`watch`), once per animation frame, and sends their boxes whenever they change.
  * Times are epoch milliseconds until collectTimeline rebases them. `contentOf` is frames.js's, passed
  * in because the probe runs as page source.
  */
@@ -120,20 +121,49 @@ function probe(contentOf) {
     }
     if (rects.length) send({ kind: 'frames', ms: performance.timeOrigin + performance.now(), rects });
   };
-  const loop = () => {
-    if (abort.signal.aborted || !tracked.size) { looping = false; return; }
-    try { sampleFrames(); } finally { requestAnimationFrame(loop); }
+  // The elements each mask follows (by Node's `watch` id), measured each animation frame and sent on
+  // change. An element removed from the page keeps its last box until Node watches what replaced it.
+  const watches = new Map();
+  const sampleBoxes = () => {
+    for (const [id, entry] of watches) {
+      const boxes = [];
+      for (const element of entry.elements) {
+        if (!element.isConnected) { if (entry.last.has(element)) boxes.push(entry.last.get(element)); continue; }
+        if (!element.getClientRects().length) { entry.last.delete(element); continue; }
+        const r = element.getBoundingClientRect(), box = { x: r.x, y: r.y, width: r.width, height: r.height };
+        entry.last.set(element, box); boxes.push(box);
+      }
+      const key = boxes.map(b => [b.x, b.y, b.width, b.height].map(v => v.toFixed(2)).join()).join(';');
+      if (key === entry.key) continue;
+      entry.key = key;
+      send({ kind: 'box', ms: performance.timeOrigin + performance.now(), watch: id, boxes });
+    }
   };
+  const loop = () => {
+    if (abort.signal.aborted || (!tracked.size && !watches.size)) { looping = false; return; }
+    try { sampleFrames(); sampleBoxes(); } finally { requestAnimationFrame(loop); }
+  };
+  const run = () => { if (!looping) { looping = true; requestAnimationFrame(loop); } };
   const track = element => {
     if (!(element instanceof Element)) return null;
     let id = ids.get(element);
     if (id === undefined) ids.set(element, id = nextId++);
     if (!tracked.has(element)) tracked.set(element, { id, key: null });
     sampleFrames();
-    if (!looping) { looping = true; requestAnimationFrame(loop); }
+    run();
     return id;
   };
-  window.__cuetakeProbe = { track, dispose() { abort.abort(); } };
+  /** Follows the elements a mask's locator matches now, replacing those it matched before. */
+  const watch = (id, elements) => {
+    const entry = watches.get(id) ?? { elements: [], last: new Map(), key: null };
+    entry.elements = elements;
+    for (const element of entry.last.keys()) if (!elements.includes(element)) entry.last.delete(element);
+    watches.set(id, entry);
+    sampleBoxes();
+    run();
+    return true;
+  };
+  window.__cuetakeProbe = { track, watch, dispose() { abort.abort(); } };
   // Announced at once, so Node links this frame before any input reaches it.
   send({ kind: 'hello' });
 }
@@ -193,7 +223,8 @@ function latest(list, ms) {
  * Places the probe's records from every frame in top-level CSS pixels. A subframe's point goes up
  * through each iframe holding it, by where that iframe's content started and how it was scaled at the
  * moment (the parent's last measure before it, or its first). Each frame's cursor shape counts only
- * while the pointer is over it. Returns the records as the top frame alone would have made them, plus
+ * while the pointer is over it. A masked element's boxes (`box` records, by `watch` id) are placed
+ * the same way, again whenever an iframe holding it moves. Returns the records as the top frame alone would have made them, plus
  * the times of presses and keys inside a rotated, skewed or 3D-transformed iframe (`turned`) and in a
  * frame that could not be placed (`unplaced`).
  */
@@ -221,9 +252,36 @@ export function placeRecords(records) {
     }
     return map;
   };
-  const placed = { pointer: [], downs: [], ups: [], keys: [], shapes: [] }, turned = [], unplaced = [];
+  // When each frame's place in the top level can change: each measure of an iframe holding it.
+  const movesOf = frame => {
+    const times = [];
+    for (let f = frame, depth = 0; !top.has(f) && depth <= 32; depth++) {
+      const link = links.get(f);
+      if (!link) break;
+      times.push(...(measures.get(`${link.parent}:${link.element}`) ?? []).map(m => m.ms));
+      f = link.parent;
+    }
+    return times;
+  };
+  const placed = { pointer: [], downs: [], ups: [], keys: [], shapes: [], boxes: [] }, turned = [], unplaced = [];
+  // A masked element's boxes are placed when they change and whenever an iframe holding them moves.
+  const watched = new Map();
+  for (const r of records) if (r.kind === 'box' && typeof r.ms === 'number') { if (!watched.has(r.watch)) watched.set(r.watch, []); watched.get(r.watch).push(r); }
+  for (const [watch, list] of watched) {
+    list.sort((a, b) => a.ms - b.ms);
+    const times = [...new Set([...list.map(r => r.ms), ...list.flatMap(r => movesOf(r.frame))])].filter(ms => ms >= list[0].ms).sort((a, b) => a - b);
+    let last = null;
+    for (const ms of times) {
+      const r = latest(list, ms), map = toTop(r.frame, ms);
+      if (!map) continue;
+      const boxes = r.boxes.map(b => [map.x + b.x * map.sx, map.y + b.y * map.sy, b.width * map.sx, b.height * map.sy]), key = JSON.stringify(boxes);
+      if (key !== last) placed.boxes.push({ ms, watch, boxes });
+      last = key;
+    }
+  }
+  placed.boxes.sort((a, b) => a.ms - b.ms);
   let over = null;
-  for (const r of records.filter(r => typeof r.ms === 'number' && r.kind !== 'frames').toSorted((a, b) => a.ms - b.ms)) {
+  for (const r of records.filter(r => typeof r.ms === 'number' && r.kind !== 'frames' && r.kind !== 'box').toSorted((a, b) => a.ms - b.ms)) {
     if (r.kind === 'move') over = r.frame;
     if (r.shape) {
       if (r.frame === over && r.shape !== placed.shapes.at(-1)?.[1]) placed.shapes.push([r.ms, r.shape]);
@@ -251,6 +309,7 @@ const CLICK_SLOP = 6; // CSS px a press may travel and still count as a click
  * cursor shapes: each change as [t, keyword], starting with the one shown when Capture began.
  * `turned` lists when a press or key landed in a rotated, skewed or 3D-transformed iframe, placed as
  * if it were only scaled, and `unplaced` when one landed in a frame that could not be placed at all.
+ * `watched` lists the boxes of each element a mask follows, by its `watch` id.
  */
 export async function collectTimeline(page, startedAtMs) {
   const collector = collectors.get(page);
@@ -285,5 +344,14 @@ export async function collectTimeline(page, startedAtMs) {
   const before = raw.shapes.filter(([ms]) => ms < startedAtMs).at(-1);
   const shapes = [...(before ? [[0, before[1]]] : []), ...raw.shapes.filter(([ms]) => ms >= startedAtMs).map(([ms, shape]) => [t(ms), shape])];
   const times = list => [...new Set(list.filter(ms => ms >= startedAtMs).map(t))];
-  return { pointer, shapes, events: events.sort((a, b) => a.t - b.t), turned: times(raw.turned), unplaced: times(raw.unplaced) };
+  // Each masked element's boxes as [t, ...[x, y, width, height]], held back to the start of Capture.
+  const watched = new Map(), round = v => Math.round(v * 100) / 100;
+  for (const { ms, watch, boxes } of raw.boxes) {
+    if (!watched.has(watch)) watched.set(watch, []);
+    watched.get(watch).push([Math.max(0, t(ms)), ...boxes.map(box => box.map(round))]);
+  }
+  return {
+    pointer, shapes, events: events.sort((a, b) => a.t - b.t), turned: times(raw.turned), unplaced: times(raw.unplaced),
+    watched: [...watched].map(([id, boxes]) => ({ id, boxes })),
+  };
 }

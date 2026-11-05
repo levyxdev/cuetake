@@ -18,6 +18,7 @@ import { subtitleRows, subtitleCues, lineProblems, toSrt, toVtt } from '../src/n
 import { shortcutKeys, keycapShows, keycapTrack } from '../src/shortcuts.js';
 import { timeMap, fastForwardProblems, retimed, linesInFinal, badgeAt } from '../src/time-map.js';
 import { windowMaps, tabTrack, inWindow, carried, seenBy } from '../src/tabs.js';
+import { maskTrack, maskProblems, maskWarnings, mergedPast } from '../src/masks.js';
 import fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -1131,4 +1132,141 @@ test('Render and Looks read the built-in Subtitles with their parameters, and bu
     const take = join(dir, 'take');
     expect((await bundle({ subtitles: { draw: 'subtitles', files: { font: 'brand.woff2' } } }, dir, join(take, 'styles'), 'styles/')).subtitles.files.font).toBe('styles/brand.woff2');
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('a fixed mask covers its box, padded, only during its span', () => {
+  const masks = [{ effect: 'cover', box: { x: 100, y: 50, width: 200, height: 40 }, start: 1, end: 3 }];
+  const track = maskTrack(masks, [], timeMap([], 5));
+  expect(track.at(0.5)).toEqual([]);
+  expect(track.at(1)).toEqual([{ index: 0, tab: 0, effect: 'cover', opacity: 1, rects: [{ x: 96, y: 46, width: 208, height: 48 }], color: '#000000', padding: 4, radius: 6 }]);
+  expect(track.at(2.99)).toHaveLength(1);
+  expect(track.at(3)).toEqual([]);
+});
+
+test('a mask on an element follows the boxes Capture recorded, and covers where it just was or is about to be', () => {
+  // The element scrolls up between 0.5 s and 2 s, and is hidden from 1.5 s to 2 s.
+  const elements = [{ id: 0, tab: 1, name: "getByTestId('email')", boxes: [[0.5, [10, 100, 50, 20]], [1, [10, 60, 50, 20]], [1.5], [2, [10, 20, 50, 20]]] }];
+  const at = (masks, t) => maskTrack(masks, elements, timeMap([], 3)).at(t).map(mask => [mask.tab, mask.rects.map(r => r.y)]);
+  const cover = [{ effect: 'cover', element: 0, padding: 0 }];
+  // Before the first box it holds that box, so a mask made first thing covers the Take from its first frame.
+  expect(at(cover, 0.2)).toEqual([[1, [100]]]);
+  expect(at(cover, 0.7)).toEqual([[1, [100]]]);
+  // Around a move both boxes are covered: for a while after it, since the Source shows a change later than
+  // the page made it, and before it, since Capture may see a replaced element a little late.
+  expect(at(cover, 0.91)).toEqual([[1, [100, 60]]]);
+  expect(at(cover, 1.15)).toEqual([[1, [100, 60]]]);
+  expect(at(cover, 1.25)).toEqual([[1, [60]]]);
+  expect(at(cover, 1.6)).toEqual([[1, [60]]]);
+  // Hidden, nothing is drawn, until shortly before it shows again.
+  expect(at(cover, 1.72)).toEqual([]);
+  expect(at(cover, 1.8)).toEqual([[1, [20]]]);
+  expect(at(cover, 2.5)).toEqual([[1, [20]]]);
+  // A spotlight shows exactly where the element is.
+  expect(at([{ effect: 'spotlight', element: 0, padding: 0, ease: 0 }], 0.97)).toEqual([[1, [100]]]);
+});
+
+test('a spotlight eases in and out over Final seconds, while a blur or cover shows fully from its first frame', () => {
+  const box = { x: 0, y: 0, width: 10, height: 10 };
+  const opacity = (masks, map, t) => maskTrack(masks, [], map).at(t).map(mask => +mask.opacity.toFixed(3));
+  const spotlight = [{ effect: 'spotlight', box, start: 1, end: 3, ease: 0.4 }];
+  expect([0.9, 1, 1.2, 2, 2.8, 3].map(t => opacity(spotlight, timeMap([], 5), t))).toEqual([[], [0], [0.5], [1], [0.5], []]);
+  // The ease keeps its pace in the Final, though the span ends in a fast-forward.
+  const map = timeMap([{ start: 2, end: 6, rate: 4 }], 8), end = map.outputAt(6);
+  expect(opacity([{ ...spotlight[0], end: 6 }], map, end - 0.2)).toEqual([0.5]);
+  expect(opacity([{ effect: 'blur', box, start: 1, end: 3 }], timeMap([], 5), 1)).toEqual([1]);
+  // One never ended eases out before the Final ends.
+  expect(opacity([{ effect: 'spotlight', box, start: 1, ease: 0.4 }], timeMap([], 5), 4.8)).toEqual([0.5]);
+});
+
+test('masks Render cannot draw safely are named: unknown effects, missing boxes or elements, empty spans and blurs too weak to hide text', () => {
+  const box = { x: 0, y: 0, width: 10, height: 10 }, elements = [{ id: 0, tab: 0, boxes: [] }];
+  expect(maskProblems([{ effect: 'blur', element: 0 }, { effect: 'spotlight', box, start: 1, end: 2 }, { effect: 'cover', box, tab: 1, color: '#18181b' }], elements, [0, 1])).toEqual([]);
+  expect(maskProblems([
+    { effect: 'pixelate', box },
+    { effect: 'cover' },
+    { effect: 'cover', box: { x: 0, y: 0, width: 0, height: 10 } },
+    { effect: 'blur', element: 3, start: 2 },
+    { effect: 'cover', box, start: 3, end: 3 },
+    { effect: 'blur', box, blur: 4 },
+    { effect: 'cover', box, tab: 5 },
+    { effect: 'cover', box, element: 0 },
+    { effect: 'cover', box, color: '#f00' },
+  ], elements, [0, 1])).toEqual([
+    "Mask 0 has effect 'pixelate'; use blur, cover or spotlight",
+    'Mask 1 (cover) needs a box { x, y, width, height } in CSS pixels, or the element a Scenario masked',
+    'Mask 2 (cover) needs a box { x, y, width, height } in CSS pixels, or the element a Scenario masked',
+    'Mask 3 (blur from 2.00 s) follows element 3, which the Timeline does not record',
+    'Mask 4 (cover from 3.00 s) needs a start before its end, in seconds',
+    'Mask 5 (blur) blurs 4 CSS px, too little to hide text; use at least 8',
+    'Mask 6 (cover) is on Tab 5, which the Take does not show; its Tabs are 0, 1',
+    'Mask 7 (cover) names both a box and an element; keep one',
+    "Mask 8 (cover) has color '#f00'; use '#rrggbb'",
+  ]);
+  expect(maskProblems({ effect: 'blur' }, elements)).toEqual(['masks must be a list of masks']);
+});
+
+test('the Timeline keeps the boxes of each element the Scenario masked, and the first Edit masks it for the span, which a Look leaves out', () => {
+  const stopped = { durationSeconds: 5, fronts: [], tabs: [{ id: 0, opener: null, opened: 0, closed: null, viewport: main, url: 'https://app.test/', start: 0, navigations: [] }] };
+  const boxes = [[0, [10, 100, 50, 20]], [1.2, [10, 60, 50, 20]]];
+  const observed = new Map([[0, { pointer: [], shapes: [], events: [], turned: [], unplaced: [], watched: [{ id: 0, boxes }] }]]);
+  const notes = {
+    focus: [], wide: [], said: [], forwarded: [], pointer: [],
+    elements: [{ id: 0, tab: 0, name: "getByTestId('email')" }, { id: 1, tab: 0, name: "getByRole('button', { name: 'Pay' })" }],
+    masks: [{ t: 0, end: null, element: 0, effect: 'blur' }, { t: 2, end: 4, element: 1, effect: 'spotlight', dim: 0.7 }],
+  };
+  const timeline = timelineOf({ url: 'https://app.test/', viewport: main, scale: 2 }, stopped, observed, notes, 50_000);
+  // An element the probe never saw has no boxes, and its mask draws nothing.
+  expect(timeline.elements).toEqual([{ id: 0, tab: 0, name: "getByTestId('email')", boxes }, { id: 1, tab: 0, name: "getByRole('button', { name: 'Pay' })", boxes: [] }]);
+  expect(timeline.events.map(({ type, t }) => [type, t])).toEqual([['mask', 0], ['mask', 2]]);
+  const edit = createEdit(scenarioSchema.parse({ name: 'demo', url: 'https://app.test/' }), timeline, []);
+  // A mask the Scenario never ended lasts to the end of the Take.
+  expect(edit.masks).toEqual([{ effect: 'blur', element: 0, start: 0 }, { effect: 'spotlight', element: 1, start: 2, end: 4, dim: 0.7 }]);
+  expect(withDefaults({}).masks).toEqual([]);
+  expect(lookFromEdit(edit)).not.toHaveProperty('masks');
+  expect(applyLook(edit, lookFromEdit(withDefaults({}))).masks).toEqual(edit.masks);
+  // A Timeline without masked elements stays as it was.
+  expect(timelineOf({ url: 'https://app.test/', viewport: main, scale: 2 }, stopped, observed, { ...notes, elements: [], masks: [] }, 50_000)).not.toHaveProperty('elements');
+});
+
+test('places the boxes of a masked element in top-level CSS pixels, moving them when an iframe holding it moves', () => {
+  const records = [
+    { kind: 'top', frame: 0 },
+    { kind: 'link', frame: 1, parent: 0, element: 0 },
+    { kind: 'frames', frame: 0, ms: 100, rects: [{ id: 0, x: 50, y: 200, sx: 0.5, sy: 0.5, turned: false }] },
+    // The page scrolls 40 px at 300 ms, carrying the iframe and the element in it up, though the element's own box stays.
+    { kind: 'frames', frame: 0, ms: 300, rects: [{ id: 0, x: 50, y: 160, sx: 0.5, sy: 0.5, turned: false }] },
+    { kind: 'box', frame: 1, ms: 150, watch: 0, boxes: [{ x: 20, y: 20, width: 40, height: 10 }] },
+    // Element 1 is on the top page and stops showing at 400 ms.
+    { kind: 'box', frame: 0, ms: 120, watch: 1, boxes: [{ x: 5, y: 6, width: 7, height: 8 }, { x: 15, y: 6, width: 7, height: 8 }] },
+    { kind: 'box', frame: 0, ms: 400, watch: 1, boxes: [] },
+    // A box from a frame never linked cannot be placed.
+    { kind: 'box', frame: 2, ms: 160, watch: 2, boxes: [{ x: 0, y: 0, width: 1, height: 1 }] },
+  ];
+  const placed = placeRecords(records.toReversed());
+  expect(placed.boxes).toEqual([
+    { ms: 120, watch: 1, boxes: [[5, 6, 7, 8], [15, 6, 7, 8]] },
+    { ms: 150, watch: 0, boxes: [[60, 210, 20, 5]] },
+    { ms: 300, watch: 0, boxes: [[60, 170, 20, 5]] },
+    { ms: 400, watch: 1, boxes: [] },
+  ]);
+  expect(placed.pointer).toEqual([]);
+});
+
+test('boxes past what one pass draws are merged into one box around them, never dropped', () => {
+  const box = (x, y) => ({ rect: { x, y, width: 10, height: 10 }, effect: 'cover' });
+  const boxes = [box(0, 0), box(100, 0), box(50, 200), box(300, 40)];
+  expect(mergedPast(boxes, 4)).toEqual(boxes);
+  expect(mergedPast(boxes, 2)).toEqual([box(0, 0), { rect: { x: 50, y: 0, width: 260, height: 210 }, effect: 'cover' }]);
+});
+
+test('verification warns about a mask whose element never showed during its span, since it hid nothing', () => {
+  const elements = [
+    { id: 0, tab: 0, name: "getByTestId('email')", boxes: [[0, [10, 10, 50, 20]], [2], [4, [10, 10, 50, 20]]] },
+    { id: 1, tab: 0, name: "getByText('Total')", boxes: [] },
+  ];
+  expect(maskWarnings([{ effect: 'blur', element: 0 }, { effect: 'blur', element: 0, start: 1, end: 3 }, { effect: 'cover', box: { x: 0, y: 0, width: 1, height: 1 } }], elements)).toEqual([]);
+  expect(maskWarnings([{ effect: 'blur', element: 0, start: 2.5, end: 3.5 }, { effect: 'spotlight', element: 1 }], elements)).toEqual([
+    "Mask 0 (blur from 2.50 s) found no getByTestId('email') on the page during its span, so it drew nothing; check the locator, or when the element shows",
+    "Mask 1 (spotlight) found no getByText('Total') on the page during its span, so it drew nothing; check the locator, or when the element shows",
+  ]);
 });

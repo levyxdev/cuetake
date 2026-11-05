@@ -14,6 +14,7 @@ import { loadLook, resolvedLook, applyLook, lookFromEdit, saveLook, summarize } 
 import { absolute, bundle, forRender } from './styles.js';
 import { burnsIn, cuesFor, isCjk, lineProblems, toSrt, toVtt } from './narration.js';
 import { linesInFinal, timeMap } from './time-map.js';
+import { maskWarnings } from './masks.js';
 import pkg from '../package.json' with { type: 'json' };
 
 const SCHEMA_VERSION = 4;
@@ -100,20 +101,23 @@ export function captureScale(chosen, gpu) {
 /**
  * The Timeline from `take` (its url, viewport and scale), what Capture observed in each Tab (`observed`,
  * the probe's by Tab id), what the Director noted and what the recorder saw: every input and page load carries the Tab it happened in,
- * in that Tab's CSS pixels, and `front` events note which Tab is in front from when.
+ * in that Tab's CSS pixels, and `front` events note which Tab is in front from when. Each element a
+ * Scenario masked is in `elements`, with its boxes over time, and each mask is a `mask` event.
  */
 export function timelineOf(take, stopped, observed, notes, startedAtMs) {
   const t = ms => Math.round(ms - startedAtMs) / 1000, inTab = (list, tab) => list.map(item => ({ ...item, tab }));
   const pointer = [...[...observed].flatMap(([tab, seen]) => seen.pointer.map(sample => [...sample, tab])), ...notes.pointer.map(([ms, x, y, tab]) => [t(ms), x, y, tab])];
   const shapes = [...observed.values()].flatMap(seen => seen.shapes).sort((a, b) => a[0] - b[0]);
   const frameInput = { turned: [...observed.values()].flatMap(seen => seen.turned).sort((a, b) => a - b), unplaced: [...observed.values()].flatMap(seen => seen.unplaced).sort((a, b) => a - b) };
+  // Each element a mask follows, with the boxes the probe in its Tab saw it at.
+  const elements = (notes.elements ?? []).map(element => ({ ...element, boxes: observed.get(element.tab)?.watched?.find(watched => watched.id === element.id)?.boxes ?? [] }));
   return {
     schemaVersion: SCHEMA_VERSION, ...take, duration: stopped.durationSeconds,
     tabs: stopped.tabs.map(({ id, opener, opened, closed, viewport, url, start }) => ({ id, opener, opened, closed, viewport, url, start })),
-    pointer: pointer.sort((a, b) => a[0] - b[0]), shapes, ...((frameInput.turned.length || frameInput.unplaced.length) && { frameInput }),
+    pointer: pointer.sort((a, b) => a[0] - b[0]), shapes, ...((frameInput.turned.length || frameInput.unplaced.length) && { frameInput }), ...(elements.length && { elements }),
     events: [
       ...[...observed].flatMap(([tab, seen]) => inTab(seen.events, tab)),
-      ...notes.focus.map(f => ({ type: 'focus', ...f })), ...notes.said.map(line => ({ type: 'say', ...line })), ...notes.forwarded.map(span => ({ type: 'fastForward', ...span })),
+      ...notes.focus.map(f => ({ type: 'focus', ...f })), ...notes.said.map(line => ({ type: 'say', ...line })), ...notes.forwarded.map(span => ({ type: 'fastForward', ...span })), ...(notes.masks ?? []).map(mask => ({ type: 'mask', ...mask })),
       ...stopped.tabs.flatMap(tab => inTab(tab.navigations.map(load => ({ type: 'navigate', ...load })), tab.id)),
       ...stopped.fronts.filter(front => front.t > 0).map(front => ({ type: 'front', ...front })),
     ].sort((a, b) => a.t - b.t),
@@ -156,9 +160,10 @@ export async function recordScenario(scenarioPath, outputDir, options = {}) {
     await page.evaluate(() => document.fonts.ready);
     const capture = await beginCapture(session.sessionId);
     const startedAtMs = Date.parse(capture.startedAt);
-    const notes = { focus: [], wide: [], said: [], forwarded: [], pointer: [] };
-    const director = createDirector(capture.tabs, { startedAt: startedAtMs, fps: config.capture.fps, voiced: imported && new Map(Object.entries(imported.durations)), ...config.director }, notes);
-    const evidence = await scenario.run(director);
+    const notes = { focus: [], wide: [], said: [], forwarded: [], pointer: [], elements: [], masks: [] };
+    const ran = new AbortController();
+    const director = createDirector(capture.tabs, { startedAt: startedAtMs, fps: config.capture.fps, voiced: imported && new Map(Object.entries(imported.durations)), ...config.director, signal: ran.signal }, notes);
+    const evidence = await scenario.run(director).finally(() => ran.abort());
     await capture.tabs.started();
     await capture.tabs.front.page.screenshot({ path: join(dir, 'poster.png') });
     const observed = new Map();
@@ -388,7 +393,7 @@ export async function verifyTake(directory) {
   const { lines, ...final } = media;
   const verification = {
     passed: true, checkedAt: new Date().toISOString(), media: final,
-    warnings: [...capture.tabs.flatMap(stats => captureWarnings(stats, config.capture.resolutionScale, several ? tabOf(stats.tab) : null)), ...timelineWarnings(timeline)],
+    warnings: [...capture.tabs.flatMap(stats => captureWarnings(stats, config.capture.resolutionScale, several ? tabOf(stats.tab) : null)), ...timelineWarnings(timeline), ...maskWarnings(edit.masks, timeline.elements)],
     sources: capture.tabs.map(stats => ({ tab: stats.tab, settings: stats.settings, ...summarizeFrames(stats.frames, stats.duration), ...(stats.pageFrames && { pageFramesPerSecond: stats.pageFrames }) })), fullDecode: 'passed',
     ...(spoken && { narration: { lines: spoken.lines.map(({ id, start }) => ({ id, start, duration: lines.find(line => line.id === id).duration })), subtitles: SUBTITLE_FILES.map(([name]) => name), burned: burnsIn(edit.subtitles) } }),
   };

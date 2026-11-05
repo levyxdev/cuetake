@@ -25,6 +25,7 @@ const pageFiles = {
   '/time-map.js': { path: fileURLToPath(new URL('./time-map.js', import.meta.url)), type: 'text/javascript' },
   '/tabs.js': { path: fileURLToPath(new URL('./tabs.js', import.meta.url)), type: 'text/javascript' },
   '/shutter.js': { path: fileURLToPath(new URL('./shutter.js', import.meta.url)), type: 'text/javascript' },
+  '/masks.js': { path: fileURLToPath(new URL('./masks.js', import.meta.url)), type: 'text/javascript' },
   '/mediabunny.js': { path: mediabunnyBundle, type: 'text/javascript' },
 };
 
@@ -107,7 +108,7 @@ function forPage(timeline, sources, files) {
   for (const tab of tabs) files[`source-${tab.id}`] = sources[tab.id];
   return {
     duration: timeline.duration, viewport: timeline.viewport, tabs,
-    pointer: timeline.pointer ?? [], shapes: timeline.shapes ?? [], events: timeline.events ?? [],
+    pointer: timeline.pointer ?? [], shapes: timeline.shapes ?? [], events: timeline.events ?? [], elements: timeline.elements ?? [],
     sources: tabs.map(tab => ({ tab: tab.id, url: `${ORIGIN}/files/source-${tab.id}` })),
   };
 }

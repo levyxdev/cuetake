@@ -56,6 +56,7 @@ Only `name` and `url` are required in config. Other fields use the shown default
 | `focus({x,y,width,height}, seconds?)` | Add a camera target; defaults to the current time. |
 | `say(id, text?)` | Start a Narration Line. With `--narration` it waits until the Line's audio ends; without, `text` is required and it does not wait. See [narration.md](narration.md). |
 | `fastForward(wait, { rate=4 })` | Run `wait`, a function that waits on the page, such as `() => reply.waitFor()`, and return its result; the Final plays that span `rate` times faster. |
+| `mask(locator, { effect='blur', ... })` | Mask every element the locator matches, in any Tab, from now until the returned `end()` is called or the Take ends. `effect` is `'blur'`, `'cover'` or `'spotlight'`. See Masks below. |
 | `switchTo(page)` | Bring a Tab back in front, such as the first page after a new tab opened over it. See Tabs below. |
 | `time()` | Seconds elapsed since capture started. |
 
@@ -80,6 +81,36 @@ The camera works like Screen Studio's auto zoom. It follows the clicks, typing a
 Each target is framed with `padding` CSS px around its box, zooming at most `maxZoom`; boxes too large to reach `minZoom` stay wide. Set `zoom` on a target in `edit.json` to fix it; its segment then zooms no further. Pass `focus: false` to an action to keep the camera wide for it; a bare number still works as the action's timing. `d.focus(box)` adds a deliberate target and, like a manual zoom in Screen Studio, replaces only the automatic targets within its own span; the rest of the Take keeps following actions. Focus boxes always use CSS pixels, even when the source is captured at 2× scale.
 
 Wrap only dead time in `fastForward`: a page load, a server, an AI response streaming in. A deliberate hold such as `d.at(5)` on a result stays outside, so the viewer can read it. The Final eases into and out of the faster speed inside the span; the page, the Cursor and click effects speed up with it, while the camera, keycaps and Subtitles keep their pace. To show viewers the speed-up, turn on the Edit's `fastForwardBadge` ([styling.md](styling.md)). A Line cannot play faster, so `say` inside `fastForward` fails the Take: say it before the wait. Keep the cursor still inside `fastForward`: a move there plays `rate` times faster, and a zoomed camera can lose it. If it would cover what the viewer waits for, move it aside before the wait. Each span is copied into `edit.json` as `fastForward: [{ "start": 3.2, "end": 9.8, "rate": 4 }]` (Source seconds), where it can be retimed or removed without recording again.
+
+## Masks
+
+Takes often start from an Auth profile signed in to a real account, so real emails, names, amounts or keys can end up on camera. Mask them in the Scenario, before the Director first waits or acts:
+
+```js
+export async function run(d) {
+  await d.mask(d.page.getByTestId('account-email'));                        // blur, the whole Take
+  await d.mask(d.page.locator('.api-key'), { effect: 'cover', color: '#18181b' });
+  await d.at(1);
+  // ...
+  const result = await d.mask(d.page.getByRole('row', { name: 'Paid' }), { effect: 'spotlight' });
+  await d.at(6);
+  result.end();                                                            // the spotlight ends here
+}
+```
+
+- `blur` blurs the region past reading (`blur`, 16 CSS px by default, at least 8); `cover` fills it with `color` (black by default); `spotlight` dims the rest of the frame by `dim` (0.6), the light falling off over `feather` (16 CSS px) across the region's edge, easing in and out over `ease` Final seconds (0.3). Each takes `padding` around the element (4 CSS px, 8 for a spotlight) and a corner `radius`.
+- Capture records each element's box as it moves, so the Mask stays on it as the page scrolls, the layout changes or the element is replaced, and inside iframes. A locator matching several elements masks all of them; one that matches nothing masks nothing until it does.
+- A blur or cover made before the Director first waits or acts covers the Take from its first frame. A Mask made later starts when it is made, so mask before the private data shows.
+- While its element moves, a blur or cover also covers where it was for 0.2 s before and 0.25 s after, since the Source shows a change a little after the page makes it and Capture finds a replaced element within a tenth of a second, so it never trails the page.
+- Masks sit on the page under the camera, so they stay on their element as the camera zooms and pans. A spotlight dims the window, its chrome and the Background, but not popup windows over it, the Cursor, keycaps or Subtitles. Spotlights showing together each dim the frame, so give one Mask the locator of every element to light at once.
+
+Each Mask is copied into `edit.json` as `masks: [{ "effect": "blur", "element": 0, "start": 0 }]` (Source seconds; without `end` it lasts to the end of the Take), where its span or parameters can be changed or it can be removed without recording again. `element` is one of `timeline.json`'s `elements`, which names its locator. To mask what the Scenario did not, add a fixed box in the Tab's CSS pixels and render again:
+
+```json
+"masks": [{ "effect": "cover", "box": { "x": 1100, "y": 16, "width": 220, "height": 36 }, "start": 2.5, "end": 9, "tab": 0 }]
+```
+
+Check with `preview --at` that nothing private shows before rendering: Previews draw Masks as the Final does. Render refuses a Mask it cannot draw, naming it, and verification warns when a Mask's element never showed during its span. `render.json` lists each Mask with the first and last frame it was drawn on.
 
 ## Tabs
 
@@ -106,21 +137,21 @@ Use actual locators for clicks. Canvas drags often require coordinates; derive o
   scenario.mjs       Snapshot of the original scenario module
   source-<tab>.webm  Source of each Tab (0 is the first page): original high-resolution VP9 capture
   capture.json       Per Tab: track settings, video frame callback observations and the page's animation frames per second, in seconds from its own start
-  timeline.json      Timeline: the Tabs (`tabs`: opener, when each opened, closed and started recording, viewport) and which is in front (`front` events), pointer path, cursor shapes, clicks and drags with their release, typing, Shortcuts, focus, said Lines, fast-forwards and page loads, in seconds and each Tab's top-level CSS pixels, plus any input inside an iframe it could not place exactly (`frameInput`)
-  edit.json          Edit: camera targets and settings, cursor, click effect, Shortcuts and keycaps, frame, how Tabs switch and where popups sit, fast-forwards, Line starts and volumes, Subtitles, output
+  timeline.json      Timeline: the Tabs (`tabs`: opener, when each opened, closed and started recording, viewport) and which is in front (`front` events), pointer path, cursor shapes, clicks and drags with their release, typing, Shortcuts, focus, said Lines, fast-forwards, masks and page loads, in seconds and each Tab's top-level CSS pixels, the boxes of each masked element over time (`elements`), plus any input inside an iframe it could not place exactly (`frameInput`)
+  edit.json          Edit: camera targets and settings, cursor, click effect, Shortcuts and keycaps, frame, how Tabs switch and where popups sit, fast-forwards, Masks, Line starts and volumes, Subtitles, output
   narration/         The Narration: narration.json (text, word timings) and each Line's audio, named by its id
   subtitles.srt/.vtt Subtitles of the placed Lines, from the last Render
   styles/            Shaders, drawing code and images the Edit names
   poster.png         The Tab in front at the end, at native capture resolution
   preview.png        Preview: the current Edit beside candidate Looks, from the last `preview`
   final.mp4          Final: H.264 camera composition
-  render.json        Encoder, rate control and GPU used by the last Render; its times are seconds of the Final
-  verification.json Output metadata, decode result, capture observations per Tab, and warnings when the browser fell behind or iframe input could not be placed exactly
+  render.json        Encoder, rate control and GPU used by the last Render, and the frames each Mask was drawn on; its times are seconds of the Final
+  verification.json Output metadata, decode result, capture observations per Tab, and warnings when the browser fell behind, iframe input could not be placed exactly or a Mask found no element
 ```
 
 A copied scenario snapshot may import helper modules from its original project. It is a record of the scenario, not a bundled runnable archive. Keep business scenarios in their application repository.
 
-Times in `edit.json` and `timeline.json` are Source seconds, from the start of Capture; a fast-forward only changes when they happen in the Final. To edit a completed take, change `edit.json` (camera settings, target boxes and times, fast-forwards, the Shortcuts shown as `shortcuts: [{ "t": 2.4, "keys": ["Meta", "K"] }]`, and the styling in [styling.md](styling.md)), then run `cuetake render <take>`. To compare styling first, run `cuetake preview <take> --look <name|file.json>...`, which composes stills without touching `edit.json` or the Final. A Look is a partial Edit holding any styling and camera settings, but not camera targets, Shortcuts, fast-forwards, `frame.url`, `frame.urls`, `tabs.placement` or `output.fps`. `cuetake look apply` merges one into `edit.json`, and `cuetake record --look` seeds a new take's Edit with it under the Scenario config. The Scenario config only seeds the first Edit. Changing what happens on the page requires recording again. `render` automatically runs verification; `verify` checks without rendering.
+Times in `edit.json` and `timeline.json` are Source seconds, from the start of Capture; a fast-forward only changes when they happen in the Final. To edit a completed take, change `edit.json` (camera settings, target boxes and times, fast-forwards, Masks, the Shortcuts shown as `shortcuts: [{ "t": 2.4, "keys": ["Meta", "K"] }]`, and the styling in [styling.md](styling.md)), then run `cuetake render <take>`. To compare styling first, run `cuetake preview <take> --look <name|file.json>...`, which composes stills without touching `edit.json` or the Final. A Look is a partial Edit holding any styling and camera settings, but not camera targets, Shortcuts, fast-forwards, Masks, `frame.url`, `frame.urls`, `tabs.placement` or `output.fps`. `cuetake look apply` merges one into `edit.json`, and `cuetake record --look` seeds a new take's Edit with it under the Scenario config. The Scenario config only seeds the first Edit. Changing what happens on the page requires recording again. `render` automatically runs verification; `verify` checks without rendering.
 
 `edit.json` also carries `output.fps`, the Final's frame rate, which a new Take takes from `capture.fps`, and `frame.url`, the address bar's text, which defaults to the host the page was on when Capture started; a Scenario's `frame.url` replaces that host's name. When a page navigates to another host, `frame.urls` lists each change as `{ "t": 3.2, "url": "checkout.stripe.com", "tab": 0 }`, in Source time from when the Tab took the new address; a Tab the demo opens starts with the address it opened on, or empty until its first page commits. Edit or remove one and render again. `tabs.placement: [{ "tab": 2, "x": 100, "y": 60 }]` moves a popup window, its page's top left in its opener's CSS pixels; by default it is centered over its opener and scaled down to fit. Encoders without a quantizer mode fall back to a bitrate, recorded in `render.json`.
 

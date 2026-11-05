@@ -31,7 +31,7 @@ The unedited picture of one Tab produced by Capture, in device pixels; a Take ha
 _Avoid_: raw video, recording
 
 **Timeline**:
-Every interaction observed during Capture (pointer path, presses and releases, the cursor shape the page asked for, typing, Shortcuts, focus targets, where each Line was said, the Fast-forwards the Scenario marked, each page load from a navigation or reload, which Tab is in front), timed from the start of Capture and positioned in the CSS pixels of the Tab it happened in.
+Every interaction observed during Capture (pointer path, presses and releases, the cursor shape the page asked for, typing, Shortcuts, focus targets, where each Line was said, the Fast-forwards the Scenario marked, each page load from a navigation or reload, which Tab is in front, the boxes of each element a Mask follows), timed from the start of Capture and positioned in the CSS pixels of the Tab it happened in.
 _Avoid_: event log, camera events
 
 **Shortcut**:
@@ -45,12 +45,16 @@ _Avoid_: session, cookies, login state
 ### Rendering
 
 **Edit**:
-The editable choices that turn a Source and Timeline into a Final: camera, cursor, click effects, the Shortcuts shown and their keycaps, frame styling, how Tabs switch and where popup windows sit, Fast-forwards, Line timing, Subtitles, and output, together with the shader, drawing-code and image files those choices name, kept in the Take.
+The editable choices that turn a Source and Timeline into a Final: camera, cursor, click effects, the Shortcuts shown and their keycaps, frame styling, how Tabs switch and where popup windows sit, Fast-forwards, Masks, Line timing, Subtitles, and output, together with the shader, drawing-code and image files those choices name, kept in the Take.
 _Avoid_: camera edit, render config, project settings
 
 **Fast-forward**:
 A span of a Take, marked by the Scenario as a wait the viewer need not sit through, that the Final plays faster at its rate.
 _Avoid_: speed-up, timelapse, idle skip
+
+**Mask**:
+A region of one Tab's page, hidden or pointed at for a span of a Take: blurred past reading, covered with a solid color, or spotlit, with the rest of the frame dimmed. It follows an element the Scenario named, or sits at a fixed box.
+_Avoid_: redaction, blur box, highlight
 
 **Background**:
 What fills the Final around the window: a list of image and shader layers, each drawn over the one before. It stays still while the camera moves the window over it.

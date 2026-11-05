@@ -12,6 +12,8 @@ The Source holds only page pixels, since tab capture never shows the pointer; `p
 
 A Take shows one Tab or more (ADR 0008). `follow-tabs.js` follows each page a Tab opens (Playwright's `popup` event) and which Tab is in front; one recorder page records each Tab as its own stream until it closes, and the probe runs in each. The recorder has a window of its own: on macOS `getDisplayMedia` starts only from the page in front, so the recorder comes in front for each start, and as a tab of the Tabs' window it would hide the tab being started, which then paints no first frame for a second or more, and give that window a tab strip that leaves each tab 87 CSS px short of the viewport, which tab capture records. Render moves every Tab's input into the window's CSS pixels by where its popup sits (`tabs.js`), shows a Tab the size of the viewport in the window and any other as a popup window over its opener, and samples each shown Tab's Source at its own start.
 
+A Mask (ADR 0010) follows an element the Scenario names: the probe in that element's frame measures every element its locator matches each animation frame and sends their boxes when they change, Node places them in top-level CSS pixels like input, and the Director matches the locator again ten times a second so a replaced element is followed. Render draws blur and cover with the page, in its CSS pixels, so they move with the camera and fade with their Tab; a blur reads a mip level of the Source, past what text survives. A spotlight dims the frame around its region over the window and its chrome.
+
 A Narration is voiced before Capture by a separate speech tool (ADR 0006). The Director holds each said Line for its audio; Render decodes the Lines with Web Audio, mixes them into one mono track (AAC, or Opus where Chromium has no AAC encoder) and draws Subtitles outside the camera. WebCodecs gives no AAC encoder's priming (2112 samples on macOS), so Render measures the encoder's delay on a burst of noise and stamps the packets back by it; the MP4's edit list then skips the priming, and packets that start after the video are left out.
 
 ## Modules
@@ -27,6 +29,7 @@ A Narration is voiced before Capture by a separate speech tool (ADR 0006). The D
 - `shutter.js`: motion blur: each frame's exposure, the moments it averages, and the camera between frames; shared by Node and the render page.
 - `stage.js`: output size, window and page layout, camera view and brand color; shared by Node and the render page.
 - `narration.js`: Line problems, subtitle rows and cues, and subtitle files; shared by Node and the render page.
+- `masks.js`: which Masks show at each moment, where their element's boxes are, and what stops one from being drawn; shared by Node and the render page.
 - `time-map.js`: the map between Final and Source time that fast-forwards make, and what moves to Final time; shared by Node and the render page.
 - `styles.js` / `styles/`: built-in styling files, and the file refs an Edit or Look names (copying, serving).
 - `look.js`: saving, listing and adopting Looks.

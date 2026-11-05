@@ -1,22 +1,28 @@
 import { landing, pauseMs, random, reach, typingDelays } from './motion.js';
 import { boxOnPage } from './frames.js';
 import { carried, seenBy, windowMaps } from './tabs.js';
+import { EFFECT_NAMES, MASK_EFFECTS } from './masks.js';
+
+/** Milliseconds between the Director's checks of what a mask's locator matches, so a replaced element is followed. */
+const REWATCH_MS = 100;
 
 /**
  * Timed, viewport-aligned interactions shared by all scenarios, moving like a person (see motion.js).
  * `tabs` are the Tabs Capture follows (follow-tabs.js); the Director acts only on the one in front.
  * `notes` collects the camera's focus targets and `wide` windows, where each Line starts (`said`),
  * each fast-forwarded wait (`forwarded`) and the pointer path no Tab could see (`pointer`, as
- * [epoch ms, x, y, tab]). `voiced` maps the Narration's Line ids to their audio's seconds, or is null
+ * [epoch ms, x, y, tab]), and each element masked (`elements`, { id, tab, name }) with its mask
+ * (`masks`). `voiced` maps the Narration's Line ids to their audio's seconds, or is null
  * without one. `speed` scales every move, pause and typing delay it chooses; `seed` picks one of many
- * equally human ways to move.
+ * equally human ways to move. `signal` aborts once the Scenario has run, when masks stop following.
  */
-export function createDirector(tabs, { startedAt, fps, voiced = null, speed = 1, seed = 1 }, notes) {
-  const { focus: focusTargets, wide: wideWindows, said, forwarded, pointer } = notes;
-  let cursor = { x: 0, y: 0, tab: tabs.front.id }, forwarding = null;
+export function createDirector(tabs, { startedAt, fps, voiced = null, speed = 1, seed = 1, signal }, notes) {
+  const { focus: focusTargets, wide: wideWindows, said, forwarded, pointer, elements = [], masks = [] } = notes;
+  Object.assign(notes, { elements, masks });
+  let cursor = { x: 0, y: 0, tab: tabs.front.id }, forwarding = null, waited = false;
   const rand = random(seed);
   // Node's clock, not a page's, since the page in front may close mid-wait.
-  const wait = ms => new Promise(resolve => setTimeout(resolve, Math.max(0, ms)));
+  const wait = ms => { waited = true; return new Promise(resolve => setTimeout(resolve, Math.max(0, ms))); };
   const time = () => (Date.now() - startedAt) / 1000;
   const pause = name => wait(pauseMs(name, speed, rand));
   /** Moves the front Tab's mouse; where its page cannot see the pointer, the Director notes the path itself. */
@@ -167,6 +173,7 @@ export function createDirector(tabs, { startedAt, fps, voiced = null, speed = 1,
     if (typeof action !== 'function') throw new Error('d.fastForward needs a function that waits, such as () => reply.waitFor()');
     if (!(typeof rate === 'number' && rate >= 1)) throw new Error(`d.fastForward needs a rate of at least 1, not ${rate}`);
     if (forwarding) throw new Error(`d.fastForward was called inside the one from ${forwarding.t.toFixed(2)} s`);
+    waited = true;
     forwarding = { t: time(), rate };
     try { return await action(); }
     finally { forwarded.push({ t: forwarding.t, end: time(), rate }); forwarding = null; }
@@ -185,6 +192,37 @@ export function createDirector(tabs, { startedAt, fps, voiced = null, speed = 1,
       said.push({ t, id, text });
     }
   }
+  /**
+   * Masks every element `locator` matches, in any Tab, from now until `end()` is called or the Take
+   * ends: `blur` and `cover` hide it, `spotlight` dims the page around it. Capture records each
+   * element's box as it moves; a blur or cover made before the Director first waits or acts covers the
+   * Take from its first frame. Other options are the effect's parameters (masks.js).
+   */
+  async function mask(locator, opts = {}) {
+    const { effect = 'blur', ...params } = opts;
+    if (!(effect in MASK_EFFECTS)) throw new Error(`d.mask needs effect ${EFFECT_NAMES}, not '${effect}'`);
+    const target = typeof locator === 'string' ? tabs.front.page.locator(locator) : locator, tab = tabs.of(target.page());
+    if (!tab) throw new Error('d.mask target is on a page Capture does not follow; mask on d.page, or on a page the demo opened');
+    const t = effect !== 'spotlight' && !waited ? 0 : time();
+    await tabs.ready(tab.page);
+    const id = elements.length;
+    const watch = () => target.evaluateAll((found, id) => window.__cuetakeProbe?.watch(id, found) ?? false, id);
+    if (!await watch()) throw new Error(`d.mask could not follow ${target} in Tab ${tab.id}: Capture's probe is not running in its frame`);
+    elements.push({ id, tab: tab.id, name: String(target) });
+    const entry = { t, end: null, element: id, effect, ...params };
+    masks.push(entry);
+    // The page may replace the element, or navigate; watching again follows what the locator matches now.
+    let busy = false;
+    const timer = setInterval(() => {
+      if (busy || target.page().isClosed()) return;
+      busy = true;
+      watch().catch(() => {}).finally(() => { busy = false; });
+    }, REWATCH_MS);
+    timer.unref?.();
+    signal?.addEventListener('abort', () => clearInterval(timer), { once: true });
+    if (signal?.aborted) clearInterval(timer);
+    return { end() { entry.end ??= time(); } };
+  }
   /** Brings a Tab back in front, such as the one a closed tab's demo continues in; the cursor stays where it was. */
   async function switchTo(page) {
     await tabs.switchTo(page);
@@ -193,6 +231,6 @@ export function createDirector(tabs, { startedAt, fps, voiced = null, speed = 1,
   return {
     /** The Tab in front. */
     get page() { return tabs.front.page; },
-    wait, time, at: seconds => wait(seconds * 1000 - (Date.now() - startedAt)), move, hover, click, press, type, drag, focus, say, fastForward, switchTo,
+    wait, time, at: seconds => wait(seconds * 1000 - (Date.now() - startedAt)), move, hover, click, press, type, drag, focus, say, fastForward, mask, switchTo,
   };
 }
