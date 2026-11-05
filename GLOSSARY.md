@@ -43,7 +43,7 @@ A key or combination pressed outside a text field, or with Control, Alt or Meta 
 _Avoid_: hotkey, keystroke, key event
 
 **Auth profile**:
-A saved, named login state that a Take can start from, so login never happens on camera.
+A saved, named login state that a Take of a web page can start from, so login never happens on camera. A Take of an App starts with the login the App already has.
 _Avoid_: session, cookies, login state
 
 ### Rendering
