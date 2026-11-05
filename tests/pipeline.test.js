@@ -1,7 +1,7 @@
 import { test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import pkg from '../package.json' with { type: 'json' };
-import { scenarioSchema, summarizeFrames, captureWarnings, timelineWarnings, captureScale, narrationSchema, timelineOf } from '../src/pipeline.js';
+import { scenarioSchema, summarizeFrames, captureWarnings, timelineWarnings, captureScale, narrationSchema, timelineOf, desktopTimelineOf } from '../src/pipeline.js';
 import { placeRecords } from '../src/probe.js';
 import { captureSeconds } from '../src/tab-capture.js';
 import { drawsWithGpu } from '../src/environment.js';
@@ -19,6 +19,8 @@ import { shortcutKeys, keycapShows, keycapTrack } from '../src/shortcuts.js';
 import { timeMap, fastForwardProblems, retimed, linesInFinal, badgeAt } from '../src/time-map.js';
 import { windowMaps, tabTrack, inWindow, carried, seenBy } from '../src/tabs.js';
 import { maskTrack, maskProblems, maskWarnings, mergedPast } from '../src/masks.js';
+import { windowsAt, drawnWindows, desktopWarnings } from '../src/desktop.js';
+import { createAppDirector } from '../src/director.js';
 import fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -1269,4 +1271,95 @@ test('verification warns about a mask whose element never showed during its span
     "Mask 0 (blur from 2.50 s) found no getByTestId('email') on the page during its span, so it drew nothing; check the locator, or when the element shows",
     "Mask 1 (spotlight) found no getByText('Total') on the page during its span, so it drew nothing; check the locator, or when the element shows",
   ]);
+});
+
+// A Take of Apps (ADR 0009): a sidecar as cuetake-capture writes it, for a 1200×760-point Desktop.
+const desktopViewport = { width: 1200, height: 760 };
+const appWindow = { id: 7, layer: 0, x: 0, y: 0, width: 1200, height: 760, radius: 16 };
+const contextMenu = { id: 9, layer: 101, x: 1100, y: 300, width: 230, height: 593, radius: 0 };
+const sidecarWindows = [{ t: 0, shown: [appWindow] }, { t: 2.3, shown: [appWindow, contextMenu] }, { t: 4.2, shown: [appWindow] }];
+
+test('Render draws the App windows showing at each moment, back to front, clipped to the Desktop where it is on the stage, with effects only around those over no other', () => {
+  expect(windowsAt(sidecarWindows, 0).map(w => w.id)).toEqual([7]);
+  expect(windowsAt(sidecarWindows, 3).map(w => w.id)).toEqual([7, 9]);
+  expect(windowsAt(sidecarWindows, 9).map(w => w.id)).toEqual([7]);
+  expect(windowsAt([], 1)).toEqual([]);
+  // The Desktop fills a 2400×1520 page at stage scale 2, at 100, 50: a window fills it, with its corners at stage scale;
+  // the menu is cut where it leaves the Desktop. The menu lies over the window, where the Source already shows its
+  // own shadow, so only the window gets the window effects around it.
+  const page = { x: 100, y: 50, w: 2400, h: 1520 };
+  expect(drawnWindows(windowsAt(sidecarWindows, 3), desktopViewport, page)).toEqual([
+    { id: 7, window: { x: 100, y: 50, w: 2400, h: 1520 }, radius: 32, effects: true },
+    { id: 9, window: { x: 2300, y: 650, w: 200, h: 920 }, radius: 0, effects: false },
+  ]);
+  // A window wholly outside the Desktop is not drawn; a radius never passes half the side it rounds; a window over
+  // the Background has its effects.
+  expect(drawnWindows([{ ...appWindow, x: 1300 }, { ...appWindow, width: 20, height: 10, radius: 16 }], desktopViewport, page)).toEqual([
+    { id: 7, window: { x: 100, y: 50, w: 40, h: 20 }, radius: 10, effects: true },
+  ]);
+});
+
+test('verification warns when a window leaves the Desktop, the first window moves or resizes, or the Desktop is not at scale 2', () => {
+  const frames = scale => [{ timeMs: 0, scale }, { timeMs: 16.7, scale }];
+  const timeline = (windows, more = {}) => ({ viewport: desktopViewport, windows, ...more });
+  expect(desktopWarnings(timeline([{ t: 0, shown: [appWindow] }]), { frames: frames(2), dropped: 0 })).toEqual([]);
+  expect(desktopWarnings(timeline(sidecarWindows), { frames: frames(2), dropped: 0 })).toEqual([
+    'At 2.30 s a window of the App (230×593 points) reached outside the Desktop, so the Final shows it cut off.',
+  ]);
+  const moved = [{ t: 0, shown: [appWindow] }, { t: 3, shown: [{ ...appWindow, x: 40, y: 20 }] }];
+  expect(desktopWarnings(timeline(moved), { frames: frames(2), dropped: 0 })).toEqual([
+    'At 3.00 s the App\'s first window moved or resized, to 40, 20, 1200×760 points; Render does not correct it, so leave it where the Take put it.',
+  ]);
+  const small = [{ t: 0, shown: [{ ...appWindow, width: 800, height: 600 }] }];
+  expect(desktopWarnings(timeline(small), { frames: frames(1), dropped: 3 })).toEqual([
+    'The App\'s first window is 800×600 points, not the Desktop\'s 1200×760, so the Background shows around it: the App may limit its size; choose a viewport it can fill.',
+    'The Desktop was recorded at scale 1, so the Final is half as sharp; record on a Retina display.',
+    'The encoder could not keep up and 3 frames were dropped from the Source; close other work and record again.',
+  ]);
+});
+
+test('a Scenario names exactly one of a start page or an App, given by path or bundle id with arguments', () => {
+  expect(scenarioSchema.parse({ name: 'notes', app: { path: 'com.apple.TextEdit' } }).app).toEqual({ path: 'com.apple.TextEdit', args: [] });
+  expect(scenarioSchema.parse({ name: 'notes', app: { path: '/Applications/LocalSend.app', args: ['--hidden'] } }).app.args).toEqual(['--hidden']);
+  expect(() => scenarioSchema.parse({ name: 'notes' })).toThrow('exactly one of url or app');
+  expect(() => scenarioSchema.parse({ name: 'notes', url: 'https://example.com', app: { path: 'com.apple.TextEdit' } })).toThrow('exactly one of url or app');
+  expect(() => scenarioSchema.parse({ name: 'notes', app: { path: '' } })).toThrow();
+});
+
+test('a Take of Apps has no browser chrome or address bar by default, unless the Scenario names a chrome', () => {
+  const app = scenarioSchema.parse({ name: 'notes', app: { path: 'com.apple.TextEdit' } });
+  const edit = createEdit(app, { viewport: desktopViewport, windows: sidecarWindows, events: [] }, []);
+  expect(edit.frame.chrome).toBe(false);
+  expect(edit.frame.url).toBeUndefined();
+  expect(edit.frame.effects).toEqual(DEFAULT_STYLE.frame.effects);
+  const named = createEdit({ ...app, frame: { chrome: { draw: 'macos' } } }, { viewport: desktopViewport, windows: sidecarWindows, events: [] }, []);
+  expect(named.frame.chrome).toEqual({ draw: 'macos' });
+});
+
+test('the Director of a Take of Apps keeps time, says Lines, fast-forwards and focuses, and names the actions it cannot do yet', async () => {
+  const notes = { focus: [], wide: [], said: [], forwarded: [], pointer: [] };
+  const d = createAppDirector({ startedAt: Date.now() }, notes);
+  d.focus({ x: 10, y: 20, width: 300, height: 40 }, 1);
+  await d.say('open', 'Open a document');
+  expect(await d.fastForward(async () => 'done', 3)).toBe('done');
+  expect(notes.focus).toEqual([{ t: 1, box: { x: 10, y: 20, width: 300, height: 40 }, tab: 0 }]);
+  expect(notes.said).toMatchObject([{ id: 'open', text: 'Open a document' }]);
+  expect(notes.forwarded).toMatchObject([{ rate: 3 }]);
+  expect(() => d.page).toThrow('d.page does not work in a Take of an App yet');
+  for (const action of ['click', 'type', 'press', 'move', 'hover', 'drag', 'mask', 'switchTo']) expect(() => d[action]()).toThrow(`d.${action} does not work in a Take of an App yet`);
+});
+
+test('the Timeline of a Take of Apps has one Tab, its Desktop, with the windows the helper saw and what the Director noted', () => {
+  const notes = { focus: [{ t: 1, box: { x: 10, y: 20, width: 300, height: 40 }, tab: 0 }], said: [{ t: 0.5, id: 'open', text: 'Open' }], forwarded: [{ t: 2, end: 3, rate: 4 }], pointer: [] };
+  const timeline = desktopTimelineOf({ app: { path: 'com.apple.TextEdit', args: [] }, viewport: desktopViewport, scale: 2 }, { duration: 5.04, windows: sidecarWindows }, notes);
+  expect(timeline).toMatchObject({
+    app: { path: 'com.apple.TextEdit' }, viewport: desktopViewport, scale: 2, duration: 5.04, windows: sidecarWindows, pointer: [], shapes: [],
+    tabs: [{ id: 0, opener: null, opened: 0, closed: null, viewport: desktopViewport, start: 0 }],
+  });
+  expect(timeline.events.map(event => event.type)).toEqual(['say', 'focus', 'fastForward']);
+  // The first Edit of such a Take keeps the Director's camera target, Line and fast-forward.
+  const edit = createEdit(scenarioSchema.parse({ name: 'notes', app: { path: 'com.apple.TextEdit' } }), timeline, notes.focus);
+  expect(edit.camera.targets).toEqual([notes.focus[0]]);
+  expect(edit.narration.lines).toEqual([{ id: 'open', start: 0.5 }]);
+  expect(edit.fastForward).toEqual([{ start: 2, end: 3, rate: 4 }]);
 });

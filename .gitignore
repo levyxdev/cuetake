@@ -7,3 +7,5 @@ recordings/
 .DS_Store
 *.tgz
 .playwright-mcp/
+helper/.build/
+helper/bin/

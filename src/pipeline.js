@@ -7,7 +7,9 @@ import { startRecording, getRecordingPage, beginCapture, stopRecording, cleanup 
 import { renderFinal, inspectFinal, composePreview, measureLines } from './render.js';
 import { outputSize, atShortSide } from './stage.js';
 import { resolveAuthProfile } from './auth.js';
-import { createDirector } from './director.js';
+import { createDirector, createAppDirector } from './director.js';
+import { startDesktop } from './app-capture.js';
+import { desktopWarnings } from './desktop.js';
 import { collectTimeline } from './probe.js';
 import { createEdit, evenSize, merge, withDefaults } from './edit.js';
 import { loadLook, resolvedLook, applyLook, lookFromEdit, saveLook, summarize } from './look.js';
@@ -18,14 +20,19 @@ import { maskWarnings } from './masks.js';
 import pkg from '../package.json' with { type: 'json' };
 
 const SCHEMA_VERSION = 4;
-/** Scenario config: capture settings, validated, plus styling that seeds each Take's Edit, which is not (ADR 0005). */
+/**
+ * Scenario config: capture settings, validated, plus styling that seeds each Take's Edit, which is not
+ * (ADR 0005). A Scenario opens a start page (`url`) or starts an App (`app`: a `.app` path or bundle id,
+ * with its arguments), never both (ADR 0009); for an App, `viewport` is the Desktop's size in points.
+ */
 export const scenarioSchema = z.object({
   name: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
-  url: z.string().url().refine(s => /^https?:/.test(s), 'Capture requires HTTP(S)'),
+  url: z.string().url().refine(s => /^https?:/.test(s), 'Capture requires HTTP(S)').optional(),
+  app: z.object({ path: z.string().min(1), args: z.array(z.string()).default([]) }).strict().optional(),
   viewport: z.object({ width: evenSize, height: evenSize }).default({ width: 1440, height: 900 }),
   capture: z.object({ fps: z.union([z.literal(30), z.literal(60)]).default(60), resolutionScale: z.union([z.literal(1), z.literal(2)]).default(2) }).default({}),
   director: z.object({ speed: z.number().positive().default(1), seed: z.number().int().default(1) }).strict().default({}),
-}).passthrough();
+}).passthrough().refine(config => !config.url !== !config.app, { message: 'A Scenario names exactly one of url or app', path: ['url'] });
 /**
  * A Narration file: Lines in one language, each with its text, its audio (relative to the file) and
  * optionally word timings from the speech tool and a start in seconds. Any duration it states is
@@ -124,8 +131,88 @@ export function timelineOf(take, stopped, observed, notes, startedAtMs) {
   };
 }
 
+/**
+ * The Timeline of a Take of Apps (ADR 0009) from `take` (the App, the Desktop's size in points as the
+ * viewport, and its scale), what the helper saw (`stopped`: the duration and the App's windows over
+ * time) and what the Director noted. The Take has one Tab, its Desktop; positions are Desktop points.
+ */
+export function desktopTimelineOf({ app, viewport, scale }, stopped, notes) {
+  return {
+    schemaVersion: SCHEMA_VERSION, app, viewport, scale, duration: stopped.duration,
+    tabs: [{ id: 0, opener: null, opened: 0, closed: null, viewport, start: 0 }],
+    pointer: notes.pointer.map(([t, x, y]) => [t, x, y, 0]), shapes: [], windows: stopped.windows,
+    events: [
+      ...notes.focus.map(f => ({ type: 'focus', ...f })), ...notes.said.map(line => ({ type: 'say', ...line })), ...notes.forwarded.map(span => ({ type: 'fastForward', ...span })),
+    ].sort((a, b) => a.t - b.t),
+  };
+}
+
 /** The Source of each of a Take's Tabs, by Tab id. */
-const sourcesOf = (dir, timeline) => Object.fromEntries(timeline.tabs.map(tab => [tab.id, join(dir, `source-${tab.id}.webm`)]));
+const sourcesOf = (dir, timeline) => Object.fromEntries(timeline.tabs.map(tab => [tab.id, join(dir, `source-${tab.id}.${timeline.windows ? 'mp4' : 'webm'}`)]));
+
+/**
+ * Refuses what does not apply to an App: an Auth profile, since the App runs with the user's own login
+ * and data; a resolution scale, since the Desktop takes its display's; and `prepare`, since the App has
+ * no page for it yet (ADR 0009).
+ */
+function refuseForApp(scenario, given, options) {
+  if (options.authProfile) throw new Error('--auth-profile is for web pages: an App runs with the login and data it already has');
+  if (given.capture?.resolutionScale !== undefined) throw new Error('capture.resolutionScale does not apply to an App: the Desktop records at the scale of the display it sits on');
+  if (scenario.prepare) throw new Error('prepare(page) does not work for an App yet; start the App in the state the demo needs, or do it in run');
+  if (options.headed) throw new Error('--headed is for web pages: an App always shows on the screen');
+}
+
+/** Captures a start page: the Tabs' Sources, capture.json and poster.png in `dir`; returns the Timeline, the Director's notes and the evidence. */
+async function capturePage(scenario, config, dir, { authState, headed, voiced }) {
+  try {
+    const session = await startRecording(config.url, {
+      ...config.viewport, ...config.capture, outputDir: dir, deferCapture: true, storageState: authState, headed,
+    });
+    const page = getRecordingPage(session.sessionId);
+    if (scenario.prepare) await scenario.prepare(page);
+    await page.evaluate(() => document.fonts.ready);
+    const capture = await beginCapture(session.sessionId);
+    const startedAtMs = Date.parse(capture.startedAt);
+    const notes = { focus: [], wide: [], said: [], forwarded: [], pointer: [], elements: [], masks: [] };
+    const ran = new AbortController();
+    const director = createDirector(capture.tabs, { startedAt: startedAtMs, fps: config.capture.fps, voiced, ...config.director, signal: ran.signal }, notes);
+    const evidence = await scenario.run(director).finally(() => ran.abort());
+    await capture.tabs.started();
+    await capture.tabs.front.page.screenshot({ path: join(dir, 'poster.png') });
+    const observed = new Map();
+    for (const tab of capture.tabs.list()) if (tab.recorded) observed.set(tab.id, await collectTimeline(tab.page, startedAtMs));
+    const stopped = await stopRecording(session.sessionId);
+    for (const tab of stopped.tabs) await fs.rename(tab.webmPath, join(dir, `source-${tab.id}.webm`));
+    await writeJson(join(dir, 'capture.json'), { tabs: stopped.tabs.map(tab => ({ tab: tab.id, ...tab.stats })) });
+    const timeline = timelineOf({ url: capture.url, viewport: config.viewport, scale: config.capture.resolutionScale }, stopped, observed, notes, startedAtMs);
+    return { timeline, notes, evidence };
+  } finally { await cleanup(); }
+}
+
+/**
+ * Captures a Desktop of the App (ADR 0009) through the helper: source-0.mp4, capture.json and
+ * poster.png in `dir`. The Desktop records at its display's scale, which `config.capture` then holds.
+ * Returns the Timeline, the Director's notes, the evidence, and whether the helper could quit the App.
+ */
+async function captureApp(scenario, config, dir, { voiced }) {
+  const { fps } = config.capture;
+  process.stderr.write(`CueTake starts ${config.app.path} and records it. Leave the Mac alone until the Take ends: the Scenario acts on the real App and its data.\n`);
+  const desktop = await startDesktop({ app: config.app, desktop: config.viewport, fps, source: join(dir, 'source-0.mp4'), poster: join(dir, 'poster.png') });
+  try {
+    config.capture.resolutionScale = desktop.ready.scale;
+    const startedAtMs = await desktop.start();
+    const notes = { focus: [], wide: [], said: [], forwarded: [], pointer: [] };
+    const evidence = await scenario.run(createAppDirector({ startedAt: startedAtMs, voiced }, notes));
+    const stopped = await desktop.stop();
+    const { width, height } = stopped.size;
+    await writeJson(join(dir, 'capture.json'), { tabs: [{
+      tab: 0, settings: { width, height, frameRate: fps }, duration: stopped.duration, dropped: stopped.dropped,
+      frames: stopped.frames.map(([t, scale]) => ({ timeMs: Math.round(t * 1e6) / 1000, scale })),
+    }] });
+    const timeline = desktopTimelineOf({ app: { ...config.app, name: desktop.ready.app, bundle: desktop.ready.bundle }, viewport: config.viewport, scale: desktop.ready.scale }, stopped, notes);
+    return { timeline, notes, evidence, quit: stopped.quit, app: desktop.ready.app };
+  } finally { desktop.kill(); }
+}
 
 /** New take directories are exclusive: reruns never overwrite a previous take. */
 export async function recordScenario(scenarioPath, outputDir, options = {}) {
@@ -136,11 +223,18 @@ export async function recordScenario(scenarioPath, outputDir, options = {}) {
   const given = merge(look ? resolvedLook(look) : {}, absolute(scenario.config, dirname(resolve(scenarioPath))));
   const config = scenarioSchema.parse(given);
   if (typeof scenario.run !== 'function') throw new Error('Scenario must export run(director)');
+  if (config.app) refuseForApp(scenario, given, options);
+  // A relative .app path names an App beside the Scenario.
+  if (config.app?.path.includes('/')) config.app.path = resolve(dirname(resolve(scenarioPath)), config.app.path);
   const authState = options.authProfile ? await resolveAuthProfile(options.authProfile) : undefined;
   const ready = await doctor();
   if (!ready.ok) throw new Error(JSON.stringify(ready));
+  if (config.app && !ready.apps?.ok) {
+    const missing = ready.apps ? ready.checks.filter(check => !check.ok).map(check => `${check.name}: ${check.fix}`) : ['Recording an App needs macOS'];
+    throw new Error(`This Mac cannot record an App yet. ${missing.join(' ')} Nothing was requested; run cuetake doctor after the change.`);
+  }
   const gpu = ready.checks.find(check => check.name === 'gpu');
-  const { resolutionScale, lowered } = captureScale(given.capture?.resolutionScale, gpu);
+  const { resolutionScale, lowered } = config.app ? { resolutionScale: config.capture.resolutionScale, lowered: false } : captureScale(given.capture?.resolutionScale, gpu);
   config.capture.resolutionScale = resolutionScale;
   const dir = resolve(outputDir || join('recordings', config.name, new Date().toISOString().replace(/[:.]/g, '-')));
   await fs.mkdir(resolve(dir, '..'), { recursive: true });
@@ -148,46 +242,30 @@ export async function recordScenario(scenarioPath, outputDir, options = {}) {
   let project = { schemaVersion: SCHEMA_VERSION, tool: 'CueTake', version: pkg.version, createdAt: new Date().toISOString(), status: 'recording', authenticated: Boolean(authState), ...(look && { look: look.name }), config };
   await writeJson(join(dir, 'project.json'), project);
   await fs.copyFile(resolve(scenarioPath), join(dir, 'scenario.mjs'));
-  let unplaced = [], unvoiced = [];
+  let unplaced = [], unvoiced = [], captured;
   try {
     // The Narration is voiced before Capture, so d.say can hold each Line for its audio (ADR 0006).
     const imported = options.narration ? await intoTakeNarration(options.narration, dir) : null;
-    const session = await startRecording(config.url, {
-      ...config.viewport, ...config.capture, outputDir: dir, deferCapture: true, storageState: authState, headed: options.headed,
-    });
-    const page = getRecordingPage(session.sessionId);
-    if (scenario.prepare) await scenario.prepare(page);
-    await page.evaluate(() => document.fonts.ready);
-    const capture = await beginCapture(session.sessionId);
-    const startedAtMs = Date.parse(capture.startedAt);
-    const notes = { focus: [], wide: [], said: [], forwarded: [], pointer: [], elements: [], masks: [] };
-    const ran = new AbortController();
-    const director = createDirector(capture.tabs, { startedAt: startedAtMs, fps: config.capture.fps, voiced: imported && new Map(Object.entries(imported.durations)), ...config.director, signal: ran.signal }, notes);
-    const evidence = await scenario.run(director).finally(() => ran.abort());
-    await capture.tabs.started();
-    await capture.tabs.front.page.screenshot({ path: join(dir, 'poster.png') });
-    const observed = new Map();
-    for (const tab of capture.tabs.list()) if (tab.recorded) observed.set(tab.id, await collectTimeline(tab.page, startedAtMs));
-    const stopped = await stopRecording(session.sessionId);
-    for (const tab of stopped.tabs) await fs.rename(tab.webmPath, join(dir, `source-${tab.id}.webm`));
-    await writeJson(join(dir, 'capture.json'), { tabs: stopped.tabs.map(tab => ({ tab: tab.id, ...tab.stats })) });
-    const timeline = timelineOf({ url: capture.url, viewport: config.viewport, scale: config.capture.resolutionScale }, stopped, observed, notes, startedAtMs);
-    const { focus, wide } = notes;
+    const voiced = imported && new Map(Object.entries(imported.durations));
+    captured = config.app ? await captureApp(scenario, config, dir, { voiced }) : await capturePage(scenario, config, dir, { authState, headed: options.headed, voiced });
+    const { timeline, notes: { focus, wide }, evidence } = captured;
     await writeJson(join(dir, 'timeline.json'), timeline);
     let edit = createEdit(config, timeline, focus, wide);
     if (imported) ({ edit, unplaced } = placeLines(edit, imported.narration));
     else unvoiced = edit.narration.lines.map(line => line.id);
     await writeJson(join(dir, 'edit.json'), await intoTake(edit, dir));
-    project = { ...project, status: 'captured', duration: stopped.durationSeconds, evidence: evidence ?? null };
+    project = { ...project, status: 'captured', duration: timeline.duration, evidence: evidence ?? null };
     await writeJson(join(dir, 'project.json'), project);
   } catch (error) {
     await writeJson(join(dir, 'project.json'), { ...project, status: 'failed', error: error.message });
     throw error;
-  } finally { await cleanup(); }
+  }
   await renderTake(dir);
   const verification = await verifyTake(dir);
   return { directory: dir, final: join(dir, 'final.mp4'), verification,
     ...(lowered && { capture: { resolutionScale, note: `Chromium draws without a GPU here (${gpu.renderer}), so Capture used resolutionScale 1; set capture.resolutionScale to 2 in the Scenario to override` } }),
+    ...(config.app && { capture: { resolutionScale: config.capture.resolutionScale, note: 'The Desktop records at the scale of the display it sits on' } }),
+    ...(captured.quit === false && { app: { quit: false, note: `${captured.app} did not quit after the Take; it may be asking to save. Quit it before the next Take.` } }),
     ...(unplaced.length && { unplaced: { lines: unplaced, note: 'These Lines were never said and have no start; add d.say or a start in edit.json' } }),
     ...(unvoiced.length && { unvoiced: { lines: unvoiced, note: `These Lines have no audio yet; voice them and run cuetake narrate import ${dir} <narration.json>` } }) };
 }
@@ -249,7 +327,7 @@ export async function previewTake(directory, refs = [], { at } = {}) {
   const { config, timeline, edit, narration } = await loadTake(dir);
   const length = timeMap(edit.fastForward, timeline.duration).duration;
   if (at !== undefined && !(at >= 0 && at <= length)) throw new Error(`--at must be between 0 and ${+length.toFixed(3)} seconds of the Final`);
-  const host = new URL(config.url).host;
+  const host = config.url && new URL(config.url).host;
   const looks = await Promise.all(refs.map(ref => loadLook(ref)));
   const tiles = [{ name: 'current', edit }, ...looks.map(look => ({ name: look.name, edit: applyLook(edit, resolvedLook(look), host) }))];
   const files = {}, shown = tiles.map(({ name, edit }) => ({ name, edit: forRender(atShortSide(edit, 1080), dir, files).edit }));
@@ -264,7 +342,7 @@ export async function applyLookToTake(ref, directory) {
   const dir = resolve(directory);
   const { config, edit } = await loadTake(dir);
   const look = await loadLook(ref);
-  const next = await intoTake(applyLook(edit, resolvedLook(look), new URL(config.url).host), dir);
+  const next = await intoTake(applyLook(edit, resolvedLook(look), config.url && new URL(config.url).host), dir);
   await writeJson(join(dir, 'edit.json'), next);
   return { look: look.name, edit: join(dir, 'edit.json'), summary: summarize(lookFromEdit(next)), next: `cuetake render ${dir}` };
 }
@@ -393,7 +471,7 @@ export async function verifyTake(directory) {
   const { lines, ...final } = media;
   const verification = {
     passed: true, checkedAt: new Date().toISOString(), media: final,
-    warnings: [...capture.tabs.flatMap(stats => captureWarnings(stats, config.capture.resolutionScale, several ? tabOf(stats.tab) : null)), ...timelineWarnings(timeline), ...maskWarnings(edit.masks, timeline.elements)],
+    warnings: [...capture.tabs.flatMap(stats => captureWarnings(stats, config.capture.resolutionScale, several ? tabOf(stats.tab) : null)), ...timelineWarnings(timeline), ...maskWarnings(edit.masks, timeline.elements), ...(timeline.windows ? desktopWarnings(timeline, capture.tabs[0]) : [])],
     sources: capture.tabs.map(stats => ({ tab: stats.tab, settings: stats.settings, ...summarizeFrames(stats.frames, stats.duration), ...(stats.pageFrames && { pageFramesPerSecond: stats.pageFrames }) })), fullDecode: 'passed',
     ...(spoken && { narration: { lines: spoken.lines.map(({ id, start }) => ({ id, start, duration: lines.find(line => line.id === id).duration })), subtitles: SUBTITLE_FILES.map(([name]) => name), burned: burnsIn(edit.subtitles) } }),
   };

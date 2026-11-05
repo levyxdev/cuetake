@@ -35,6 +35,7 @@ uninstall removes CueTake's npx cache and its browser, unless another Playwright
   are never touched. --dry-run lists what would go and removes nothing.
 record captures, renders and verifies a new take; an existing directory is never overwritten.
   Capture runs headless; --headed shows the browser window while recording.
+  A Scenario naming an app instead of a url records a desktop App on macOS: its windows on a Desktop.
   --look seeds the first Edit from a Look; fields the Scenario config names win.
   --narration copies a Narration and its audio into the Take first: d.say(id) holds each Line for its audio.
 narrate import copies a Narration and its audio into a recorded Take, replacing its earlier one. Lines keep

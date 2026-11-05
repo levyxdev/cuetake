@@ -3,8 +3,13 @@ import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { chromium } from 'playwright';
+import { appChecks } from './app-capture.js';
 
-/** Checks what CueTake needs; installs nothing. Each failed check names the exact fix. */
+/**
+ * Checks what CueTake needs; installs nothing and requests no permission. Each failed check names the
+ * exact fix. `ok` covers web pages; on macOS, `apps.ok` also covers the checks marked `for: 'Apps'`,
+ * which a Take of an App needs too.
+ */
 export async function doctor() {
   const checks = [];
   const [major, minor] = process.versions.node.split('.').map(Number);
@@ -19,7 +24,8 @@ export async function doctor() {
     ? { name: 'platform', ok: true, value: 'macOS' }
     : { name: 'platform', ok: true, value: process.platform, note: 'Only macOS is verified; capture and Render may behave differently here.' };
   checks.push(platform);
-  return { ok: checks.every(c => c.ok), checks };
+  if (process.platform === 'darwin') checks.push(...await appChecks());
+  return { ok: checks.every(c => c.ok || c.for), ...(process.platform === 'darwin' && { apps: { ok: checks.every(c => c.ok) } }), checks };
 }
 
 /** Whether a WebGL renderer name is a GPU; null when Chromium reports none. */

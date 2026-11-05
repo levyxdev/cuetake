@@ -5,7 +5,7 @@ description: Plan, record, refine, and verify browser product demo videos with t
 
 # CueTake agent operating manual
 
-CueTake is a local execution engine for AI agents. You direct the story; CueTake captures the browser and renders the finished take. Run every command through `scripts/cuetake` in this skill's folder; it launches the pinned CueTake version with `npx`. Read [scenarios.md](scenarios.md) when writing a scenario, [narration.md](narration.md) when a demo needs a voice or subtitles, [styling.md](styling.md) when changing how a Final looks, [authentication.md](authentication.md) when a page needs login, and [setup.md](setup.md) when Node or `npx` is missing, `doctor` reports a failed check, or the user wants CueTake removed.
+CueTake is a local execution engine for AI agents. You direct the story; CueTake captures the browser and renders the finished take. Run every command through `scripts/cuetake` in this skill's folder; it launches the pinned CueTake version with `npx`. On macOS it can also record a desktop App instead of a page (scenarios.md, Apps). Read [scenarios.md](scenarios.md) when writing a scenario, [narration.md](narration.md) when a demo needs a voice or subtitles, [styling.md](styling.md) when changing how a Final looks, [authentication.md](authentication.md) when a page needs login, and [setup.md](setup.md) when Node or `npx` is missing, `doctor` reports a failed check, or the user wants CueTake removed.
 
 ## Workflow
 

@@ -8,6 +8,7 @@
   },
   "files": [
     "src",
+    "helper/bin/cuetake-capture",
     "examples",
     "README.md",
     "LICENSE"
@@ -15,7 +16,8 @@
   "scripts": {
     "start": "bun src/cli.js",
     "test": "bun test tests/pipeline.test.js",
-    "doctor": "bun src/cli.js doctor"
+    "doctor": "bun src/cli.js doctor",
+    "build:helper": "sh helper/build.sh"
   },
   "keywords": [
     "browser",

@@ -330,6 +330,59 @@ Answers the questions in [issue #23](https://github.com/levyxdev/cuetake/issues/
 - Background-mode computer use shows the right idea for locators: it found and pressed controls by AX role and title ("New chat", "Submit", the "Ask Gemini" text area), which is what a native Scenario's targets would be (section 8).
 - If computer use ever acts during Capture, the event tap's source-pid flag (section 7) marks its input, so the Timeline still gets presses and keys. Render could glide the Cursor between press points, but the Source would still show machine-speed typing and multi-second pauses, so this is a fallback, not the design.
 
+### 12. A Desktop: does a display capture filtered to one App show its menus, sheets and second windows, and leave other apps out?
+
+**Answer: yes, measured for issue #30 on 2026-11-05. A context menu, a pop-up list, a sheet and a second window all show in the frames, and another app's window over the Desktop does not. Menus need care: their window bounds are 75 points larger than the menu on every side, so the visible frame comes from Accessibility, not from the window list.**
+
+**Evidence** (`spike1.swift`, `spike1b.swift`, `spike1c.swift`; Script Editor, `com.apple.ScriptEditor2`, which was not running; TextEdit was)
+
+- `SCContentFilter(display:including:[app], exceptingWindows: [])` with `sourceRect` = a 1200×760-point Desktop at the display's centre, `width`/`height` = Desktop × 2, `minimumFrameInterval` 1/60, `showsCursor = false`, `.best`, `pixelFormat` BGRA and `backgroundColor` clear. The App's first window was moved and sized to the Desktop through AX (`kAXPositionAttribute`, `kAXSizeAttribute`) and took the frame exactly. Output, one line per step:
+  ```
+  desktop (255.0, 174.0, 1200.0, 760.0) window now (255.0, 174.0, 1200.0, 760.0)
+  1-window        frames 62 complete 62 size 2400 x 1520 ... scale 2 contentScale 1
+  2-covered       app windows front→back: ["L0 (271,190 66x20)", "L0 (255,174 1200x760)"]
+  3-context-menu  app windows front→back: ["L101 (781,374 380x743)", "L0 (271,190 66x20)", "L0 (255,174 1200x760)"]
+  4-popup-list    app windows front→back: ["L101 (168,153 253x204)", ...]
+  5-second-window app windows front→back: ["L0 (65,82 66x20)", "L0 (49,66 700x734)", ...]
+  6-sheet         app windows front→back: ["L0 (214,254 370x357)", ...]
+  windowList x100 ms 167
+  ```
+  Every frame was complete, at 60 per second. In the saved frames, the spike's own red window, floated over the Desktop, is absent; the context menu (right click posted at the window's centre), the language pop-up list, the second window (`⌘N`) and its save sheet (`⌘S`) all show. The pointer shows in none.
+- **Where windows go.** The second window opened where Script Editor cascades new windows, at (49, 66), mostly outside the Desktop; the pop-up list opened at x = 168, partly outside it. Both are clipped by `sourceRect`. Windows also carry small transparent helpers (the 66×20 window at the title's position).
+- **Window list.** `CGWindowListCopyWindowInfo(.optionOnScreenOnly)` lists the App's windows front to back with their layer (0 for windows and sheets, 101 for menus and pop-up lists) and bounds in global points, top-left origin, in 1.7 ms a call: cheap enough to read with every frame.
+- **Corners.** With a clear background, the frame's alpha is 0 outside the App's windows. Along the window's top-left diagonal, alpha passes 127 at 9 pixels in, which is a corner radius of 15.4 points (9 / (1 − 1/√2) / 2). H.264 has no alpha, so whatever Render must leave out has to be known from the sidecar.
+- **Menus.** The context menu's window bounds were (−48, 47, 384, 837), and its `AXMenu`, found by `AXUIElementCopyElementAtPosition` at the bounds' centre and walking up the parents, was (27, 122, 234, 687): 75 points in on each side. That band holds the menu's shadow, and nothing where nothing lies under it. For a window at layer 0, the outermost parent inside its bounds is the `AXWindow`, whose frame equals the bounds. A single-window screenshot (`SCScreenshotManager` with `desktopIndependentWindow`) of the menu, measured by alpha, found nothing in 116 ms, so that route was dropped.
+- **Quitting.** While a menu is open, the App ignores `terminate()` and AppleScript's `quit` waits: menu tracking holds its event loop until Escape closes the menu.
+
+**Implication for CueTake**
+
+- The helper records the App's windows from the window list with every complete frame: layer-0 windows at their bounds, any other window at the frame of the outermost Accessibility element inside its bounds, read once per window and size, falling back to the bounds. Each window's corner radius is read from the frame's alpha along its corner diagonals before encoding.
+- Render draws the Desktop's Source once per window, clipped to that window's frame and radius, back to front. Every window samples the same Source, so where windows overlap, the one behind is drawn under it again and nothing is lost by clipping one generously. The capture keeps the windows' own shadows: where a menu, a sheet or a control's own window lies over a window, the Source already shows its shadow there, so only a window over no other gets the window effects (the shadow) from Render. The first Takes showed why: Render's shadow around Script Editor's 66×20 toolbar-control window drew a halo over the window under it.
+- A window outside the Desktop is clipped, as the frames show; `verify` warns about it, as ADR 0009 says.
+- Before quitting the App at the end of a Take, the helper closes any open menu with Escape.
+
+### 13. Can hardware idle time tell the user's input from the Director's, without Input Monitoring?
+
+**Answer: no. The first synthetic move the helper posts resets the HID system's idle time, as hardware input does, so a reset during a Take cannot be told apart. The Timeline issue (#32) uses a listen-only event tap instead, which tags each event with the process that posted it (section 7), and needs the Input Monitoring check in `doctor`.**
+
+**Evidence** (`spike2.swift`, `spike2b.swift`, `idle.swift`)
+
+- With the Mac untouched, `CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: kCGAnyInputEventType)` grows steadily (13.84 s to 18.99 s over 5 s, sampled every 50 ms).
+- `spike2b` posted one mouse move per second with a `.combinedSessionState` source at `.cgSessionEventTap`, to a new position each time, and sampled the HID idle time every 250 ms. In each of three runs, the idle time dropped right after the first move and then grew through the next four:
+  ```
+  3.5 hid 17.92
+    [posted 4.05]
+  4.3 hid 0.72
+  4.8 hid 1.22
+    [posted 5.10]
+  5.1 hid 1.47
+  ...
+    [posted 8.14]
+  8.4 hid 4.77
+  ```
+  The value also lags: the drop shows up to 0.8 s after the event and implies an event a few tenths of a second before the post. Whatever the mechanism, a Director that starts moving resets the idle time, so a reset during a Take proves nothing about the user.
+- With the trackpad in use, the idle time reset about once a second (`spike2`), as expected.
+
 ---
 
 ## Open questions for the user
@@ -342,7 +395,7 @@ Settled with the user on 2026-11-05, while grilling the follow-up issues; [ADR 0
 4. **Signing the helper.** No Developer ID: run as a child process, an ad-hoc signature is enough. It is built on a Mac before publishing.
 5. **Shape fallback.** Accepted: infer the shape from the AX role when `currentSystemCursor` gives nothing.
 
-The grilling also replaced single-window capture (section 5) with a Desktop: a region of the screen filtered to the Take's Apps, so menus, sheets, several windows and switching between Apps are recorded. Whether that filter shows context menus and pop-up lists, and whether hardware idle time can detect the user's input without Input Monitoring, are checked on a Mac in issue #30.
+The grilling also replaced single-window capture (section 5) with a Desktop: a region of the screen filtered to the Take's Apps, so menus, sheets, several windows and switching between Apps are recorded. Whether that filter shows context menus and pop-up lists, and whether hardware idle time can detect the user's input without Input Monitoring, were checked on a Mac in issue #30: the filter shows them (section 12), and idle time cannot (section 13).
 
 ## Proposed ADR direction
 

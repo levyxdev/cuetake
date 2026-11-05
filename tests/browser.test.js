@@ -624,6 +624,30 @@ test('Render dims every window around the spotlights showing together, popups to
   } finally { await browser.close(); await fs.rm(dir, { recursive: true, force: true }); }
 }, 60_000);
 
+test('Render draws a Desktop only inside the App windows showing, each clipped to its frame, with the Background between them', async () => {
+  const dir = await fs.mkdtemp(join(tmpdir(), 'cuetake-desktop-'));
+  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
+  try {
+    // The Source is a 320×240-point Desktop at scale 2: black, with a red square at 240, 100, 20 points wide.
+    const source = join(dir, 'source-0.webm'), outputPath = join(dir, 'final.mp4');
+    await fs.writeFile(source, await syntheticSource(browser, 1));
+    await fs.writeFile(join(dir, 'blue.glsl'), 'void main() { color = vec4(0.0, 0.0, 1.0, 1.0); }');
+    const viewport = { width: 320, height: 240 }, window = { id: 1, layer: 0, x: 0, y: 0, width: 200, height: 150, radius: 0 };
+    const menu = { id: 2, layer: 101, x: 220, y: 90, width: 60, height: 40, radius: 0 };
+    const timeline = { viewport, duration: 0.9, tabs: [{ id: 0, opener: null, viewport }], windows: [{ t: 0, shown: [window] }, { t: 0.5, shown: [window, menu] }] };
+    await renderFinal({ sources: [source], finalPath: outputPath, timeline, ...forRender(bare({ frame: { background: [{ shader: 'blue.glsl' }] } }), dir) });
+    const at = [[100, 75], [250, 110], [300, 200], [210, 120]];
+    const [inWindow, square, outside, between] = await pixelsAt(browser, await extractFrame(outputPath, 0.2), at);
+    expect(inWindow[2]).toBeLessThan(60);
+    // Before the menu opens, the square it will show is not drawn: only the Background is there.
+    for (const pixel of [square, outside, between]) expect(pixel[2]).toBeGreaterThan(200);
+    const [, shownSquare, stillOutside] = await pixelsAt(browser, await extractFrame(outputPath, 0.7), at);
+    expect(shownSquare[0]).toBeGreaterThan(180);
+    expect(shownSquare[2]).toBeLessThan(80);
+    expect(stillOutside[2]).toBeGreaterThan(200);
+  } finally { await browser.close(); await fs.rm(dir, { recursive: true, force: true }); }
+}, 60_000);
+
 test('Render draws the built-in cursor at the pointer and a spark around each click', async () => {
   const dir = await fs.mkdtemp(join(tmpdir(), 'cuetake-cursor-'));
   const browser = await chromium.launch({ headless: true, channel: 'chromium' });

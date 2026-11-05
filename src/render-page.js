@@ -7,7 +7,9 @@
  * over it the same way; then click effects and the Cursor, and outside the camera the Subtitles and
  * keycaps. Masks (masks.js) blur or cover parts of a page as it is drawn, and spotlights dim the windows
  * and the Background around parts of them, all in one pass after the last window. Everything but the pages and masks is agent-written shaders, drawing code or images (ADR 0005). Each
- * Tab has its own Source (ADR 0008); tabs.js says which show at each moment.
+ * Tab has its own Source (ADR 0008); tabs.js says which show at each moment. A Take of Apps has one Tab,
+ * its Desktop, drawn once per App window showing (desktop.js), each clipped to its frame with its own
+ * effects, so the Background shows between them (ADR 0009).
  *
  * Spaces: camera crops are CSS pixels of the viewport, the window's, which each Tab's input is moved
  * into (tabs.js); the Source textures are sampled by UV only;
@@ -28,6 +30,7 @@ import { badgeAt, linesInFinal, retimed, timeMap } from '/time-map.js';
 import { inWindow, tabTrack, windowMaps } from '/tabs.js';
 import { cropAt, exposure, moments, shutterOf } from '/shutter.js';
 import { mergedPast, maskProblems, maskTrack } from '/masks.js';
+import { drawnWindows, windowsAt } from '/desktop.js';
 
 const VERTEX = `#version 300 es
 in vec2 p; void main() { gl_Position = vec4(p, 0, 1); }`;
@@ -645,13 +648,19 @@ export function avcCodec(width, height, fps) {
   return `avc1.6400${level.toString(16).toUpperCase().padStart(2, '0')}`;
 }
 
+/**
+ * Frames decoded at most this many packets ahead. An H.264 decoder may hold back up to its 16-frame
+ * buffer before it outputs one, as with an App's MP4 Source, so fewer would wait on it forever.
+ */
+const DECODE_AHEAD = 20;
+
 /** Decodes a track with bounded look-ahead so memory stays flat on long Takes. */
 function frameReader(track, decoderConfig) {
   const ready = [], waiting = [];
   let failure = null, submitted = 0, decoded = 0, ended = false;
   const wake = () => waiting.splice(0).forEach(resolve => resolve());
   const decoder = new VideoDecoder({ output: frame => { decoded++; ready.push(frame); wake(); }, error: error => { failure = error; wake(); } });
-  decoder.configure(decoderConfig);
+  decoder.configure({ ...decoderConfig, optimizeForLatency: true });
   const packets = new MB.EncodedPacketSink(track).packets();
   return {
     stats: () => ({ submitted, decoded }),
@@ -659,7 +668,7 @@ function frameReader(track, decoderConfig) {
       while (!ready.length) {
         if (failure) throw failure;
         if (ended) return null;
-        if (submitted - decoded >= 6) { await new Promise(resolve => waiting.push(resolve)); continue; }
+        if (submitted - decoded >= DECODE_AHEAD) { await new Promise(resolve => waiting.push(resolve)); continue; }
         const packet = await packets.next();
         if (packet.done) { await decoder.flush(); ended = true; continue; }
         decoder.decode(packet.value.toEncodedVideoChunk());
@@ -688,7 +697,7 @@ async function encoderConfig(width, height, fps, quality) {
  * is the first Tab's first frame: Background layers see it, and it picks the brand color. `map` is the
  * Take's time map. Each Tab's input is moved into the window's CSS pixels by where its popup sits.
  */
-async function createScene(edit, viewport, { pointer, shapes, events, tabs, elements = [] }, sizes, firstFrame, cues, map) {
+async function createScene(edit, viewport, { pointer, shapes, events, tabs, elements = [], windows = null }, sizes, firstFrame, cues, map) {
   const { camera, cursor, clickEffect, keycaps, shortcuts, frame, subtitles, fastForwardBadge } = edit;
   // A mask Render cannot draw would show what it hides, so it stops the Render.
   const maskIssues = maskProblems(edit.masks, elements, tabs.map(tab => tab.id));
@@ -735,6 +744,16 @@ async function createScene(edit, viewport, { pointer, shapes, events, tabs, elem
     };
   };
   /**
+   * The App windows of a Take of Apps (desktop.js) showing at Source time `source`, as the compositor
+   * draws them: each a window of its own over the Desktop's page, clipped to its frame and corners, with
+   * the window effects around those over no other (drawnWindows), so the Background shows between them. The chrome, if any, sits over the
+   * first; its spotlights are drawn once, with the last.
+   */
+  const desktopWindows = (desktop, source) => {
+    const drawn = drawnWindows(windowsAt(windows, source), viewport, stage.page);
+    return drawn.map(({ window, radius, effects }, i) => ({ ...desktop, window, radius, effects, chrome: i === 0 ? desktop.chrome : null, spotlit: i === drawn.length - 1 }));
+  };
+  /**
    * A window with the masks on its Tab (`shown`, maskTrack's) in stage pixels: blurs and covers hidden
    * with its page, a blur at the mip level of its strength in the Tab's Source, and its spotlights.
    */
@@ -752,7 +771,7 @@ async function createScene(edit, viewport, { pointer, shapes, events, tabs, elem
         styles: new Float32Array(hidden.flatMap(({ mask }) => [mask.radius * sx, mask.effect === 'cover' ? 1 : 0, Math.max(0, Math.log2(mask.blur * devicePerCss / 2) || 0), 0])),
         colors: new Float32Array(hidden.flatMap(({ mask }) => [...(mask.effect === 'cover' ? color(mask.color) : [0, 0, 0]), 1])),
       } : null,
-      spotlights: own.filter(mask => mask.effect === 'spotlight').map(mask => ({
+      spotlights: w.spotlit === false ? [] : own.filter(mask => mask.effect === 'spotlight').map(mask => ({
         rects: mask.rects.map(toStage), corner: mask.radius * sx, feather: mask.feather * sx, color: color(mask.color), dim: mask.dim, opacity: mask.opacity,
       })),
     };
@@ -823,7 +842,10 @@ async function createScene(edit, viewport, { pointer, shapes, events, tabs, elem
         .map(time => time === t ? cursorEnd : cursorAt(time, viewAt(time))).filter(Boolean);
       // The window's effects are drawn once, under the tab it shows first. Each window carries the masks on its Tab.
       const maskedNow = masks.at(t);
-      const windows = shownTabs.at(t).filter(({ tab }) => pages.has(tab)).map((shownTab, i) => masked(windowOf(shownTab, source, i === 0 || shownTab.popup), shownTab.tab, maskedNow));
+      const shownNow = shownTabs.at(t).filter(({ tab }) => pages.has(tab)).flatMap((shownTab, i) => {
+        const w = windowOf(shownTab, source, i === 0 || shownTab.popup);
+        return (windows ? desktopWindows(w, source) : [w]).map(each => masked(each, shownTab.tab, maskedNow));
+      });
       const cue = subtitleDrawing ? cues.findIndex(c => t >= c.start && t < c.end) : -1;
       if (cue >= 0 && cue !== shown) subtitleTexture = compositor.sprite(subtitleDrawing.canvas(stage.width, stage.height, { rows: cues[cue].rows }), subtitleTexture, false);
       shown = cue;
@@ -843,12 +865,12 @@ async function createScene(edit, viewport, { pointer, shapes, events, tabs, elem
         effectTextures[i] = compositor.sprite(ctx.canvas, effectTextures[i], false);
         return [effectTextures[i], [...at(press.x - effect.reach, press.y - effect.reach), 2 * effect.reach * stage.scale, 2 * effect.reach * stage.scale]];
       });
-      compositor.frame(views, windows, draw => { for (const [texture, rect] of sparks) draw(texture, rect); }, cursors, cursors.length > 1 ? areaOf(cursors) : null, cue >= 0 || keycap || badge ? draw => {
+      compositor.frame(views, shownNow, draw => { for (const [texture, rect] of sparks) draw(texture, rect); }, cursors, cursors.length > 1 ? areaOf(cursors) : null, cue >= 0 || keycap || badge ? draw => {
         if (cue >= 0) draw(subtitleTexture, [0, 0, stage.width, stage.height]);
         if (keycap) draw(keycapTexture, [0, keycap.rise * unit, stage.width, stage.height], keycap.opacity);
         if (badge) draw(badgeTexture, [0, 0, stage.width, stage.height], badge.opacity);
       } : null);
-      return { cue, keycap, badge, masks: [...new Set(windows.flatMap(w => w.masks ?? []))], averaged: { camera: views.length, cursor: cursors.length } };
+      return { cue, keycap, badge, masks: [...new Set(shownNow.flatMap(w => w.masks ?? []))], averaged: { camera: views.length, cursor: cursors.length } };
     },
   };
 }
@@ -890,7 +912,7 @@ async function openSources(sources, tabs) {
   return opened;
 }
 
-window.cuetakeRender = async ({ sources: sourceUrls, finalUrl, duration, viewport, pointer, shapes, events, tabs, elements, edit, narration }) => {
+window.cuetakeRender = async ({ sources: sourceUrls, finalUrl, duration, viewport, pointer, shapes, events, tabs, elements, windows, edit, narration }) => {
   const { quality, fps } = edit.output;
   const { width, height } = outputSize(edit);
   const started = performance.now();
@@ -949,7 +971,7 @@ window.cuetakeRender = async ({ sources: sourceUrls, finalUrl, duration, viewpor
   const cues = voice?.cues ?? [], shownFrames = cues.map(() => null), keycapFrames = [], badgeFrames = [], maskFrames = [];
   const sizes = new Map([...sources].map(([tab, source]) => [tab, source.size]));
   const recorded = tabs.filter(tab => sources.has(tab.id)), uploaded = new Map();
-  const scene = await createScene(edit, viewport, { pointer, shapes, events, tabs: recorded, elements }, sizes, sources.get(recorded[0].id).first, cues, map), { compositor } = scene;
+  const scene = await createScene(edit, viewport, { pointer, shapes, events, tabs: recorded, elements, windows }, sizes, sources.get(recorded[0].id).first, cues, map), { compositor } = scene;
   const crops = scene.crops(), camera = time => cropAt(crops, fps, time), blurred = { camera: 0, cursor: 0 };
   try {
     for (let i = 0; i < frameCount; i++) {
@@ -1057,7 +1079,7 @@ window.cuetakeMeasure = async lines => {
  * A Preview as a base64 PNG: each tile's Edit composed by the same scene as Render, over the Sources at
  * `at` seconds with the Final's camera, or (`at` null) over the last moment with the camera wide.
  */
-window.cuetakePreview = async ({ sources: sourceUrls, duration, viewport, pointer, shapes, events, tabs, elements, tiles, at, narration }) => {
+window.cuetakePreview = async ({ sources: sourceUrls, duration, viewport, pointer, shapes, events, tabs, elements, windows, tiles, at, narration }) => {
   const map = timeMap(tiles[0]?.edit.fastForward, duration), t = at ?? map.duration, source = map.sourceAt(t);
   // Each Tab's first frame, and its frame at `t`, the latest at or before it or else its first.
   const frames = new Map(), samples = [];
@@ -1080,7 +1102,7 @@ window.cuetakePreview = async ({ sources: sourceUrls, duration, viewport, pointe
     ctx.font = '600 22px system-ui, -apple-system, sans-serif'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#e5e7eb';
     for (const [i, { name, edit }] of tiles.entries()) {
       const voice = await prepareNarration(narration, edit.subtitles, Math.round(map.duration * edit.output.fps) / edit.output.fps, map);
-      const scene = await createScene(edit, viewport, { pointer, shapes, events, tabs: recorded, elements }, sizes, frames.get(recorded[0].id).first, voice?.cues ?? [], map);
+      const scene = await createScene(edit, viewport, { pointer, shapes, events, tabs: recorded, elements, windows }, sizes, frames.get(recorded[0].id).first, voice?.cues ?? [], map);
       // At `at` the camera moves as in the Final, blurred the same way; otherwise it is wide and still.
       const wide = { x: 0, y: 0, w: viewport.width, h: viewport.height }, path = at === null ? [] : scene.crops();
       for (const { tab } of scene.shown(t)) scene.upload(tab, frames.get(tab).now);

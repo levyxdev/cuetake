@@ -127,8 +127,9 @@ export function addressBar(config, timeline) {
 export function createEdit(config, timeline, focus, wide = []) {
   return withDefaults({
     cursor: config.cursor, clickEffect: config.clickEffect, keycaps: config.keycaps, subtitles: config.subtitles, fastForwardBadge: config.fastForwardBadge, output: { ...config.output, fps: config.capture.fps },
-    // The browser chrome shows the host the page is on, unless the config names something else.
-    frame: { ...config.frame, ...addressBar(config, timeline) },
+    // The browser chrome shows the host the page is on, unless the config names something else. A Take
+    // of Apps shows the App's own windows, without chrome, unless the config names one (ADR 0009).
+    frame: config.app ? { chrome: false, ...config.frame } : { ...config.frame, ...addressBar(config, timeline) },
     camera: { ...config.camera, targets: cameraTargets(timeline, focus, wide, config.camera) }, tabs: config.tabs,
     shortcuts: timeline.events.filter(event => event.type === 'shortcut').map(({ t, keys }) => ({ t, keys })),
     fastForward: timeline.events.filter(event => event.type === 'fastForward').map(({ t, end, rate }) => ({ start: t, end, rate })),

@@ -6,6 +6,63 @@ import { EFFECT_NAMES, MASK_EFFECTS } from './masks.js';
 /** Milliseconds between the Director's checks of what a mask's locator matches, so a replaced element is followed. */
 const REWATCH_MS = 100;
 
+/** Options may be a bare number for the action's main timing; `focus: false` keeps the camera wide. */
+const options = (value, key) => typeof value === 'number' ? { [key]: value } : value ?? {};
+
+/**
+ * The Director's clock, shared by pages and Apps: waits, camera focus targets, Lines and fast-forwarded
+ * waits, timed from `startedAt` (epoch ms) and noted in `notes`. `front()` is the Tab a focus target is
+ * in. `state.waited` turns true once the Scenario first waits.
+ */
+function clockOf({ startedAt, voiced = null }, { focus: focusTargets, said, forwarded }, front) {
+  const state = { waited: false, forwarding: null };
+  // Node's clock, not a page's, since the page in front may close mid-wait.
+  const wait = ms => { state.waited = true; return new Promise(resolve => setTimeout(resolve, Math.max(0, ms))); };
+  const time = () => (Date.now() - startedAt) / 1000;
+  const focus = (box, t = time()) => focusTargets.push({ t, box, tab: front() });
+  /**
+   * Runs `action`, a wait the viewer need not sit through, such as `() => reply.waitFor()`;
+   * the Final plays it `rate` times faster. Speech cannot speed up with it, so no Line is said inside.
+   */
+  async function fastForward(action, opts) {
+    const { rate = 4 } = options(opts, 'rate');
+    if (typeof action !== 'function') throw new Error('d.fastForward needs a function that waits, such as () => reply.waitFor()');
+    if (!(typeof rate === 'number' && rate >= 1)) throw new Error(`d.fastForward needs a rate of at least 1, not ${rate}`);
+    if (state.forwarding) throw new Error(`d.fastForward was called inside the one from ${state.forwarding.t.toFixed(2)} s`);
+    state.waited = true;
+    state.forwarding = { t: time(), rate };
+    try { return await action(); }
+    finally { forwarded.push({ t: state.forwarding.t, end: time(), rate }); state.forwarding = null; }
+  }
+  /** Starts a Line. With a Narration it holds for the Line's audio, so the picture follows the voice. */
+  async function say(id, text) {
+    const t = time(), earlier = said.find(line => line.id === id);
+    if (earlier) throw new Error(`Line '${id}' was already said at ${earlier.t.toFixed(2)} s`);
+    if (state.forwarding) throw new Error(`Line '${id}' is said inside d.fastForward, which the Final plays faster than speech; say it before the wait`);
+    if (voiced) {
+      if (!voiced.has(id)) throw new Error(`The Narration has no Line '${id}'; its Lines are ${[...voiced.keys()].join(', ')}`);
+      said.push({ t, id });
+      await wait((t + voiced.get(id)) * 1000 - (Date.now() - startedAt));
+    } else {
+      if (typeof text !== 'string' || !text) throw new Error(`d.say('${id}') needs the Line's text when recording without --narration`);
+      said.push({ t, id, text });
+    }
+  }
+  return { state, wait, time, at: seconds => wait(seconds * 1000 - (Date.now() - startedAt)), focus, fastForward, say };
+}
+
+/**
+ * The Director of a Take of Apps. For now it keeps time, says Lines, fast-forwards waits and adds
+ * camera focus targets in Desktop points; acting on the App with real input and Accessibility
+ * locators comes next, so those actions throw.
+ */
+export function createAppDirector(options, notes) {
+  const clock = clockOf(options, notes, () => 0);
+  const later = name => () => { throw new Error(`d.${name} does not work in a Take of an App yet; use at, wait, time, say, fastForward and focus`); };
+  const actions = Object.fromEntries(['move', 'hover', 'click', 'press', 'type', 'drag', 'mask', 'switchTo'].map(name => [name, later(name)]));
+  return { get page() { return later('page')(); }, wait: clock.wait, time: clock.time, at: clock.at, focus: clock.focus, say: clock.say, fastForward: clock.fastForward, ...actions };
+}
+
 /**
  * Timed, viewport-aligned interactions shared by all scenarios, moving like a person (see motion.js).
  * `tabs` are the Tabs Capture follows (follow-tabs.js); the Director acts only on the one in front.
@@ -17,13 +74,11 @@ const REWATCH_MS = 100;
  * equally human ways to move. `signal` aborts once the Scenario has run, when masks stop following.
  */
 export function createDirector(tabs, { startedAt, fps, voiced = null, speed = 1, seed = 1, signal }, notes) {
-  const { focus: focusTargets, wide: wideWindows, said, forwarded, pointer, elements = [], masks = [] } = notes;
+  const { wide: wideWindows, pointer, elements = [], masks = [] } = notes;
   Object.assign(notes, { elements, masks });
-  let cursor = { x: 0, y: 0, tab: tabs.front.id }, forwarding = null, waited = false;
+  let cursor = { x: 0, y: 0, tab: tabs.front.id };
   const rand = random(seed);
-  // Node's clock, not a page's, since the page in front may close mid-wait.
-  const wait = ms => { waited = true; return new Promise(resolve => setTimeout(resolve, Math.max(0, ms))); };
-  const time = () => (Date.now() - startedAt) / 1000;
+  const clock = clockOf({ startedAt, voiced }, notes, () => tabs.front.id), { wait, time, focus, fastForward, say } = clock;
   const pause = name => wait(pauseMs(name, speed, rand));
   /** Moves the front Tab's mouse; where its page cannot see the pointer, the Director notes the path itself. */
   async function point(front, x, y) {
@@ -60,9 +115,6 @@ export function createDirector(tabs, { startedAt, fps, voiced = null, speed = 1,
   }
   const move = (x, y, duration) => glide({ x, y }, { duration });
   // Clicks, typing, drags and cursor shapes are recorded by the in-page probe; only deliberate camera choices live here.
-  const focus = (box, t = time()) => focusTargets.push({ t, box, tab: tabs.front.id });
-  /** Options may be a bare number for the action's main timing; `focus: false` keeps the camera wide. */
-  const options = (value, key) => typeof value === 'number' ? { [key]: value } : value ?? {};
   async function act({ focus: follow = true }, action) {
     const start = time();
     try { return await action(); }
@@ -165,34 +217,6 @@ export function createDirector(tabs, { startedAt, fps, voiced = null, speed = 1,
     });
   }
   /**
-   * Runs `action`, a wait the viewer need not sit through, such as `() => reply.waitFor()`;
-   * the Final plays it `rate` times faster. Speech cannot speed up with it, so no Line is said inside.
-   */
-  async function fastForward(action, opts) {
-    const { rate = 4 } = options(opts, 'rate');
-    if (typeof action !== 'function') throw new Error('d.fastForward needs a function that waits, such as () => reply.waitFor()');
-    if (!(typeof rate === 'number' && rate >= 1)) throw new Error(`d.fastForward needs a rate of at least 1, not ${rate}`);
-    if (forwarding) throw new Error(`d.fastForward was called inside the one from ${forwarding.t.toFixed(2)} s`);
-    waited = true;
-    forwarding = { t: time(), rate };
-    try { return await action(); }
-    finally { forwarded.push({ t: forwarding.t, end: time(), rate }); forwarding = null; }
-  }
-  /** Starts a Line. With a Narration it holds for the Line's audio, so the picture follows the voice. */
-  async function say(id, text) {
-    const t = time(), earlier = said.find(line => line.id === id);
-    if (earlier) throw new Error(`Line '${id}' was already said at ${earlier.t.toFixed(2)} s`);
-    if (forwarding) throw new Error(`Line '${id}' is said inside d.fastForward, which the Final plays faster than speech; say it before the wait`);
-    if (voiced) {
-      if (!voiced.has(id)) throw new Error(`The Narration has no Line '${id}'; its Lines are ${[...voiced.keys()].join(', ')}`);
-      said.push({ t, id });
-      await wait((t + voiced.get(id)) * 1000 - (Date.now() - startedAt));
-    } else {
-      if (typeof text !== 'string' || !text) throw new Error(`d.say('${id}') needs the Line's text when recording without --narration`);
-      said.push({ t, id, text });
-    }
-  }
-  /**
    * Masks every element `locator` matches, in any Tab, from now until `end()` is called or the Take
    * ends: `blur` and `cover` hide it, `spotlight` dims the page around it. Capture records each
    * element's box as it moves; a blur or cover made before the Director first waits or acts covers the
@@ -203,7 +227,7 @@ export function createDirector(tabs, { startedAt, fps, voiced = null, speed = 1,
     if (!(effect in MASK_EFFECTS)) throw new Error(`d.mask needs effect ${EFFECT_NAMES}, not '${effect}'`);
     const target = typeof locator === 'string' ? tabs.front.page.locator(locator) : locator, tab = tabs.of(target.page());
     if (!tab) throw new Error('d.mask target is on a page Capture does not follow; mask on d.page, or on a page the demo opened');
-    const t = effect !== 'spotlight' && !waited ? 0 : time();
+    const t = effect !== 'spotlight' && !clock.state.waited ? 0 : time();
     await tabs.ready(tab.page);
     const id = elements.length;
     const watch = () => target.evaluateAll((found, id) => window.__cuetakeProbe?.watch(id, found) ?? false, id);
@@ -231,6 +255,6 @@ export function createDirector(tabs, { startedAt, fps, voiced = null, speed = 1,
   return {
     /** The Tab in front. */
     get page() { return tabs.front.page; },
-    wait, time, at: seconds => wait(seconds * 1000 - (Date.now() - startedAt)), move, hover, click, press, type, drag, focus, say, fastForward, mask, switchTo,
+    wait, time, at: clock.at, move, hover, click, press, type, drag, focus, say, fastForward, mask, switchTo,
   };
 }

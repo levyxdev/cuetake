@@ -26,6 +26,7 @@ const pageFiles = {
   '/tabs.js': { path: fileURLToPath(new URL('./tabs.js', import.meta.url)), type: 'text/javascript' },
   '/shutter.js': { path: fileURLToPath(new URL('./shutter.js', import.meta.url)), type: 'text/javascript' },
   '/masks.js': { path: fileURLToPath(new URL('./masks.js', import.meta.url)), type: 'text/javascript' },
+  '/desktop.js': { path: fileURLToPath(new URL('./desktop.js', import.meta.url)), type: 'text/javascript' },
   '/mediabunny.js': { path: mediabunnyBundle, type: 'text/javascript' },
 };
 
@@ -101,14 +102,15 @@ function servedLines(lines, files) {
 
 /**
  * The Timeline as the render page reads it, with each Tab's Source (`sources`, paths by Tab id) served
- * from `files`. A Timeline without Tabs has one, the first, the viewport's size.
+ * from `files`. A Timeline without Tabs has one, the first, the viewport's size. A Take of Apps has
+ * `windows`, which show over its Desktop (desktop.js).
  */
 function forPage(timeline, sources, files) {
   const tabs = timeline.tabs ?? [{ id: 0, opener: null, opened: 0, closed: null, viewport: timeline.viewport, start: 0 }];
   for (const tab of tabs) files[`source-${tab.id}`] = sources[tab.id];
   return {
     duration: timeline.duration, viewport: timeline.viewport, tabs,
-    pointer: timeline.pointer ?? [], shapes: timeline.shapes ?? [], events: timeline.events ?? [], elements: timeline.elements ?? [],
+    pointer: timeline.pointer ?? [], shapes: timeline.shapes ?? [], events: timeline.events ?? [], elements: timeline.elements ?? [], windows: timeline.windows ?? null,
     sources: tabs.map(tab => ({ tab: tab.id, url: `${ORIGIN}/files/source-${tab.id}` })),
   };
 }
