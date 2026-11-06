@@ -21,7 +21,7 @@ import { linesInFinal, timeMap } from './time-map.js';
 import { maskWarnings } from './masks.js';
 import pkg from '../package.json' with { type: 'json' };
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 /**
  * Scenario config: capture settings, validated, plus styling that seeds each Take's Edit, which is not
  * (ADR 0005). A Scenario opens a start page (`url`) or starts Apps (`app`: one App, a `.app` path or
