@@ -51,22 +51,24 @@ export async function appChecks() {
 }
 
 /**
- * Starts `app` ({ path, args }) on a Desktop `desktop` points large ({ width, height }), recording at
- * `fps` into `source` (an MP4) from `start()` on, and writing the last frame to `poster`. Resolves once the
- * App's first window fills the Desktop, with `ready` (the App, its scale, the Desktop on the screen and
- * the first window in Desktop points) and:
+ * Starts `apps` ([{ path, args }], in order) on a Desktop `desktop` points large ({ width, height }),
+ * recording at `fps` into `source` (an MP4) from `start()` on, and writing the last frame to `poster`.
+ * Resolves once the first App's first window fills the Desktop and every App shows a window, the first
+ * App in front, with `ready` (the Apps, as [{ name, bundle, pid }], the scale, the Desktop on the screen
+ * and the first window in Desktop points) and:
  * - `start()`, which records and resolves with the wall-clock ms of the first frame;
- * - `stop()`, which ends the Source, quits the App and resolves with the sidecar: `duration`, `frames`
- *   ([t, scale] per frame), `windows` (the App's windows over time), `shapes` (the system cursor's, as
+ * - `stop()`, which ends the Source, quits the Apps and resolves with the sidecar: `duration`, `frames`
+ *   ([t, scale] per frame), `windows` (the Apps' windows over time), `shapes` (the system cursor's, as
  *   [t, keyword]), `focused` (each element the App focused, { t, box, role }), `watched` (the boxes of
  *   each masked element, { id, boxes }), `otherInput` (input the Director did not make, as [t, kind])
- *   and whether the App `quit`;
- * - `request(message)`, which asks the helper to read the App's Accessibility tree or post input for
- *   the Director (app-locators.js, app-director.js), in Desktop points, and resolves with its reply;
- * - `kill()`, which ends it all, for a failure; the helper then quits the App.
+ *   and the names of the Apps that did not quit (`unquit`);
+ * - `request(message)`, which asks the helper to read the Apps' Accessibility trees, arrange their
+ *   windows or post input for the Director (app-locators.js, app-director.js), in Desktop points, and
+ *   resolves with its reply;
+ * - `kill()`, which ends it all, for a failure; the helper then quits the Apps.
  * The helper's refusals (a running App, a missing grant) reject with its message.
  */
-export async function startDesktop({ app, desktop, fps, source, poster }) {
+export async function startDesktop({ apps, desktop, fps, source, poster }) {
   const path = await helper();
   if (!path) throw new Error(MISSING);
   const child = spawn(path, ['record'], { stdio: ['pipe', 'pipe', 'pipe'] });
@@ -96,7 +98,7 @@ export async function startDesktop({ app, desktop, fps, source, poster }) {
   const reply = key => new Promise((resolve, reject) => { if (ended) reject(ended); else waiting.push({ key, resolve, reject }); });
   const send = message => child.stdin.write(JSON.stringify(message) + '\n');
   const ready = reply('ready');
-  send({ app: { path: app.path, args: app.args ?? [] }, desktop, fps, source, poster });
+  send({ apps: apps.map(app => ({ path: app.path, args: app.args ?? [] })), desktop, fps, source, poster });
   try { await ready; } catch (error) { child.kill(); throw error; }
   return {
     ready: await ready,

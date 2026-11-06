@@ -15,7 +15,7 @@ CueTake records desktop Apps on macOS through one native Capture method that pro
 
 - A Scenario starts one or more Apps (each a `.app` path or bundle id, with arguments) instead of opening a URL. CueTake refuses to start an App that is already running, so every Take starts the same way, and never quits one for the user. To record the app that hosts the agent, run the agent from a terminal.
 - An App runs with the user's own login and data. A Take can change that data, and Auth profiles do not apply to Apps.
-- Desktop points play the role of CSS pixels, and backing pixels play the role of device pixels. The Desktop sits on the display with the highest scale, and its first window fills it. A window that leaves the Desktop, moves or resizes during a Take, or a Desktop at scale 1, is a warning, not something Render corrects.
+- Desktop points play the role of CSS pixels, and backing pixels play the role of device pixels. The Desktop sits on the display with the highest scale, and the first App's first window fills it when the Apps start; in a Take of several Apps, `prepare` may then arrange every window, the first included. A window that leaves the Desktop, moves or resizes during a Take, or a Desktop at scale 1, is a warning, not something Render corrects.
 - The helper records each window's frame per frame. Render draws only the windows, each with its own corners and shadow, and the Background shows between them. This is the one change Render needs.
 - Menus opened from the menu bar sit outside the Desktop and are not recorded.
 - The helper is a prebuilt universal binary shipped inside the npm package and run as a child process over stdio, so runtime code stays Node-only. It is built on a Mac before publishing, as a release step.

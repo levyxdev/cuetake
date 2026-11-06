@@ -24,13 +24,15 @@ import pkg from '../package.json' with { type: 'json' };
 const SCHEMA_VERSION = 4;
 /**
  * Scenario config: capture settings, validated, plus styling that seeds each Take's Edit, which is not
- * (ADR 0005). A Scenario opens a start page (`url`) or starts an App (`app`: a `.app` path or bundle id,
- * with its arguments), never both (ADR 0009); for an App, `viewport` is the Desktop's size in points.
+ * (ADR 0005). A Scenario opens a start page (`url`) or starts Apps (`app`: one App, a `.app` path or
+ * bundle id with its arguments, or a list of them sharing one Desktop), never both (ADR 0009); for Apps,
+ * `viewport` is the Desktop's size in points.
  */
+const appSchema = z.object({ path: z.string().min(1), args: z.array(z.string()).default([]) }).strict();
 export const scenarioSchema = z.object({
   name: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
   url: z.string().url().refine(s => /^https?:/.test(s), 'Capture requires HTTP(S)').optional(),
-  app: z.object({ path: z.string().min(1), args: z.array(z.string()).default([]) }).strict().optional(),
+  app: z.union([appSchema, z.array(appSchema).min(1)]).optional(),
   viewport: z.object({ width: evenSize, height: evenSize }).default({ width: 1440, height: 900 }),
   capture: z.object({ fps: z.union([z.literal(30), z.literal(60)]).default(60), resolutionScale: z.union([z.literal(1), z.literal(2)]).default(2) }).default({}),
   director: z.object({ speed: z.number().positive().default(1), seed: z.number().int().default(1) }).strict().default({}),
@@ -133,19 +135,22 @@ export function timelineOf(take, stopped, observed, notes, startedAtMs) {
   };
 }
 
+/** The Apps a Scenario starts, as a list: `config.app` names one or several. */
+export const appsOf = config => [config.app].flat().filter(Boolean);
+
 /**
- * The Timeline of a Take of Apps (ADR 0009) from `take` (the App, the Desktop's size in points as the
- * viewport, and its scale), what the helper saw (`stopped`: the duration, the App's windows over time,
+ * The Timeline of a Take of Apps (ADR 0009) from `take` (the Apps, the Desktop's size in points as the
+ * viewport, and its scale), what the helper saw (`stopped`: the duration, the Apps' windows over time,
  * the system cursor's shapes, each element the App focused, as `focused` events the camera follows, and
  * the frames of each masked element, `watched`) and what the Director noted: its pointer path and
  * input, since the App shows none of its own, focus targets, Lines, fast-forwards and masks. Input the Director did not make never enters it. The Take has one
  * Tab, its Desktop; positions are Desktop points.
  */
-export function desktopTimelineOf({ app, viewport, scale }, stopped, notes) {
+export function desktopTimelineOf({ apps, viewport, scale }, stopped, notes) {
   // Each element a mask follows, with the boxes the helper read it at.
   const elements = (notes.elements ?? []).map(element => ({ ...element, boxes: stopped.watched?.find(watched => watched.id === element.id)?.boxes ?? [] }));
   return {
-    schemaVersion: SCHEMA_VERSION, app, viewport, scale, duration: stopped.duration,
+    schemaVersion: SCHEMA_VERSION, apps, viewport, scale, duration: stopped.duration,
     tabs: [{ id: 0, opener: null, opened: 0, closed: null, viewport, start: 0 }],
     pointer: notes.pointer.map(([t, x, y]) => [t, x, y, 0]), shapes: stopped.shapes ?? [], windows: stopped.windows, ...(elements.length && { elements }),
     events: [
@@ -197,24 +202,29 @@ async function capturePage(scenario, config, dir, { authState, headed, voiced })
 }
 
 /**
- * Captures a Desktop of the App (ADR 0009) through the helper: source-0.mp4, capture.json and
+ * Captures a Desktop of the Apps (ADR 0009) through the helper: source-0.mp4, capture.json and
  * poster.png in `dir`. The Desktop records at its display's scale, which `config.capture` then holds.
- * `prepare(page)` gets the App's first window before Capture starts, to wait for what the demo needs.
- * Returns the Timeline, the Director's notes, the evidence, and whether the helper could quit the App.
+ * `prepare(page, { app })` gets the first App's first window, and every App by `app(name)`, before
+ * Capture starts, to wait for what the demo needs and arrange the windows with `setFrame`.
+ * Returns the Timeline, the Director's notes, the evidence, and the Apps the helper could not quit.
  */
 async function captureApp(scenario, config, dir, { voiced }) {
-  const { fps } = config.capture;
-  process.stderr.write(`CueTake starts ${config.app.path} and records it. Leave the Mac alone until the Take ends: the Scenario moves the real pointer and acts on the real App and its data.\n`);
-  const desktop = await startDesktop({ app: config.app, desktop: config.viewport, fps, source: join(dir, 'source-0.mp4'), poster: join(dir, 'poster.png') });
+  const { fps } = config.capture, given = appsOf(config);
+  process.stderr.write(`CueTake starts ${given.map(app => app.path).join(', ')} and records ${given.length > 1 ? 'them' : 'it'}. Leave the Mac alone until the Take ends: the Scenario moves the real pointer and acts on the real ${given.length > 1 ? 'Apps' : 'App'} and their data.\n`);
+  const desktop = await startDesktop({ apps: given, desktop: config.viewport, fps, source: join(dir, 'source-0.mp4'), poster: join(dir, 'poster.png') });
   try {
     config.capture.resolutionScale = desktop.ready.scale;
-    if (scenario.prepare) await scenario.prepare(appLocators(desktop).page('first'));
+    const apps = given.map((app, i) => ({ ...app, name: desktop.ready.apps[i].name, bundle: desktop.ready.apps[i].bundle }));
+    if (scenario.prepare) {
+      const arranged = appLocators(desktop, apps, { arrange: true });
+      await scenario.prepare(arranged.page('first'), { app: arranged.app });
+    }
     // The pointer starts at the Desktop's top-left corner, where the Director's starts.
     await desktop.request({ move: { x: 0, y: 0 } });
     const startedAtMs = await desktop.start();
     const notes = { focus: [], wide: [], said: [], forwarded: [], pointer: [], events: [], elements: [], masks: [] };
     const ran = new AbortController();
-    const director = createAppDirector({ startedAt: startedAtMs, fps, voiced, ...config.director, helper: desktop, signal: ran.signal }, notes);
+    const director = createAppDirector({ startedAt: startedAtMs, fps, voiced, ...config.director, helper: desktop, apps, signal: ran.signal }, notes);
     const evidence = await scenario.run(director).finally(() => ran.abort());
     const stopped = await desktop.stop();
     const { width, height } = stopped.size;
@@ -222,8 +232,8 @@ async function captureApp(scenario, config, dir, { voiced }) {
       tab: 0, settings: { width, height, frameRate: fps }, duration: stopped.duration, dropped: stopped.dropped, otherInput: stopped.otherInput ?? [],
       frames: stopped.frames.map(([t, scale]) => ({ timeMs: Math.round(t * 1e6) / 1000, scale })),
     }] });
-    const timeline = desktopTimelineOf({ app: { ...config.app, name: desktop.ready.app, bundle: desktop.ready.bundle }, viewport: config.viewport, scale: desktop.ready.scale }, stopped, notes);
-    return { timeline, notes, evidence, quit: stopped.quit, app: desktop.ready.app };
+    const timeline = desktopTimelineOf({ apps, viewport: config.viewport, scale: desktop.ready.scale }, stopped, notes);
+    return { timeline, notes, evidence, unquit: stopped.unquit ?? [] };
   } finally { desktop.kill(); }
 }
 
@@ -238,7 +248,7 @@ export async function recordScenario(scenarioPath, outputDir, options = {}) {
   if (typeof scenario.run !== 'function') throw new Error('Scenario must export run(director)');
   if (config.app) refuseForApp(given, options);
   // A relative .app path names an App beside the Scenario.
-  if (config.app?.path.includes('/')) config.app.path = resolve(dirname(resolve(scenarioPath)), config.app.path);
+  for (const app of appsOf(config)) if (app.path.includes('/')) app.path = resolve(dirname(resolve(scenarioPath)), app.path);
   const authState = options.authProfile ? await resolveAuthProfile(options.authProfile) : undefined;
   const ready = await doctor();
   if (!ready.ok) throw new Error(JSON.stringify(ready));
@@ -278,7 +288,7 @@ export async function recordScenario(scenarioPath, outputDir, options = {}) {
   return { directory: dir, final: join(dir, 'final.mp4'), verification,
     ...(lowered && { capture: { resolutionScale, note: `Chromium draws without a GPU here (${gpu.renderer}), so Capture used resolutionScale 1; set capture.resolutionScale to 2 in the Scenario to override` } }),
     ...(config.app && { capture: { resolutionScale: config.capture.resolutionScale, note: 'The Desktop records at the scale of the display it sits on' } }),
-    ...(captured.quit === false && { app: { quit: false, note: `${captured.app} did not quit after the Take; it may be asking to save. Quit it before the next Take.` } }),
+    ...(captured.unquit?.length && { app: { quit: false, unquit: captured.unquit, note: `${captured.unquit.join(', ')} did not quit after the Take; ${captured.unquit.length > 1 ? 'they' : 'it'} may be asking to save. Quit ${captured.unquit.length > 1 ? 'them' : 'it'} before the next Take.` } }),
     ...(unplaced.length && { unplaced: { lines: unplaced, note: 'These Lines were never said and have no start; add d.say or a start in edit.json' } }),
     ...(unvoiced.length && { unvoiced: { lines: unvoiced, note: `These Lines have no audio yet; voice them and run cuetake narrate import ${dir} <narration.json>` } }) };
 }

@@ -2,7 +2,10 @@
  * Locators of a Take of Apps: Accessibility elements named by role and name, in the style of Playwright's
  * getByRole (ADR 0009). They hold no element; each read or action resolves them again through the helper,
  * whose `request` answers:
- *   { windows: {} }                           the App's windows: { ref, title, subrole, focused, frame, ... }
+ *   { windows: {} }                           the windows of every App of the Take: { ref, app, title, subrole,
+ *                                             focused (the window in front), main (its App's front window), frame, ... },
+ *                                             `app` indexing the Take's Apps
+ *   { setFrame: { ref, x, y, width, height } } moves and sizes a window, for `prepare` to arrange the Desktop
  *   { find: { within, roles, identifier } }   the elements under `within` with one of `roles` ({ role, subrole }, or
  *                                             null for any) and that `identifier` (or any): { ref, role, subrole, title,
  *                                             description, label, identifier, frame }
@@ -22,6 +25,7 @@ const ROLES = {
   text: [['AXStaticText']], window: [['AXWindow']],
 };
 const WORKS = 'getByRole, getByTestId, value, text, isVisible and waitFor';
+const WINDOW = Symbol('window');
 const POLL_MS = 100, READ_TIMEOUT_MS = 10_000, WAIT_TIMEOUT_MS = 30_000;
 const RESOLVE = Symbol('resolve'), MATCHES = Symbol('matches');
 
@@ -53,24 +57,32 @@ function describe(steps) {
   return steps.map(step => {
     if (step.window === 'front') return 'd.page';
     if (step.window === 'first') return 'page';
-    if (step.window) return `d.app.window(${quote(step.window.name)})`;
+    if (step.window) return `d.app(${step.window.label === undefined ? '' : quote(step.window.label)})${step.window.name === undefined ? '' : `.window(${quote(step.window.name)})`}`;
     if (step.testId !== undefined) return `.getByTestId(${quote(step.testId)})`;
     const options = step.name === undefined ? '' : `, { name: ${quote(step.name)}${step.exact ? ', exact: true' : ''} }`;
     return `.getByRole(${quote(step.role)}${options})`;
   }).join('');
 }
 
+/** How a list of names reads: 'A', 'A or B', 'A, B or C'. */
+const either = (names, word) => names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} ${word} ${names.at(-1)}`;
+
 /**
- * Locators for the App behind `helper`: `page(which)` is a window as a page offers it, `'front'` (the
- * window in front when resolved), `'first'` (the first standard window) or `{ name }` (by title).
+ * Locators for the Apps behind `helper` (`apps`, the Take's, each { name, bundle, path }): `page(which)`
+ * is a window as a page offers it, `'front'` (the window in front when resolved, whichever App owns it)
+ * or `'first'` (the first App's first standard window); `app(name)` is one App, offering its front
+ * window's locators and `window(title)`, another of its windows by a part of its title. With `arrange`,
+ * as for `prepare`, a window also offers `setFrame(box)`, in Desktop points.
  */
-export function appLocators(helper) {
+export function appLocators(helper, apps = [], { arrange = false } = {}) {
   /** The elements a chain of steps matches now. */
   async function resolve(steps) {
     const [first, ...rest] = steps, windows = await helper.request({ windows: {} });
+    const own = first.window.app === undefined ? windows : windows.filter(w => (w.app ?? 0) === first.window.app);
     let found = first.window === 'front' ? [windows.find(w => w.focused) ?? windows[0]]
-      : first.window === 'first' ? [windows.find(w => w.subrole === 'AXStandardWindow') ?? windows[0]]
-      : windows.filter(w => matches(w.title ?? '', first.window.name, false));
+      : first.window === 'first' ? [windows.find(w => !w.app && w.subrole === 'AXStandardWindow') ?? windows[0]]
+      : first.window.name === undefined ? [own.find(w => w.main) ?? own.find(w => w.subrole === 'AXStandardWindow') ?? own[0]]
+      : own.filter(w => matches(w.title ?? '', first.window.name, false));
     found = found.filter(Boolean);
     for (const step of rest) {
       const next = new Map();
@@ -134,19 +146,40 @@ export function appLocators(helper) {
     });
   }
 
-  function page(which) {
-    const window = locator([{ window: which }]), prefix = describe([{ window: which }]);
-    const methods = { getByRole: window.getByRole, getByTestId: window.getByTestId, toString: () => prefix };
+  function page(which, more = {}) {
+    const steps = [{ window: which }], window = locator(steps), prefix = describe(steps);
+    const methods = { getByRole: window.getByRole, getByTestId: window.getByTestId, toString: () => prefix, ...more, [WINDOW]: () => visibleOne(steps) };
+    if (arrange) methods.setFrame = async box => {
+      const { x, y, width, height } = box ?? {};
+      if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) throw new Error('setFrame needs a box { x, y, width, height } in Desktop points, with a size');
+      await helper.request({ setFrame: { ref: (await visibleOne(steps)).ref, x, y, width, height } });
+    };
     return new Proxy(methods, {
       get(target, prop) {
         if (typeof prop === 'symbol' || prop in target || prop === 'then') return target[prop];
-        throw new Error(`${prefix}.${prop} does not work in a Take of an App: use getByRole, getByTestId, or d.app.window(title) for another window`);
+        throw new Error(`${prefix}.${prop} does not work in a Take of an App: use getByRole, getByTestId, or d.app(name).window(title) for another window${arrange ? '' : '; arrange windows with setFrame in prepare'}`);
       },
     });
   }
 
-  return { page, window: name => page({ name }) };
+  /** The App `name` names, by its name in any case, or the bundle id or path the Scenario gave; with one App, any. */
+  function app(name) {
+    const names = apps.map(a => a.name);
+    const index = name === undefined ? (apps.length <= 1 ? 0 : -1)
+      : apps.findIndex(a => [a.name, a.bundle, a.path].some(known => typeof known === 'string' && known.toLowerCase() === String(name).toLowerCase()));
+    if (name === undefined && index < 0) throw new Error(`d.app needs the name of one of the Take's Apps: ${either(names, 'or')}`);
+    if (index < 0) throw new Error(`d.app(${quote(name)}) is not an App of this Take, which has ${either(names, 'and')}`);
+    return page({ app: index, label: name }, { window: title => page({ app: index, label: name, name: title }) });
+  }
+
+  return { page, app };
 }
+
+/** Whether `target` is a window of the Take, as d.page, d.app(name) or window(title) give it. */
+export const isAppWindow = target => typeof target?.[WINDOW] === 'function';
+
+/** The window an App window names, waited for: { ref, app, focused, main, frame, ... } in Desktop points. */
+export const resolveWindow = target => target[WINDOW]();
 
 /** The ARIA role a Scenario names an AX role and subrole by, or the AX role where none fits. */
 function ariaRole(role, subrole) {
@@ -165,7 +198,7 @@ export function treeLines({ app, bundle, windows, truncated }) {
   const lines = [`${app} (${bundle}): frames in points from each window's top-left corner, which are Desktop points for the window that fills the Desktop`];
   for (const window of windows) {
     const { width, height } = window.frame;
-    lines.push(`window ${quote(nameOf(window))} ${Math.round(width)}×${Math.round(height)}: d.app.window(${quote(nameOf(window))})`);
+    lines.push(`window ${quote(nameOf(window))} ${Math.round(width)}×${Math.round(height)}: d.app(${quote(app)}).window(${quote(nameOf(window))})`);
     const visit = (element, depth) => {
       const role = ariaRole(element.role, element.subrole), name = nameOf(element), own = element.identifier && !element.identifier.startsWith('_NS:');
       const value = typeof element.value === 'string' && element.value && element.value !== name ? ` = ${quote(element.value)}` : typeof element.value === 'number' ? ` = ${element.value}` : '';

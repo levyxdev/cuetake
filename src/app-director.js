@@ -1,5 +1,6 @@
 import { clockOf, effectOf, followMask, options } from './director.js';
-import { appLocators, isAppLocator, resolveAll, resolveOne } from './app-locators.js';
+import { appLocators, isAppLocator, isAppWindow, resolveAll, resolveOne, resolveWindow } from './app-locators.js';
+import { titleBarSpot } from './desktop.js';
 import { landing, pauseMs, random, reach, typingDelays } from './motion.js';
 import { macKeys } from './mac-keys.js';
 import { shortcutKeys } from './shortcuts.js';
@@ -8,6 +9,10 @@ import { shortcutKeys } from './shortcuts.js';
 const FIELDS = new Set(['AXTextField', 'AXTextArea', 'AXComboBox', 'AXSearchField']);
 // Characters typed as their key, since a text field takes them as a key press, not as text.
 const TYPED_AS_KEYS = { '\n': 'Enter', '\t': 'Tab' };
+// How long a window clicked into may take to come in front, and how often the Director looks.
+const SWITCH_TIMEOUT_MS = 3000, SWITCH_POLL_MS = 50;
+// The widest a title bar's empty stretch counts as a target, in points: a person aims at a spot of it, not the whole bar.
+const TITLE_BAR_AIM = 24;
 
 /**
  * The Director of a Take of Apps (ADR 0009). It keeps time, says Lines, fast-forwards waits and adds
@@ -25,16 +30,20 @@ const TYPED_AS_KEYS = { '\n': 'Enter', '\t': 'Tab' };
  *   { focused: {} }                          the focused element's { role, subrole }
  *   { watch: { id, refs } }                  reads the frames of these elements at the capture rate, as the boxes of
  *                                            the masked element `id`, until watched again
+ *   { titleBar: { ref } }                    samples the window's title bar along its middle, every 4 points of it on
+ *                                            the Desktop: { y, samples: [[x, empty]] }, `empty` where nothing lies, no
+ *                                            control, no title and no window over it; null when it has none
+ * `apps` are the Take's Apps, { name, bundle, path }, in order: the first's first window fills the Desktop.
  * Since the App draws no pointer of its own, the Director notes in `notes` everything Render draws:
  * the pointer path (`pointer`, as [seconds, x, y]) and the clicks, drags, typing and Shortcuts (`events`),
  * and each element masked (`elements`, { id, tab, name }) with its mask (`masks`). The pointer starts
  * at the Desktop's top-left corner, where Capture puts it. `signal` aborts once the Scenario has run,
  * when masks stop following their locators.
  */
-export function createAppDirector({ startedAt, fps = 60, voiced = null, speed = 1, seed = 1, helper, signal }, notes) {
+export function createAppDirector({ startedAt, fps = 60, voiced = null, speed = 1, seed = 1, helper, apps = [], signal, switchTimeout = SWITCH_TIMEOUT_MS }, notes) {
   const { elements = [], masks = [] } = notes;
   Object.assign(notes, { elements, masks });
-  const clock = clockOf({ startedAt, voiced }, notes, () => 0), { wait, time } = clock, locators = appLocators(helper);
+  const clock = clockOf({ startedAt, voiced }, notes, () => 0), { wait, time } = clock, locators = appLocators(helper, apps);
   const rand = random(seed), pause = name => wait(pauseMs(name, speed, rand));
   // What the Director notes is rounded to the millisecond and to a hundredth of a point.
   const now = () => Math.round(time() * 1000) / 1000, round = v => Math.round(v * 100) / 100;
@@ -80,19 +89,44 @@ export function createAppDirector({ startedAt, fps = 60, voiced = null, speed = 
     if (covered) throw new Error(`${named} is covered by a window of ${covered} at ${where}; close or move that window, then record again`);
     if (nothing) throw new Error(`${named} lands at ${where}, where no window shows; it may lie outside the Desktop`);
   }
+  /** Presses and releases at `at`, where the pointer is, noting a click on `box` for the Cursor, click effect and camera. */
+  async function clickAt(at, box, button, action, target) {
+    await pause('beforePress');
+    await down(at, button, action, target);
+    const t = now();
+    // A person holds the button for a moment, so the Cursor's press shows.
+    await wait(pauseMs('press', speed, rand));
+    await helper.request({ up: { ...at, button } });
+    notes.events.push({ type: 'click', t, end: now(), x: at.x, y: at.y, box, ...(button === 'right' && { button }) });
+    await pause('afterRelease');
+  }
   /** `button: 'right'` opens the App's context menu instead. */
   function click(target, opts) {
     const { duration, button = 'left', ...rest } = options(opts, 'duration');
     return act(rest, async () => {
       const { box, at } = await approach(target, duration, 'click');
-      await pause('beforePress');
-      await down(at, button, 'click', isAppLocator(target) && String(target));
-      const t = now();
-      // A person holds the button for a moment, so the Cursor's press shows.
-      await wait(pauseMs('press', speed, rand));
-      await helper.request({ up: { ...at, button } });
-      notes.events.push({ type: 'click', t, end: now(), x: at.x, y: at.y, box, ...(button === 'right' && { button }) });
-      await pause('afterRelease');
+      await clickAt(at, box, button, 'click', isAppLocator(target) && String(target));
+    });
+  }
+  /**
+   * Brings a window in front as a person would: glides to an empty part of its title bar that shows on
+   * the Desktop and clicks it, so the switch shows in the Final, then waits for it to come in front. The
+   * camera frames the window. A window already in front needs nothing.
+   */
+  function switchTo(target, opts) {
+    if (!isAppWindow(target)) return Promise.reject(new Error("d.switchTo needs a window of the Take, such as d.app('Script Editor') or d.app('TextEdit').window('Untitled')"));
+    return act(options(opts), async () => {
+      const window = await resolveWindow(target), named = `d.switchTo(${target})`;
+      if (window.focused) return;
+      const spot = titleBarSpot(await helper.request({ titleBar: { ref: window.ref } }));
+      if (!spot) throw new Error(`${named} finds no empty part of the window's title bar showing on the Desktop; arrange the windows in prepare with setFrame so that it shows, or press 'Meta+Tab'`);
+      const at = { x: round(spot.x), y: round(spot.y) };
+      await glide(at, { size: Math.min(spot.width, TITLE_BAR_AIM) });
+      await clickAt(at, window.frame, 'left', 'switchTo', String(target));
+      for (const deadline = Date.now() + switchTimeout; !(await resolveWindow(target)).focused;) {
+        if (Date.now() >= deadline) throw new Error(`${named} clicked the window's title bar at ${Math.round(at.x)}, ${Math.round(at.y)}, but the window did not come in front within ${switchTimeout} ms`);
+        await wait(SWITCH_POLL_MS);
+      }
     });
   }
   async function key(keys, hold) {
@@ -163,13 +197,11 @@ export function createAppDirector({ startedAt, fps = 60, voiced = null, speed = 
     await watch();
     return followMask({ id, tab: 0, name: String(locator), t, effect, params }, notes, { watch, signal, time: now });
   }
-  const refuse = (name, why) => () => { throw new Error(`d.${name} does not work in a Take of an App${why}`); };
   return {
-    /** The window in front, offering Accessibility locators. */
+    /** The window in front, whichever App owns it, offering Accessibility locators. */
     get page() { return locators.page('front'); },
-    app: { window: locators.window },
+    app: locators.app,
     wait, time, at: clock.at, focus: clock.focus, say: clock.say, fastForward: clock.fastForward,
-    move: (x, y, duration) => glide({ x, y }, { duration }), hover, click, press, type, drag, mask,
-    switchTo: refuse('switchTo', ' until it can record several Apps'),
+    move: (x, y, duration) => glide({ x, y }, { duration }), hover, click, press, type, drag, mask, switchTo,
   };
 }

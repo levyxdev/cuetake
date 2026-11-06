@@ -5,7 +5,7 @@ import CoreMedia
 /**
  * What the helper observes during a Take besides the frames (ADR 0009), from `begin` to `end`:
  * - the system cursor's shape, polled at the capture rate (CursorShapes);
- * - each element the App focuses, through an AXObserver, as a focus target for the camera;
+ * - each element an App of the Take focuses, through an AXObserver per App, as a focus target for the camera;
  * - the frames of the elements masks follow, read at the capture rate;
  * - input the Director did not make, through a listen-only event tap that tells events apart by the
  *   process that posted them. That input never enters the Timeline; `verify` warns about it.
@@ -15,8 +15,7 @@ final class Observer {
   /** The elements a Mask follows, each with its last frame, and which `watch` call gave them. */
   private struct Watch { let generation: Int; let elements: [(element: AXUIElement, last: CGRect?)] }
 
-  private let pid: pid_t
-  private let app: AXUIElement
+  private let pids: [pid_t]
   private let desktop: CGRect
   private let fps: Int
   private let lock = NSLock()
@@ -35,16 +34,14 @@ final class Observer {
   private var otherLog: [[Any]] = []
   private var lastOther: [String: Double] = [:]
   private var timer: DispatchSourceTimer?
-  private var observer: AXObserver?
+  private var observers: [AXObserver] = []
   private var tap: CFMachPort?
   private var tapLoop: CFRunLoop?
 
-  init(pid: pid_t, desktop: CGRect, fps: Int) {
-    self.pid = pid
+  init(pids: [pid_t], desktop: CGRect, fps: Int) {
+    self.pids = pids
     self.desktop = desktop
     self.fps = fps
-    app = AXUIElementCreateApplication(pid)
-    AXUIElementSetMessagingTimeout(app, 0.25)
     pointer = desktop.origin
     previous = desktop.origin
   }
@@ -57,13 +54,16 @@ final class Observer {
   @MainActor func begin(zero: Double) throws {
     try startTap()
     lock.lock(); self.zero = zero; lock.unlock()
-    var created: AXObserver?
-    if AXObserverCreate(pid, { _, element, _, refcon in
-      Unmanaged<Observer>.fromOpaque(refcon!).takeUnretainedValue().focused(element)
-    }, &created) == .success, let created {
+    for pid in pids {
+      var created: AXObserver?
+      guard AXObserverCreate(pid, { _, element, _, refcon in
+        Unmanaged<Observer>.fromOpaque(refcon!).takeUnretainedValue().focused(element)
+      }, &created) == .success, let created else { continue }
+      let app = AXUIElementCreateApplication(pid)
+      AXUIElementSetMessagingTimeout(app, 0.25)
       AXObserverAddNotification(created, app, kAXFocusedUIElementChangedNotification as CFString, Unmanaged.passUnretained(self).toOpaque())
       CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(created), .defaultMode)
-      observer = created
+      observers.append(created)
     }
     let timer = DispatchSource.makeTimerSource(queue: queue)
     timer.schedule(deadline: .now(), repeating: 1.0 / Double(fps), leeway: .milliseconds(2))
@@ -76,7 +76,7 @@ final class Observer {
   @MainActor func end() -> [String: Any] {
     timer?.cancel()
     queue.sync {}
-    if let observer { CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode) }
+    for observer in observers { CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode) }
     if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
     lock.lock(); defer { lock.unlock() }
     if let tapLoop { CFRunLoopStop(tapLoop) }

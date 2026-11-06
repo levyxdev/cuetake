@@ -3,9 +3,10 @@ import CoreGraphics
 import CoreVideo
 import Foundation
 
-/** One of the App's windows as one frame saw it: its bounds in global points, and whether it showed anything. */
+/** One of the Apps' windows as one frame saw it: which App owns it, and its bounds in global points. */
 struct Seen: Equatable {
   let id: UInt32
+  let app: Int
   let layer: Int
   let bounds: CGRect
 }
@@ -19,15 +20,17 @@ struct WindowAtSize: Hashable {
 }
 
 /**
- * Follows the App's windows on the Desktop, frame by frame: which show, back to front, and where.
+ * Follows the windows of the Take's Apps on the Desktop, frame by frame: which show, back to front in
+ * their real order across the Apps, and where.
  * A window counts once the frame shows something opaque inside it; its visible frame is its bounds, or
  * for a menu or any window above layer 0, what Accessibility finds inside them (AX.visibleFrame); its
  * corner radius is read once from the frame's alpha along its corner diagonals. Runs on the frames
  * queue, except Accessibility reads, which run on their own queue so a busy App cannot stall a frame.
  */
 final class WindowTracker {
-  private let pid: pid_t
-  private let app: AXUIElement
+  /** Each App's index in the Take, by its process, and its Accessibility element. */
+  private let apps: [pid_t: Int]
+  private let ax: [pid_t: AXUIElement]
   private let desktop: CGRect
   private let axQueue = DispatchQueue(label: "cuetake.ax")
   private let lock = NSLock()
@@ -39,21 +42,24 @@ final class WindowTracker {
   private var states: [(t: Double, seen: [Seen])] = []
   private var everShown: Set<UInt32> = []
 
-  init(pid: pid_t, desktop: CGRect) {
-    self.pid = pid
+  init(pids: [pid_t], desktop: CGRect) {
     self.desktop = desktop
-    app = AXUIElementCreateApplication(pid)
-    AXUIElementSetMessagingTimeout(app, 0.25)
+    apps = Dictionary(uniqueKeysWithValues: pids.enumerated().map { ($0.element, $0.offset) })
+    ax = Dictionary(uniqueKeysWithValues: pids.map { pid in
+      let element = AXUIElementCreateApplication(pid)
+      AXUIElementSetMessagingTimeout(element, 0.25)
+      return (pid, element)
+    })
   }
 
-  /** The App's on-screen windows, back to front. */
+  /** The Apps' on-screen windows, back to front. */
   func windows() -> [Seen] {
     let list = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]) ?? []
     return list.compactMap { info -> Seen? in
-      guard (info[kCGWindowOwnerPID as String] as? Int32) == pid, (info[kCGWindowAlpha as String] as? Double ?? 1) > 0,
+      guard let pid = info[kCGWindowOwnerPID as String] as? Int32, let app = apps[pid], (info[kCGWindowAlpha as String] as? Double ?? 1) > 0,
             let b = info[kCGWindowBounds as String] as? [String: CGFloat], let id = info[kCGWindowNumber as String] as? UInt32 else { return nil }
       let bounds = CGRect(x: b["X"] ?? 0, y: b["Y"] ?? 0, width: b["Width"] ?? 0, height: b["Height"] ?? 0)
-      return bounds.width > 0 && bounds.height > 0 ? Seen(id: id, layer: info[kCGWindowLayer as String] as? Int ?? 0, bounds: bounds) : nil
+      return bounds.width > 0 && bounds.height > 0 ? Seen(id: id, app: app, layer: info[kCGWindowLayer as String] as? Int ?? 0, bounds: bounds) : nil
     }.reversed()
   }
 
@@ -69,7 +75,7 @@ final class WindowTracker {
     if states.last?.seen != shown { states.append((t, shown)) }
     for window in shown {
       let sized = WindowAtSize(window)
-      if window.layer != 0 { measureVisibleFrame(sized, window.bounds) }
+      if window.layer != 0 { measureVisibleFrame(sized, window) }
       lock.lock(); let known = radius[sized] != nil, frame = visibleFrame(window); lock.unlock()
       guard !known, let frame else { continue }
       let tries = (attempts[sized] ?? 0) + 1
@@ -79,9 +85,10 @@ final class WindowTracker {
     }
   }
 
-  private func measureVisibleFrame(_ sized: WindowAtSize, _ bounds: CGRect) {
+  private func measureVisibleFrame(_ sized: WindowAtSize, _ window: Seen) {
     lock.lock(); let ask = !asked.contains(sized); asked.insert(sized); lock.unlock()
-    guard ask else { return }
+    guard ask, let app = ax.first(where: { apps[$0.key] == window.app })?.value else { return }
+    let bounds = window.bounds
     axQueue.async { [self] in
       let frame = (AX.visibleFrame(app, within: bounds) ?? bounds).offsetBy(dx: -bounds.minX, dy: -bounds.minY)
       lock.lock(); visible[sized] = frame; lock.unlock()
@@ -99,7 +106,7 @@ final class WindowTracker {
     for state in states {
       let shown = state.seen.map { window -> [String: Any] in
         let sized = WindowAtSize(window), frame = visibleFrame(window) ?? window.bounds
-        return ["id": Int(window.id), "layer": window.layer, "x": half(frame.minX - desktop.minX), "y": half(frame.minY - desktop.minY),
+        return ["id": Int(window.id), "app": window.app, "layer": window.layer, "x": half(frame.minX - desktop.minX), "y": half(frame.minY - desktop.minY),
                 "width": half(frame.width), "height": half(frame.height), "radius": half(radius[sized] ?? 0)]
       }
       if let last, NSArray(array: last).isEqual(to: shown) { continue }
@@ -114,7 +121,7 @@ final class WindowTracker {
     window.layer == 0 ? window.bounds : visible[WindowAtSize(window)]?.offsetBy(dx: window.bounds.minX, dy: window.bounds.minY)
   }
 
-  /** Whether one of the App's menus is open, which holds its event loop until Escape closes it. */
+  /** Whether a menu of one of the Apps is open, which holds its event loop until Escape closes it. */
   func menuOpen() -> Bool { windows().contains { $0.layer >= Int(CGWindowLevelForKey(.popUpMenuWindow)) } }
 }
 
