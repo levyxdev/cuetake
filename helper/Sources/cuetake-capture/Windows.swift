@@ -31,6 +31,7 @@ final class WindowTracker {
   private let desktop: CGRect
   private let axQueue = DispatchQueue(label: "cuetake.ax")
   private let lock = NSLock()
+  /** Each measured window's visible frame relative to its bounds' origin, so a window that moves keeps it. */
   private var visible: [WindowAtSize: CGRect] = [:]
   private var asked: Set<WindowAtSize> = []
   private var radius: [WindowAtSize: Double] = [:]
@@ -69,7 +70,7 @@ final class WindowTracker {
     for window in shown {
       let sized = WindowAtSize(window)
       if window.layer != 0 { measureVisibleFrame(sized, window.bounds) }
-      lock.lock(); let known = radius[sized] != nil, frame = window.layer == 0 ? window.bounds : visible[sized]; lock.unlock()
+      lock.lock(); let known = radius[sized] != nil, frame = visibleFrame(window); lock.unlock()
       guard !known, let frame else { continue }
       let tries = (attempts[sized] ?? 0) + 1
       attempts[sized] = tries
@@ -82,7 +83,7 @@ final class WindowTracker {
     lock.lock(); let ask = !asked.contains(sized); asked.insert(sized); lock.unlock()
     guard ask else { return }
     axQueue.async { [self] in
-      let frame = AX.visibleFrame(app, within: bounds) ?? bounds
+      let frame = (AX.visibleFrame(app, within: bounds) ?? bounds).offsetBy(dx: -bounds.minX, dy: -bounds.minY)
       lock.lock(); visible[sized] = frame; lock.unlock()
     }
   }
@@ -97,7 +98,7 @@ final class WindowTracker {
     var out: [[String: Any]] = [], last: [[String: Any]]? = nil
     for state in states {
       let shown = state.seen.map { window -> [String: Any] in
-        let sized = WindowAtSize(window), frame = window.layer == 0 ? window.bounds : (visible[sized] ?? window.bounds)
+        let sized = WindowAtSize(window), frame = visibleFrame(window) ?? window.bounds
         return ["id": Int(window.id), "layer": window.layer, "x": half(frame.minX - desktop.minX), "y": half(frame.minY - desktop.minY),
                 "width": half(frame.width), "height": half(frame.height), "radius": half(radius[sized] ?? 0)]
       }
@@ -106,6 +107,11 @@ final class WindowTracker {
       last = shown
     }
     return out
+  }
+
+  /** Where `window` shows in global points: its bounds, or above layer 0 its measured visible frame, nil until measured. Call under the lock. */
+  private func visibleFrame(_ window: Seen) -> CGRect? {
+    window.layer == 0 ? window.bounds : visible[WindowAtSize(window)]?.offsetBy(dx: window.bounds.minX, dy: window.bounds.minY)
   }
 
   /** Whether one of the App's menus is open, which holds its event loop until Escape closes it. */
