@@ -1,21 +1,23 @@
 ---
 name: cuetake
-description: Plan, record, refine, and verify browser product demo videos with the CueTake CLI, including login preparation, previewing and saving styling (Looks), and writing backgrounds, window chrome, cursors and click effects as shaders or drawing code.
+description: Record product demo videos of web pages and macOS Apps with the CueTake CLI: writing and directing Scenarios, login, voice-over Narration and Subtitles, previewing and saving styling (Looks), and writing backgrounds, window chrome, cursors and click effects as shaders or drawing code.
 ---
 
 # CueTake agent operating manual
 
-CueTake is a local execution engine for AI agents. You direct the story; CueTake captures the browser and renders the finished take. Run every command through `scripts/cuetake` in this skill's folder; it launches the pinned CueTake version with `npx`. On macOS it can also record a desktop App instead of a page (scenarios.md, Apps). Read [scenarios.md](scenarios.md) when writing a scenario, [narration.md](narration.md) when a demo needs a voice or subtitles, [styling.md](styling.md) when changing how a Final looks, [authentication.md](authentication.md) when a page needs login, and [setup.md](setup.md) when Node or `npx` is missing, `doctor` reports a failed check, or the user wants CueTake removed.
+CueTake is a local execution engine for AI agents. You direct the story; CueTake captures the browser, or a desktop App on macOS, and renders the finished take. Run every command through `scripts/cuetake` in this skill's folder; it launches the pinned CueTake version with `npx`. Read [scenarios.md](scenarios.md) when writing a scenario, [takes.md](takes.md) when finding a file in a recorded Take or changing one, [narration.md](narration.md) when a demo needs a voice or subtitles, [styling.md](styling.md) when changing how a Final looks, [authentication.md](authentication.md) when a page needs login, and [setup.md](setup.md) when Node or `npx` is missing, `doctor` reports a failed check, or the user wants CueTake removed.
 
 ## Workflow
 
-1. Infer the audience, demonstrated outcome, duration and framing from the request. Inspect the actual application with the available browser tool; use real locators and measured canvas coordinates.
+1. Infer the audience, demonstrated outcome, duration and framing from the request. Inspect the actual page with the available browser tool, or the App with `cuetake tree` ([scenarios.md](scenarios.md), Apps); use real locators and measured coordinates.
 2. Run `doctor`. If it fails, follow [setup.md](setup.md): nothing installs without the user's agreement. This does not start the application's dev server.
-3. Write a trusted `.mjs` scenario in the business project. `prepare(page)` loads examples/assets before capture. `run(d)` performs timed interactions and returns evidence of the demonstrated changes. Never embed credentials or copied browser state in a scenario. When the page shows a real account's data (emails, names, amounts, keys), mask it with `d.mask` before the Director first waits, and spotlight the element that proves the change when the camera alone does not ([scenarios.md](scenarios.md), Masks).
+3. Write a trusted `.mjs` scenario in the business project. `prepare(page)` loads examples/assets before capture. `run(d)` performs timed interactions and returns evidence of the demonstrated changes. Never embed credentials or copied browser state in a scenario. When the page shows a real account's data (emails, names, amounts, keys), mask it with `d.mask` before the Director first waits ([scenarios.md](scenarios.md), Masks).
 4. Run `record` with the scenario path and a new Take directory. It captures, renders and verifies in the foreground, then prints the verification report; a failure exits non-zero. Capture lasts as long as the scenario and Render adds its own time, so run it in the background when your shell would time out.
-5. Read verification and application evidence. A `warnings` entry means the browser fell behind during Capture and the page in the Final jumps, that input inside an iframe could not be placed exactly, or that a Mask found no element; follow its fix and record again, or tell the user when it says nothing more can be done. Inspect frames around clicks and camera transitions with `frame <take> <seconds>`, which saves a PNG you can view, and play the final MP4. Before delivering a Take with real data, check frames across it for anything private left unmasked; add a fixed Mask to `edit.json` and render again rather than recording again. Deliver the absolute final path and relevant limitations. Technical verification is not editorial approval or authorization to publish.
+5. Read the verification report and the application evidence. A `warnings` entry means the browser fell behind during Capture and the page in the Final jumps, that input inside an iframe could not be placed exactly, or that a Mask found no element; follow its fix and record again, or tell the user when it says nothing more can be done. When the Take shows a real account, view a frame with `frame <take> <seconds>` at each moment its data is on screen and confirm the Masks cover it; add a fixed Mask to `edit.json` and render again rather than recording again ([takes.md](takes.md)). Deliver the absolute final path and relevant limitations. When the user reports a problem in the Final, view the frames around it with `frame` before changing anything. Technical verification is not editorial approval or authorization to publish.
 
-Run `render` after changing a take's `edit.json`. This reuses each Tab's Source. Cursor, click effect, camera and output all live in the Edit, so restyling never requires recording again. How the cursor moves is decided at Capture: when the user finds it too fast, too slow or wants it to feel different, change `director.speed` or `director.seed` in the Scenario config and record again ([scenarios.md](scenarios.md)). Preserve versions by copying a take before editing it.
+Cursor, click effect, camera and output all live in the Edit, so restyling never requires recording again ([takes.md](takes.md)). How the cursor moves is decided at Capture: when the user finds it too fast, too slow or wants it to feel different, change `director.speed` or `director.seed` in the Scenario config and record again ([scenarios.md](scenarios.md)).
+
+Defaults: CSS viewport 1440×900, 2× capture resolution, 60 fps target, and a 3840×2160 Final with the page in a light browser window over fluted glass lit in the page's brand color, a soft shadow, a 24 px white arrow that takes the shape the page asks for and presses on each click, keycaps at the bottom right for each keyboard combination, and an automatic camera that zooms in on each action and ends wide.
 
 ## Styling with the user
 
@@ -43,14 +45,6 @@ Reuse a named auth profile when the user has authorized that account for the dem
 
 `prepare` must verify an authenticated page anchor before capture. If redirected to sign-in, stop and refresh the profile instead of recording login. Do not read the user's normal Chrome profile, print tokens, or put auth files into output/source control. A stored file proves only that state exists; the application decides whether the session is still valid.
 
-## Styling and timing
-
-Defaults: CSS viewport 1440×900, 2× capture resolution, 60 fps target, a 3840×2160 Final with the page in a light browser window over fluted glass lit in the page's brand color, a soft shadow, a 24 px white arrow that takes the shape the page asks for, presses on each click and stays shown, and keycaps at the bottom right for each keyboard combination (`d.press`).
-
-The camera zooms automatically, like Screen Studio: it arrives 0.6 s before each action, frames the target with 48 px padding at up to 2×, keeps one zoom and stays still while the next target is in view, follows the cursor near the edge of the view, holds 1.5 s after the last of a run of actions, and ends every Final on the wide shot. Leave at least 2 s after the last action so the result is seen in context. Use `d.focus(box, seconds)` to direct the camera at a moment; it replaces only the automatic zoom around that moment. Pass `focus: false` to an action that should not move the camera. Boxes are CSS pixels.
-
-Capture is variable frame rate: static scenes reduce cadence and moving scenes can drop frames. Report observed stats, not a promise of 60 independent page frames each second. Capture runs headless by default; pass `--headed` to watch it. Coverage is macOS, one tab, no page audio (Narration is voiced separately). Known limitation: headless Chromium renders the generic `monospace` family as Courier rather than Menlo; record with `--headed` when a page relies on it. `run` may navigate, submit forms and reload: one Take records through each, and the Timeline notes every page load as a `navigate` event. Pages opened in a new tab or window are not recorded. Login still happens in `prepare`, before capture.
-
 ## Commands
 
 `<skill>` is this skill's folder.
@@ -59,7 +53,8 @@ Capture is variable frame rate: static scenes reduce cadence and moving scenes c
 <skill>/scripts/cuetake doctor
 <skill>/scripts/cuetake install-browser
 <skill>/scripts/cuetake uninstall [--auth] [--looks] [--dry-run]
-<skill>/scripts/cuetake record <scenario.mjs> --out <new-take-directory> [--auth-profile product-demo] [--look brand] [--narration narration.json] [--headed]
+<skill>/scripts/cuetake record <scenario.mjs> --out <new-take-directory> [--auth-profile product-demo] [--look brand] [--narration narration.json] [--headed] [--use-running]
+<skill>/scripts/cuetake tree <app>
 <skill>/scripts/cuetake narrate import <take-directory> narration.json
 <skill>/scripts/cuetake preview <take-directory> [--look brand --look ./ocean.json] [--at 2.5]
 <skill>/scripts/cuetake render <take-directory>

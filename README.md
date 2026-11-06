@@ -24,7 +24,7 @@ If a user hands you this repository to set up CueTake:
 1. Install the skill with `npx skills add levyxdev/cuetake`. In Claude Code you can instead run `/plugin marketplace add levyxdev/cuetake`, then `/plugin install cuetake`.
 2. The skill's `scripts/cuetake` runs the pinned [`cuetake`](https://www.npmjs.com/package/cuetake) package with `npx`, so nothing else needs installing besides Node. To run a source checkout instead, export `CUETAKE_BIN="node /absolute/path/to/cuetake/src/cli.js"`.
 3. Follow the skill's [setup guide](skills/cuetake/setup.md): run `scripts/cuetake doctor`, and install Node or the browser only after the user agrees to the option they pick.
-4. Write a Scenario for the user's product with the [scenario API](skills/cuetake/scenarios.md), record it, and review the frames with `scripts/cuetake frame`.
+4. Write a Scenario for the user's product with the [scenario API](skills/cuetake/scenarios.md), record it, and read the verification report it prints.
 
 ## Run from source
 
@@ -68,7 +68,7 @@ Source capture is variable frame rate. Static scenes may drop to approximately o
 
 ## Current scope
 
-The supported workflow is a short browser demo in one tab, including SPA interactions, full page navigations, form posts that redirect, and reloads: the Source and the Timeline run on through each, and the Timeline notes each page load. The built-in browser chrome's address bar follows the page to each host it navigates to. A page opened in another tab or window is not recorded. Page audio and desktop/window capture are outside this workflow; a Narration voiced by a separate speech tool is mixed in at Render, with Subtitles ([narration](skills/cuetake/narration.md)). Input inside iframes, cross-origin and nested ones included, is followed like input on the page; an iframe that is rotated, skewed or 3D-transformed is placed as if it were only scaled, and verification warns. Headless Chromium renders the generic `monospace` family as Courier rather than Menlo; record with `--headed` when a page relies on it. Browser automation and captured data stay local; the visited website still receives normal browser requests.
+The supported workflow is a short browser demo, including SPA interactions, full page navigations, form posts that redirect, and reloads: the Source and the Timeline run on through each, and the Timeline notes each page load. The built-in browser chrome's address bar follows the page to each host it navigates to. A page the demo opens in a new tab or popup is recorded as its own Tab and shown in the Final. On macOS a Take can record one or several desktop Apps instead of a page ([Apps](skills/cuetake/scenarios.md#apps)). Page audio is not captured; a Narration voiced by a separate speech tool is mixed in at Render, with Subtitles ([narration](skills/cuetake/narration.md)). Input inside iframes, cross-origin and nested ones included, is followed like input on the page; an iframe that is rotated, skewed or 3D-transformed is placed as if it were only scaled, and verification warns. Headless Chromium renders the generic `monospace` family as Courier rather than Menlo; record with `--headed` when a page relies on it. Browser automation and captured data stay local; the visited website still receives normal browser requests.
 
 The bundled [agent skill](skills/cuetake/SKILL.md) teaches planning and operation; site-specific scenarios stay in your application project. See [distribution](docs/distribution.md) and [login](skills/cuetake/authentication.md).
 
