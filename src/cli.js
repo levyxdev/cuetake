@@ -18,7 +18,7 @@ const help = `CueTake ${pkg.version} — browser demos directed by code
   cuetake doctor
   cuetake install-browser
   cuetake uninstall [--auth] [--looks] [--dry-run]
-  cuetake record <scenario.mjs> [--out <new-directory>] [--auth-profile <name>] [--look <name|file.json>] [--narration <narration.json>] [--headed]
+  cuetake record <scenario.mjs> [--out <new-directory>] [--auth-profile <name>] [--look <name|file.json>] [--narration <narration.json>] [--headed] [--use-running]
   cuetake tree <app>
   cuetake narrate import <take-directory> <narration.json>
   cuetake preview <take-directory> [--look <name|file.json>]... [--at <seconds>]
@@ -39,6 +39,8 @@ uninstall removes CueTake's npx cache and its browser, unless another Playwright
 record captures, renders and verifies a new take; an existing directory is never overwritten.
   Capture runs headless; --headed shows the browser window while recording.
   A Scenario naming an app instead of a url records a desktop App on macOS: its windows on a Desktop.
+  An App the user already runs stops it; --use-running, with the user's consent, records it as it is,
+  leaves it running and puts its windows back.
   --look seeds the first Edit from a Look; fields the Scenario config names win.
   --narration copies a Narration and its audio into the Take first: d.say(id) holds each Line for its audio.
 tree lists the Accessibility tree of a running App (bundle id, name or .app path) with the locator for each
@@ -59,14 +61,14 @@ Scenario files are trusted JavaScript. Recording runs locally and captures no pa
   voiced beforehand by a speech tool of your choice.
 `;
 try {
-  const { values, positionals } = parseArgs({ args: process.argv.slice(2), allowPositionals: true, options: { out: { type: 'string' }, help: { type: 'boolean', short: 'h' }, 'auth-profile': { type: 'string' }, headed: { type: 'boolean' }, look: { type: 'string', multiple: true }, narration: { type: 'string' }, at: { type: 'string' }, global: { type: 'boolean' }, replace: { type: 'boolean' }, auth: { type: 'boolean' }, looks: { type: 'boolean' }, 'dry-run': { type: 'boolean' } } });
+  const { values, positionals } = parseArgs({ args: process.argv.slice(2), allowPositionals: true, options: { out: { type: 'string' }, help: { type: 'boolean', short: 'h' }, 'auth-profile': { type: 'string' }, headed: { type: 'boolean' }, look: { type: 'string', multiple: true }, narration: { type: 'string' }, at: { type: 'string' }, global: { type: 'boolean' }, replace: { type: 'boolean' }, auth: { type: 'boolean' }, looks: { type: 'boolean' }, 'dry-run': { type: 'boolean' }, 'use-running': { type: 'boolean' } } });
   const [command, target] = positionals, looks = values.look ?? [];
   const print = data => console.log(JSON.stringify(data, null, 2));
   if (values.help || !command) console.log(help);
   else if (command === 'doctor') { const result = await doctor(); console.log(JSON.stringify(result, null, 2)); if (!result.ok) process.exitCode = 1; }
   else if (command === 'install-browser') console.log(JSON.stringify(await installBrowser(), null, 2));
   else if (command === 'uninstall' && !target) print(await uninstall({ auth: values.auth, looks: values.looks, dryRun: values['dry-run'] }));
-  else if (command === 'record' && target && looks.length <= 1) print(await recordScenario(target, values.out, { authProfile: values['auth-profile'], look: looks[0], narration: values.narration, headed: values.headed }));
+  else if (command === 'record' && target && looks.length <= 1) print(await recordScenario(target, values.out, { authProfile: values['auth-profile'], look: looks[0], narration: values.narration, headed: values.headed, useRunning: values['use-running'] }));
   else if (command === 'tree' && target) console.log(treeLines(await appTree(target)).join('\n'));
   else if (command === 'narrate' && target === 'import' && positionals[3]) print(await importNarration(positionals[2], positionals[3]));
   else if (command === 'preview' && target) print(await previewTake(target, looks, { at: values.at === undefined ? undefined : Number(values.at) }));

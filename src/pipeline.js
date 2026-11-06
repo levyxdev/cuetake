@@ -208,10 +208,10 @@ async function capturePage(scenario, config, dir, { authState, headed, voiced })
  * Capture starts, to wait for what the demo needs and arrange the windows with `setFrame`.
  * Returns the Timeline, the Director's notes, the evidence, and the Apps the helper could not quit.
  */
-async function captureApp(scenario, config, dir, { voiced }) {
+async function captureApp(scenario, config, dir, { voiced, useRunning }) {
   const { fps } = config.capture, given = appsOf(config);
-  process.stderr.write(`CueTake starts ${given.map(app => app.path).join(', ')} and records ${given.length > 1 ? 'them' : 'it'}. Leave the Mac alone until the Take ends: the Scenario moves the real pointer and acts on the real ${given.length > 1 ? 'Apps' : 'App'} and their data.\n`);
-  const desktop = await startDesktop({ apps: given, desktop: config.viewport, fps, source: join(dir, 'source-0.mp4'), poster: join(dir, 'poster.png') });
+  process.stderr.write(`CueTake ${useRunning ? 'records' : 'starts'} ${given.map(app => app.path).join(', ')}${useRunning ? ', as the user runs it where it is running' : ` and records ${given.length > 1 ? 'them' : 'it'}`}. Leave the Mac alone until the Take ends: the Scenario moves the real pointer and acts on the real ${given.length > 1 ? 'Apps' : 'App'} and their data.\n`);
+  const desktop = await startDesktop({ apps: given, desktop: config.viewport, fps, source: join(dir, 'source-0.mp4'), poster: join(dir, 'poster.png'), useRunning });
   try {
     config.capture.resolutionScale = desktop.ready.scale;
     const apps = given.map((app, i) => ({ ...app, name: desktop.ready.apps[i].name, bundle: desktop.ready.apps[i].bundle }));
@@ -233,8 +233,20 @@ async function captureApp(scenario, config, dir, { voiced }) {
       frames: stopped.frames.map(([t, scale]) => ({ timeMs: Math.round(t * 1e6) / 1000, scale })),
     }] });
     const timeline = desktopTimelineOf({ apps, viewport: config.viewport, scale: desktop.ready.scale }, stopped, notes);
-    return { timeline, notes, evidence, unquit: stopped.unquit ?? [] };
+    return { timeline, notes, evidence, unquit: stopped.unquit ?? [], running: desktop.ready.apps.filter(app => app.running).map(app => app.name) };
   } finally { desktop.kill(); }
+}
+
+/**
+ * What `record` reports of the Apps after a Take, or null when there is nothing to report: those it
+ * started that did not quit (`unquit`), and those the user runs that it recorded as they were (`running`).
+ */
+export function appReport({ unquit, running }) {
+  const notes = [];
+  if (unquit.length) notes.push(`${unquit.join(', ')} did not quit after the Take; ${unquit.length > 1 ? 'they' : 'it'} may be asking to save. Quit ${unquit.length > 1 ? 'them' : 'it'} before the next Take.`);
+  if (running.length) notes.push(`${running.join(', ')} ${running.length > 1 ? 'were' : 'was'} recorded as the user runs ${running.length > 1 ? 'them' : 'it'}: CueTake left ${running.length > 1 ? 'them' : 'it'} running and put ${running.length > 1 ? 'their' : 'its'} windows back.`);
+  if (!notes.length) return null;
+  return { ...(unquit.length && { quit: false, unquit }), ...(running.length && { running }), note: notes.join(' ') };
 }
 
 /** New take directories are exclusive: reruns never overwrite a previous take. */
@@ -247,6 +259,7 @@ export async function recordScenario(scenarioPath, outputDir, options = {}) {
   const config = scenarioSchema.parse(given);
   if (typeof scenario.run !== 'function') throw new Error('Scenario must export run(director)');
   if (config.app) refuseForApp(given, options);
+  else if (options.useRunning) throw new Error('--use-running is for Apps: it records an App the user already runs, as it is');
   // A relative .app path names an App beside the Scenario.
   for (const app of appsOf(config)) if (app.path.includes('/')) app.path = resolve(dirname(resolve(scenarioPath)), app.path);
   const authState = options.authProfile ? await resolveAuthProfile(options.authProfile) : undefined;
@@ -270,7 +283,7 @@ export async function recordScenario(scenarioPath, outputDir, options = {}) {
     // The Narration is voiced before Capture, so d.say can hold each Line for its audio (ADR 0006).
     const imported = options.narration ? await intoTakeNarration(options.narration, dir) : null;
     const voiced = imported && new Map(Object.entries(imported.durations));
-    captured = config.app ? await captureApp(scenario, config, dir, { voiced }) : await capturePage(scenario, config, dir, { authState, headed: options.headed, voiced });
+    captured = config.app ? await captureApp(scenario, config, dir, { voiced, useRunning: options.useRunning }) : await capturePage(scenario, config, dir, { authState, headed: options.headed, voiced });
     const { timeline, notes: { focus, wide }, evidence } = captured;
     await writeJson(join(dir, 'timeline.json'), timeline);
     let edit = createEdit(config, timeline, focus, wide);
@@ -288,7 +301,7 @@ export async function recordScenario(scenarioPath, outputDir, options = {}) {
   return { directory: dir, final: join(dir, 'final.mp4'), verification,
     ...(lowered && { capture: { resolutionScale, note: `Chromium draws without a GPU here (${gpu.renderer}), so Capture used resolutionScale 1; set capture.resolutionScale to 2 in the Scenario to override` } }),
     ...(config.app && { capture: { resolutionScale: config.capture.resolutionScale, note: 'The Desktop records at the scale of the display it sits on' } }),
-    ...(captured.unquit?.length && { app: { quit: false, unquit: captured.unquit, note: `${captured.unquit.join(', ')} did not quit after the Take; ${captured.unquit.length > 1 ? 'they' : 'it'} may be asking to save. Quit ${captured.unquit.length > 1 ? 'them' : 'it'} before the next Take.` } }),
+    ...(config.app && appReport(captured) && { app: appReport(captured) }),
     ...(unplaced.length && { unplaced: { lines: unplaced, note: 'These Lines were never said and have no start; add d.say or a start in edit.json' } }),
     ...(unvoiced.length && { unvoiced: { lines: unvoiced, note: `These Lines have no audio yet; voice them and run cuetake narrate import ${dir} <narration.json>` } }) };
 }

@@ -4,11 +4,15 @@ import AVFoundation
 import CoreImage
 import ScreenCaptureKit
 
-/** What `record` reads first: the Apps, the Desktop's size in points, the frame rate and where the Source and poster go. */
+/**
+ * What `record` reads first: the Apps, the Desktop's size in points, the frame rate, where the Source and
+ * poster go, and whether the user agreed to record an App they already run as it is (`useRunning`).
+ */
 struct Request: Decodable {
   struct App: Decodable { let path: String; let args: [String]? }
   struct Size: Decodable { let width: Double; let height: Double }
   let apps: [App]
+  let useRunning: Bool?
   let desktop: Size
   let fps: Int
   let source: String
@@ -37,6 +41,9 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
   /** The Take's Apps, in the request's order, once started, and their names. */
   private var running: [NSRunningApplication] = []
   private var names: [String] = []
+  /** The Apps the user started, by index: never quit, and their windows' frames, to put back after the Take. */
+  private var users: Set<Int> = []
+  private var putBack: [(AXUIElement, CGRect)] = []
   private var desktop = CGRect.zero
   private var scale = 2.0
   private var stream: SCStream?
@@ -95,8 +102,10 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
   // MARK: Launch
 
   /**
-   * Starts the Apps, unless one already runs, waits for each one's first standard window, and fills the
-   * Desktop with the first App's; the others stay where they put theirs. The first App ends in front.
+   * Starts the Apps, waits for each one's first standard window, and fills the Desktop with the first
+   * App's; the others stay where they put theirs. The first App ends in front. An App the user already
+   * runs stops the Take unless they agreed to record it as it is (`useRunning`): then it is used as it
+   * runs, never quit, and its windows are put back when the Take ends.
    */
   @MainActor private func launch() async throws -> [String: Any] {
     guard !request.apps.isEmpty else { throw Refusal("app", "The request names no App") }
@@ -107,12 +116,12 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     if let twice = ids.enumerated().first(where: { ids.firstIndex(of: $0.element) != $0.offset }) {
       throw Refusal("app", "\(names[twice.offset]) is named twice in config.app; name each App once")
     }
-    let busy = zip(bundles, names).filter { bundle, _ in
-      bundle?.bundleIdentifier.map { NSRunningApplication.runningApplications(withBundleIdentifier: $0).contains { !$0.isTerminated } } ?? false
-    }.map(\.1)
-    if !busy.isEmpty {
-      let listed = busy.count == 1 ? "\(busy[0]) is" : busy.dropLast().joined(separator: ", ") + " and \(busy.last!) are"
-      throw Refusal("running", "\(listed) running. Quit \(busy.count == 1 ? "it" : "them"), then record again: every Take starts its Apps afresh, and CueTake never quits one for you.")
+    let theirs = bundles.map { bundle in bundle?.bundleIdentifier.flatMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0).first { !$0.isTerminated } } }
+    let busy = zip(theirs, names).filter { $0.0 != nil }.map(\.1)
+    if !busy.isEmpty && request.useRunning != true {
+      let one = busy.count == 1, listed = one ? "\(busy[0]) is" : busy.dropLast().joined(separator: ", ") + " and \(busy.last!) are"
+      let it = one ? "it" : "them", its = one ? "its" : "their"
+      throw Refusal("running", "\(listed) running. Ask the user whether to record \(it) as \(one ? "it is" : "they are"): \(its) windows and data show in the Take, which does not start afresh; CueTake leaves \(it) running and puts \(its) windows back. On yes, record again with --use-running; otherwise ask the user to quit \(it). Never quit \(it) for them.")
     }
     let screen = NSScreen.screens.enumerated().max { $0.element.backingScaleFactor < $1.element.backingScaleFactor || ($0.element.backingScaleFactor == $1.element.backingScaleFactor && $0.offset > $1.offset) }!.element
     scale = Double(screen.backingScaleFactor)
@@ -130,10 +139,16 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
       configuration.activates = true
       configuration.addsToRecentItems = false
       configuration.promptsUserIfNeeded = false
-      let app = try await NSWorkspace.shared.openApplication(at: url, configuration: configuration)
+      let app: NSRunningApplication
+      if let mine = theirs[i] {
+        app = mine
+        users.insert(i)
+        app.unhide()
+      } else { app = try await NSWorkspace.shared.openApplication(at: url, configuration: configuration) }
       running.append(app)
       let window = try await standardWindow(of: app, named: names[i])
       if i == 0 { first = window }
+      if theirs[i] != nil { putBack += AX.windows(AXUIElementCreateApplication(app.processIdentifier)).compactMap { w in AX.frame(w).map { (w, $0) } } }
     }
     AX.setFrame(first!, desktop)
     for app in running { AX.exposeContent(AXUIElementCreateApplication(app.processIdentifier)) }
@@ -143,7 +158,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     controller = Controller(apps: running, desktop: desktop, observer: observer)
     try await Task.sleep(nanoseconds: 500_000_000)
     let frame = AX.frame(first!) ?? desktop
-    let apps = running.enumerated().map { i, app -> [String: Any] in ["name": names[i], "bundle": bundles[i]?.bundleIdentifier ?? "", "pid": Int(app.processIdentifier)] }
+    let apps = running.enumerated().map { i, app -> [String: Any] in ["name": names[i], "bundle": bundles[i]?.bundleIdentifier ?? "", "pid": Int(app.processIdentifier), "running": users.contains(i)] }
     return ["apps": apps, "scale": scale, "display": screen.localizedName, "desktop": rect(desktop), "window": rect(frame.offsetBy(dx: -desktop.minX, dy: -desktop.minY))]
   }
 
@@ -283,24 +298,28 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
   }
 
   /**
-   * Quits the Apps this Take started, closing any open menu first; returns the names of those that did
-   * not quit. With `force`, an App that does not quit within 5 s, as one holding a dialog open, is forced to.
+   * Quits the Apps this Take started, closing any open menu first, and puts back the windows of those
+   * the user started; returns the names of those that did not quit. With `force`, an App that does not
+   * quit within 5 s, as one holding a dialog open, is forced to.
    */
   @discardableResult @MainActor private func quitApp(force: Bool = false) async -> [String] {
-    let live = running.filter { !$0.isTerminated }
-    guard !live.isEmpty else { return [] }
+    let started = running.enumerated().filter { !users.contains($0.offset) }
+    let live = started.map(\.element).filter { !$0.isTerminated }
+    defer { for (window, frame) in putBack { AX.setFrame(window, frame) }; putBack = [] }
+    guard !running.filter({ !$0.isTerminated }).isEmpty else { return [] }
     if tracker?.menuOpen() ?? WindowTracker(pids: running.map(\.processIdentifier), desktop: desktop).menuOpen() {
       let source = CGEventSource(stateID: .combinedSessionState)
       for down in [true, false] { CGEvent(keyboardEventSource: source, virtualKey: 53, keyDown: down)?.post(tap: .cgSessionEventTap) }
       try? await Task.sleep(nanoseconds: 300_000_000)
     }
+    guard !live.isEmpty else { return [] }
     live.forEach { $0.terminate() }
     for _ in 0..<50 where live.contains(where: { !$0.isTerminated }) { try? await Task.sleep(nanoseconds: 100_000_000) }
     if force && live.contains(where: { !$0.isTerminated }) {
       live.filter { !$0.isTerminated }.forEach { $0.forceTerminate() }
       for _ in 0..<20 where live.contains(where: { !$0.isTerminated }) { try? await Task.sleep(nanoseconds: 100_000_000) }
     }
-    return running.enumerated().filter { !$0.element.isTerminated }.map { names[$0.offset] }
+    return started.filter { !$0.element.isTerminated }.map { names[$0.offset] }
   }
 }
 

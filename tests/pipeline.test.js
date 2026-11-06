@@ -1,7 +1,7 @@
 import { test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import pkg from '../package.json' with { type: 'json' };
-import { scenarioSchema, summarizeFrames, captureWarnings, timelineWarnings, captureScale, narrationSchema, timelineOf, desktopTimelineOf } from '../src/pipeline.js';
+import { scenarioSchema, summarizeFrames, captureWarnings, timelineWarnings, captureScale, narrationSchema, timelineOf, desktopTimelineOf, appReport, recordScenario } from '../src/pipeline.js';
 import { placeRecords } from '../src/probe.js';
 import { captureSeconds } from '../src/tab-capture.js';
 import { drawsWithGpu } from '../src/environment.js';
@@ -1709,4 +1709,15 @@ test('the Timeline of several Apps lists each, and a warning names the App whose
   expect(desktopWarnings({ ...timeline, windows: arranged }, { frames: [{ timeMs: 0, scale: 2 }], dropped: 0 })).toEqual([
     'At 2.00 s the first window of TextEdit moved or resized, to 0, 0, 700×760 points; Render does not correct it, so leave it where the Take put it.',
   ]);
+});
+
+test('record reports the Apps it left running, and refuses --use-running for a page', async () => {
+  // An App the Take started that asked to save stays open; one the user started is left running on purpose.
+  expect(appReport({ unquit: ['TextEdit'], running: [] })).toEqual({ quit: false, unquit: ['TextEdit'], note: 'TextEdit did not quit after the Take; it may be asking to save. Quit it before the next Take.' });
+  expect(appReport({ unquit: [], running: ['Claude'] })).toEqual({ running: ['Claude'], note: 'Claude was recorded as the user runs it: CueTake left it running and put its windows back.' });
+  expect(appReport({ unquit: ['TextEdit'], running: ['Claude'] }).note).toBe('TextEdit did not quit after the Take; it may be asking to save. Quit it before the next Take. Claude was recorded as the user runs it: CueTake left it running and put its windows back.');
+  expect(appReport({ unquit: [], running: [] })).toBeNull();
+  const dir = await tmp('cuetake-use-running-');
+  await fs.writeFile(join(dir, 'page.mjs'), "export const config = { name: 'page', url: 'https://example.test/' };\nexport async function run() {}\n");
+  await expect(recordScenario(join(dir, 'page.mjs'), join(dir, 'take'), { useRunning: true })).rejects.toThrow('--use-running is for Apps');
 });

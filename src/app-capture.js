@@ -54,7 +54,7 @@ export async function appChecks() {
  * Starts `apps` ([{ path, args }], in order) on a Desktop `desktop` points large ({ width, height }),
  * recording at `fps` into `source` (an MP4) from `start()` on, and writing the last frame to `poster`.
  * Resolves once the first App's first window fills the Desktop and every App shows a window, the first
- * App in front, with `ready` (the Apps, as [{ name, bundle, pid }], the scale, the Desktop on the screen
+ * App in front, with `ready` (the Apps, as [{ name, bundle, pid, running }], the scale, the Desktop on the screen
  * and the first window in Desktop points) and:
  * - `start()`, which records and resolves with the wall-clock ms of the first frame;
  * - `stop()`, which ends the Source, quits the Apps and resolves with the sidecar: `duration`, `frames`
@@ -66,9 +66,11 @@ export async function appChecks() {
  *   windows or post input for the Director (app-locators.js, app-director.js), in Desktop points, and
  *   resolves with its reply;
  * - `kill()`, which ends it all, for a failure; the helper then quits the Apps.
+ * An App the user already runs is refused unless `useRunning`, the user's consent to record it as it
+ * is: then it is used as it runs (`running` in `ready`), never quit, and its windows are put back.
  * The helper's refusals (a running App, a missing grant) reject with its message.
  */
-export async function startDesktop({ apps, desktop, fps, source, poster }) {
+export async function startDesktop({ apps, desktop, fps, source, poster, useRunning = false }) {
   const path = await helper();
   if (!path) throw new Error(MISSING);
   const child = spawn(path, ['record'], { stdio: ['pipe', 'pipe', 'pipe'] });
@@ -98,7 +100,7 @@ export async function startDesktop({ apps, desktop, fps, source, poster }) {
   const reply = key => new Promise((resolve, reject) => { if (ended) reject(ended); else waiting.push({ key, resolve, reject }); });
   const send = message => child.stdin.write(JSON.stringify(message) + '\n');
   const ready = reply('ready');
-  send({ apps: apps.map(app => ({ path: app.path, args: app.args ?? [] })), desktop, fps, source, poster });
+  send({ apps: apps.map(app => ({ path: app.path, args: app.args ?? [] })), desktop, fps, source, poster, useRunning });
   try { await ready; } catch (error) { child.kill(); throw error; }
   return {
     ready: await ready,
