@@ -35,8 +35,9 @@ function run(path, args) {
 }
 
 /**
- * The doctor checks a Take of Apps needs, each `for: 'Apps'`: the helper, and the Screen Recording and
- * Accessibility grants of the app responsible for CueTake, read without prompting. Each fix names that app.
+ * The doctor checks a Take of Apps needs, each `for: 'Apps'`: the helper, and the Screen Recording,
+ * Accessibility and Input Monitoring grants of the app responsible for CueTake, read without prompting;
+ * Input Monitoring lets the helper notice input the Director did not make. Each fix names that app.
  */
 export async function appChecks() {
   const path = await helper();
@@ -46,7 +47,7 @@ export async function appChecks() {
   catch (error) { return [{ name: 'helper', for: 'Apps', ok: false, error: error.message, fix: 'Reinstall CueTake; its cuetake-capture helper does not run here.' }]; }
   const { app, path: responsible } = granted.responsible;
   const grant = (name, ok, pane) => ({ name, for: 'Apps', ok, app, ...(ok ? {} : { path: responsible, fix: `Allow ${app} in System Settings > Privacy & Security > ${pane}, then restart it. Ask the user first.` }) });
-  return [grant('screen-recording', granted.screenRecording, 'Screen Recording'), grant('accessibility', granted.accessibility, 'Accessibility')];
+  return [grant('screen-recording', granted.screenRecording, 'Screen Recording'), grant('accessibility', granted.accessibility, 'Accessibility'), grant('input-monitoring', granted.inputMonitoring, 'Input Monitoring')];
 }
 
 /**
@@ -56,7 +57,10 @@ export async function appChecks() {
  * the first window in Desktop points) and:
  * - `start()`, which records and resolves with the wall-clock ms of the first frame;
  * - `stop()`, which ends the Source, quits the App and resolves with the sidecar: `duration`, `frames`
- *   ([t, scale] per frame), `windows` (the App's windows over time) and whether the App `quit`;
+ *   ([t, scale] per frame), `windows` (the App's windows over time), `shapes` (the system cursor's, as
+ *   [t, keyword]), `focused` (each element the App focused, { t, box, role }), `watched` (the boxes of
+ *   each masked element, { id, boxes }), `otherInput` (input the Director did not make, as [t, kind])
+ *   and whether the App `quit`;
  * - `request(message)`, which asks the helper to read the App's Accessibility tree or post input for
  *   the Director (app-locators.js, app-director.js), in Desktop points, and resolves with its reply;
  * - `kill()`, which ends it all, for a failure; the helper then quits the App.

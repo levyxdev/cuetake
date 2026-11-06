@@ -5,21 +5,24 @@ import CoreGraphics
 /**
  * What the Director asks of the App during a Take (app-locators.js, app-director.js): Accessibility reads
  * by role and identifier, and real input, the pointer moved and pressed and keys posted as a person's
- * would be. Positions are Desktop points; elements are numbered refs the Node side passes back.
+ * would be, and the elements a Mask follows, handed to the Observer. Positions are Desktop points;
+ * elements are numbered refs the Node side passes back.
  */
 @MainActor final class Controller {
   private let app: NSRunningApplication
   private let ax: AXUIElement
   private let desktop: CGRect
   private let source = CGEventSource(stateID: .hidSystemState)
-  /** Elements by ref, from the latest `windows` on; `byHash` finds an element's ref again, so it has one ref. */
+  /** Elements by ref, for the whole Take; `byHash` finds an element's ref again, so it has one ref. */
   private var elements: [Int: AXUIElement] = [:]
   private var byHash: [CFHashCode: [Int]] = [:]
   private var held: CGMouseButton?
+  private let observer: Observer
 
-  init(app: NSRunningApplication, desktop: CGRect) {
+  init(app: NSRunningApplication, desktop: CGRect, observer: Observer) {
     self.app = app
     self.desktop = desktop
+    self.observer = observer
     ax = AXUIElementCreateApplication(app.processIdentifier)
     AXUIElementSetMessagingTimeout(ax, 2)
   }
@@ -27,9 +30,7 @@ import CoreGraphics
   /** Answers one request: its reply, or throws a Refusal whose message the Scenario sees. */
   func handle(_ message: [String: Any]) throws -> Any {
     if message["windows"] != nil {
-      // Each locator resolves from the windows down, so refs from earlier resolutions are no longer needed.
-      elements.removeAll()
-      byHash.removeAll()
+      // Refs stay valid across resolutions: a Mask resolves its locator again while the Director resolves another.
       let focused = focusedWindow()
       return AX.windows(ax).map { summary($0, focused: focused) }
     }
@@ -49,6 +50,10 @@ import CoreGraphics
       }
     }
     if let up = message["up"] as? [String: Any] { try pointer(up, type: .up); return [:] }
+    if let watch = message["watch"] as? [String: Any], let id = watch["id"] as? Int {
+      observer.watch(id, try (watch["refs"] as? [Any] ?? []).map { try element($0) })
+      return [:]
+    }
     if let key = message["key"] as? [String: Any] { try self.key(key); return [:] }
     if let text = message["text"] as? String { try type(text); return [:] }
     throw Refusal("request", "cuetake-capture does not know the request \(message.keys.sorted())")
@@ -171,6 +176,7 @@ import CoreGraphics
     case nil: type = held == .right ? .rightMouseDragged : held == .left ? .leftMouseDragged : .mouseMoved
     }
     guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: at, mouseButton: press == nil ? (held ?? .left) : button) else { throw Refusal("input", "macOS refused to make a pointer event") }
+    observer.pointerMoved(to: at)
     if press != nil { event.setIntegerValueField(.mouseEventClickState, value: 1) }
     event.post(tap: .cghidEventTap)
   }

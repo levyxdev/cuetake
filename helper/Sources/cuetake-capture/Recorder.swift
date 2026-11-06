@@ -20,7 +20,7 @@ struct Request: Decodable {
  * and `stop`, each a JSON line on stdin. Replies, one JSON line each:
  *   {"ready": {...}}    the App's first window fills the Desktop; nothing records yet
  *   {"started": {...}}  the first frame is written; `epochMs` is its wall-clock time
- *   {"stopped": {...}}  the Source is complete; `frames` and `windows` are the sidecar
+ *   {"stopped": {...}}  the Source is complete; `frames`, `windows` and what the Observer saw are the sidecar
  *   {"error": {...}}    then the helper exits
  * Once ready, a line with an `id` is a request of the Director's (Controller), answered with
  * {"id", "reply"} or, when it cannot be done, {"id", "failed": message}.
@@ -51,6 +51,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
   private var failure: String?
   private var stopping = false
   private var controller: Controller?
+  private var observer: Observer?
 
   private let commands = AsyncStream<String> { continuation in
     Thread.detachNewThread {
@@ -65,6 +66,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     self.request = request
     guard CGPreflightScreenCaptureAccess() else { fail("screen-recording", "The app CueTake runs in has no Screen Recording grant; run cuetake doctor, which names it") }
     guard AXIsProcessTrusted() else { fail("accessibility", "The app CueTake runs in has no Accessibility grant; run cuetake doctor, which names it") }
+    guard CGPreflightListenEventAccess() else { fail("input-monitoring", "The app CueTake runs in has no Input Monitoring grant, which tells the Director's input from a person's; run cuetake doctor, which names it") }
     var ready = false
     do {
       emit(["ready": try await launch()])
@@ -131,7 +133,9 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     AX.setFrame(window, desktop)
     AX.exposeContent(ax)
     app.activate()
-    controller = Controller(app: app, desktop: desktop)
+    let observer = Observer(pid: app.processIdentifier, desktop: desktop, fps: request.fps)
+    self.observer = observer
+    controller = Controller(app: app, desktop: desktop, observer: observer)
     try await Task.sleep(nanoseconds: 500_000_000)
     let frame = AX.frame(window) ?? desktop
     return ["app": name, "bundle": bundle?.bundleIdentifier ?? "", "pid": Int(app.processIdentifier), "scale": scale, "display": screen.localizedName,
@@ -199,6 +203,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
       Task { do { try await stream.startCapture() } catch { frames.sync { failure = "\(error)"; startedAt?.resume(returning: .nan); startedAt = nil } } }
     }
     if first.isNaN { throw Refusal("capture", failure ?? "Capture did not start") }
+    try observer?.begin(zero: frames.sync { CMTimeGetSeconds(firstTime!) })
     return first
   }
 
@@ -232,6 +237,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
   /** Finishes the Source at this moment, writes the poster, quits the App and returns the sidecar. */
   @MainActor private func stop() async throws -> [String: Any] {
     let end = CMClockGetTime(CMClockGetHostTimeClock())
+    let observed = observer?.end() ?? [:]
     try? await stream?.stopCapture()
     let (first, latest, times, dropped) = frames.sync { stopping = true; return (firstTime, self.latest, self.times, self.dropped) }
     if let failure { throw Refusal("capture", failure) }
@@ -248,7 +254,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     let windows = tracker?.track() ?? []
     let quit = await quitApp()
     return ["duration": (CMTimeGetSeconds(CMTimeSubtract(end, first)) * 1000).rounded() / 1000, "frames": times, "dropped": dropped,
-            "size": ["width": Int(desktop.width * scale), "height": Int(desktop.height * scale)], "windows": windows, "quit": quit]
+            "size": ["width": Int(desktop.width * scale), "height": Int(desktop.height * scale)], "windows": windows, "quit": quit].merging(observed) { a, _ in a }
   }
 
   /**

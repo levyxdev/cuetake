@@ -1,5 +1,5 @@
-import { clockOf, options } from './director.js';
-import { appLocators, isAppLocator, resolveOne } from './app-locators.js';
+import { clockOf, effectOf, followMask, options } from './director.js';
+import { appLocators, isAppLocator, resolveAll, resolveOne } from './app-locators.js';
 import { landing, pauseMs, random, reach, typingDelays } from './motion.js';
 import { macKeys } from './mac-keys.js';
 import { shortcutKeys } from './shortcuts.js';
@@ -23,11 +23,17 @@ const TYPED_AS_KEYS = { '\n': 'Enter', '\t': 'Tab' };
  *   { key: { keyCode, modifiers, down } }    presses or releases a key with modifiers held
  *   { text: char }                           types one character
  *   { focused: {} }                          the focused element's { role, subrole }
+ *   { watch: { id, refs } }                  reads the frames of these elements at the capture rate, as the boxes of
+ *                                            the masked element `id`, until watched again
  * Since the App draws no pointer of its own, the Director notes in `notes` everything Render draws:
- * the pointer path (`pointer`, as [seconds, x, y]) and the clicks, drags, typing and Shortcuts (`events`).
- * The pointer starts at the Desktop's top-left corner, where Capture puts it.
+ * the pointer path (`pointer`, as [seconds, x, y]) and the clicks, drags, typing and Shortcuts (`events`),
+ * and each element masked (`elements`, { id, tab, name }) with its mask (`masks`). The pointer starts
+ * at the Desktop's top-left corner, where Capture puts it. `signal` aborts once the Scenario has run,
+ * when masks stop following their locators.
  */
-export function createAppDirector({ startedAt, fps = 60, voiced = null, speed = 1, seed = 1, helper }, notes) {
+export function createAppDirector({ startedAt, fps = 60, voiced = null, speed = 1, seed = 1, helper, signal }, notes) {
+  const { elements = [], masks = [] } = notes;
+  Object.assign(notes, { elements, masks });
   const clock = clockOf({ startedAt, voiced }, notes, () => 0), { wait, time } = clock, locators = appLocators(helper);
   const rand = random(seed), pause = name => wait(pauseMs(name, speed, rand));
   // What the Director notes is rounded to the millisecond and to a hundredth of a point.
@@ -143,13 +149,27 @@ export function createAppDirector({ startedAt, fps = 60, voiced = null, speed = 
       await pause('afterRelease');
     });
   }
+  /**
+   * Masks every element `locator` matches from now until `end()` is called or the Take ends, as on a
+   * page: the helper reads their frames at the capture rate, and the locator is resolved again as a
+   * page's is, so an element the App replaced is followed.
+   */
+  async function mask(locator, opts = {}) {
+    const { effect = 'blur', ...params } = opts;
+    effectOf(effect);
+    if (!isAppLocator(locator)) throw new Error("d.mask needs a locator of the App, such as d.page.getByRole('button', { name: 'Save' })");
+    const t = effect !== 'spotlight' && !clock.state.waited ? 0 : now(), id = elements.length;
+    const watch = async () => helper.request({ watch: { id, refs: (await resolveAll(locator)).map(element => element.ref) } });
+    await watch();
+    return followMask({ id, tab: 0, name: String(locator), t, effect, params }, notes, { watch, signal, time: now });
+  }
   const refuse = (name, why) => () => { throw new Error(`d.${name} does not work in a Take of an App${why}`); };
   return {
     /** The window in front, offering Accessibility locators. */
     get page() { return locators.page('front'); },
     app: { window: locators.window },
     wait, time, at: clock.at, focus: clock.focus, say: clock.say, fastForward: clock.fastForward,
-    move: (x, y, duration) => glide({ x, y }, { duration }), hover, click, press, type, drag,
-    mask: refuse('mask', ' yet'), switchTo: refuse('switchTo', ' until it can record several Apps'),
+    move: (x, y, duration) => glide({ x, y }, { duration }), hover, click, press, type, drag, mask,
+    switchTo: refuse('switchTo', ' until it can record several Apps'),
   };
 }

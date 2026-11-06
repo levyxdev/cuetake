@@ -6,6 +6,32 @@ import { EFFECT_NAMES, MASK_EFFECTS } from './masks.js';
 /** Milliseconds between the Director's checks of what a mask's locator matches, so a replaced element is followed. */
 const REWATCH_MS = 100;
 
+/** Refuses a mask effect masks.js does not draw. */
+export function effectOf(effect) {
+  if (!(effect in MASK_EFFECTS)) throw new Error(`d.mask needs effect ${EFFECT_NAMES}, not '${effect}'`);
+}
+
+/**
+ * Notes a mask of the element `id` (in `notes.elements` and `notes.masks`) from `t`, and calls `watch`
+ * every REWATCH_MS until `signal` aborts, unless `skip()`, so the element is followed when its page or
+ * App replaces it. Returns the mask's handle, whose `end()` ends it at `time()`.
+ */
+export function followMask({ id, tab, name, t, effect, params }, notes, { watch, skip = () => false, signal, time }) {
+  notes.elements.push({ id, tab, name });
+  const entry = { t, end: null, element: id, effect, ...params };
+  notes.masks.push(entry);
+  let busy = false;
+  const timer = setInterval(() => {
+    if (busy || skip()) return;
+    busy = true;
+    watch().catch(() => {}).finally(() => { busy = false; });
+  }, REWATCH_MS);
+  timer.unref?.();
+  signal?.addEventListener('abort', () => clearInterval(timer), { once: true });
+  if (signal?.aborted) clearInterval(timer);
+  return { end() { entry.end ??= time(); } };
+}
+
 /** Options may be a bare number for the action's main timing; `focus: false` keeps the camera wide. */
 export const options = (value, key) => typeof value === 'number' ? { [key]: value } : value ?? {};
 
@@ -212,7 +238,7 @@ export function createDirector(tabs, { startedAt, fps, voiced = null, speed = 1,
    */
   async function mask(locator, opts = {}) {
     const { effect = 'blur', ...params } = opts;
-    if (!(effect in MASK_EFFECTS)) throw new Error(`d.mask needs effect ${EFFECT_NAMES}, not '${effect}'`);
+    effectOf(effect);
     const target = typeof locator === 'string' ? tabs.front.page.locator(locator) : locator, tab = tabs.of(target.page());
     if (!tab) throw new Error('d.mask target is on a page Capture does not follow; mask on d.page, or on a page the demo opened');
     const t = effect !== 'spotlight' && !clock.state.waited ? 0 : time();
@@ -220,20 +246,8 @@ export function createDirector(tabs, { startedAt, fps, voiced = null, speed = 1,
     const id = elements.length;
     const watch = () => target.evaluateAll((found, id) => window.__cuetakeProbe?.watch(id, found) ?? false, id);
     if (!await watch()) throw new Error(`d.mask could not follow ${target} in Tab ${tab.id}: Capture's probe is not running in its frame`);
-    elements.push({ id, tab: tab.id, name: String(target) });
-    const entry = { t, end: null, element: id, effect, ...params };
-    masks.push(entry);
     // The page may replace the element, or navigate; watching again follows what the locator matches now.
-    let busy = false;
-    const timer = setInterval(() => {
-      if (busy || target.page().isClosed()) return;
-      busy = true;
-      watch().catch(() => {}).finally(() => { busy = false; });
-    }, REWATCH_MS);
-    timer.unref?.();
-    signal?.addEventListener('abort', () => clearInterval(timer), { once: true });
-    if (signal?.aborted) clearInterval(timer);
-    return { end() { entry.end ??= time(); } };
+    return followMask({ id, tab: tab.id, name: String(target), t, effect, params }, notes, { watch, skip: () => target.page().isClosed(), signal, time });
   }
   /** Brings a Tab back in front, such as the one a closed tab's demo continues in; the cursor stays where it was. */
   async function switchTo(page) {

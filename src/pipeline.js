@@ -135,18 +135,23 @@ export function timelineOf(take, stopped, observed, notes, startedAtMs) {
 
 /**
  * The Timeline of a Take of Apps (ADR 0009) from `take` (the App, the Desktop's size in points as the
- * viewport, and its scale), what the helper saw (`stopped`: the duration and the App's windows over
- * time) and what the Director noted: its pointer path and input, since the App shows none of its own,
- * focus targets, Lines and fast-forwards. The Take has one Tab, its Desktop; positions are Desktop points.
+ * viewport, and its scale), what the helper saw (`stopped`: the duration, the App's windows over time,
+ * the system cursor's shapes, each element the App focused, as `focused` events the camera follows, and
+ * the frames of each masked element, `watched`) and what the Director noted: its pointer path and
+ * input, since the App shows none of its own, focus targets, Lines, fast-forwards and masks. Input the Director did not make never enters it. The Take has one
+ * Tab, its Desktop; positions are Desktop points.
  */
 export function desktopTimelineOf({ app, viewport, scale }, stopped, notes) {
+  // Each element a mask follows, with the boxes the helper read it at.
+  const elements = (notes.elements ?? []).map(element => ({ ...element, boxes: stopped.watched?.find(watched => watched.id === element.id)?.boxes ?? [] }));
   return {
     schemaVersion: SCHEMA_VERSION, app, viewport, scale, duration: stopped.duration,
     tabs: [{ id: 0, opener: null, opened: 0, closed: null, viewport, start: 0 }],
-    pointer: notes.pointer.map(([t, x, y]) => [t, x, y, 0]), shapes: [], windows: stopped.windows,
+    pointer: notes.pointer.map(([t, x, y]) => [t, x, y, 0]), shapes: stopped.shapes ?? [], windows: stopped.windows, ...(elements.length && { elements }),
     events: [
       ...notes.focus.map(f => ({ type: 'focus', ...f })), ...notes.said.map(line => ({ type: 'say', ...line })), ...notes.forwarded.map(span => ({ type: 'fastForward', ...span })),
-      ...notes.events.map(event => ({ ...event, tab: 0 })),
+      ...notes.events.map(event => ({ ...event, tab: 0 })), ...(stopped.focused ?? []).map(f => ({ type: 'focused', ...f, tab: 0 })),
+      ...(notes.masks ?? []).map(mask => ({ type: 'mask', ...mask })),
     ].sort((a, b) => a.t - b.t),
   };
 }
@@ -207,12 +212,14 @@ async function captureApp(scenario, config, dir, { voiced }) {
     // The pointer starts at the Desktop's top-left corner, where the Director's starts.
     await desktop.request({ move: { x: 0, y: 0 } });
     const startedAtMs = await desktop.start();
-    const notes = { focus: [], wide: [], said: [], forwarded: [], pointer: [], events: [] };
-    const evidence = await scenario.run(createAppDirector({ startedAt: startedAtMs, fps, voiced, ...config.director, helper: desktop }, notes));
+    const notes = { focus: [], wide: [], said: [], forwarded: [], pointer: [], events: [], elements: [], masks: [] };
+    const ran = new AbortController();
+    const director = createAppDirector({ startedAt: startedAtMs, fps, voiced, ...config.director, helper: desktop, signal: ran.signal }, notes);
+    const evidence = await scenario.run(director).finally(() => ran.abort());
     const stopped = await desktop.stop();
     const { width, height } = stopped.size;
     await writeJson(join(dir, 'capture.json'), { tabs: [{
-      tab: 0, settings: { width, height, frameRate: fps }, duration: stopped.duration, dropped: stopped.dropped,
+      tab: 0, settings: { width, height, frameRate: fps }, duration: stopped.duration, dropped: stopped.dropped, otherInput: stopped.otherInput ?? [],
       frames: stopped.frames.map(([t, scale]) => ({ timeMs: Math.round(t * 1e6) / 1000, scale })),
     }] });
     const timeline = desktopTimelineOf({ app: { ...config.app, name: desktop.ready.app, bundle: desktop.ready.bundle }, viewport: config.viewport, scale: desktop.ready.scale }, stopped, notes);

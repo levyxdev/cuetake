@@ -25,7 +25,7 @@ Run `cuetake install-browser` (about 150 MB into Playwright's cache in the user'
 
 ## Check
 
-Run `cuetake doctor` again. Every check must report `ok`; a `platform` note means that platform is not yet verified. Checks marked `for: "Apps"` (`helper`, `screen-recording`, `accessibility`) matter only for recording a desktop App, which needs `apps.ok`: each names the app that needs the grant in System Settings > Privacy & Security, which the user must allow there and then restart. CueTake never asks macOS for a grant itself. A `gpu` check with `accelerated: false` still passes: Chromium draws on the CPU there, so `record` captures at resolution scale 1 unless the Scenario sets one.
+Run `cuetake doctor` again. Every check must report `ok`; a `platform` note means that platform is not yet verified. Checks marked `for: "Apps"` (`helper`, `screen-recording`, `accessibility`, `input-monitoring`) matter only for recording a desktop App, which needs `apps.ok`: each names the app that needs the grant in System Settings > Privacy & Security, which the user must allow there and then restart. CueTake never asks macOS for a grant itself. A `gpu` check with `accelerated: false` still passes: Chromium draws on the CPU there, so `record` captures at resolution scale 1 unless the Scenario sets one.
 
 ## Uninstall
 

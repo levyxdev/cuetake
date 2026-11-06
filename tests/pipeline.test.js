@@ -1330,6 +1330,16 @@ test('verification warns when a window leaves the Desktop, the first window move
   ]);
 });
 
+test('verification warns when someone used the Mac during a Take of Apps, naming what and when', () => {
+  const timeline = { viewport: desktopViewport, windows: [{ t: 0, shown: [appWindow] }] }, frames = [{ timeMs: 0, scale: 2 }];
+  expect(desktopWarnings(timeline, { frames, dropped: 0, otherInput: [] })).toEqual([]);
+  // The helper notes each burst of input the Director did not make, as [t, 'pointer' | 'key' | 'scroll'].
+  const otherInput = [[2.4, 'pointer'], [2.9, 'pointer'], [5.1, 'key'], [6, 'pointer'], [7, 'pointer'], [8, 'pointer'], [9, 'pointer'], [10, 'pointer']];
+  expect(desktopWarnings(timeline, { frames, dropped: 0, otherInput })).toEqual([
+    'Someone used the Mac during the Take: the pointer at 2.40 s, 2.90 s, 6.00 s, 7.00 s, 8.00 s and 2 more; a key at 5.10 s. The Final\'s Cursor follows only the Scenario, but the App may have reacted; check those moments with frame, or record again and leave the Mac alone.',
+  ]);
+});
+
 test('a Scenario names exactly one of a start page or an App, given by path or bundle id with arguments', () => {
   expect(scenarioSchema.parse({ name: 'notes', app: { path: 'com.apple.TextEdit' } }).app).toEqual({ path: 'com.apple.TextEdit', args: [] });
   expect(scenarioSchema.parse({ name: 'notes', app: { path: '/Applications/LocalSend.app', args: ['--hidden'] } }).app.args).toEqual(['--hidden']);
@@ -1348,7 +1358,7 @@ test('a Take of Apps has no browser chrome or address bar by default, unless the
   expect(named.frame.chrome).toEqual({ draw: 'macos' });
 });
 
-test('the Director of a Take of Apps keeps time, says Lines, fast-forwards and focuses, and refuses what needs a page or several Apps', async () => {
+test('the Director of a Take of Apps keeps time, says Lines, fast-forwards and focuses, and refuses what needs several Apps', async () => {
   const notes = { focus: [], wide: [], said: [], forwarded: [], pointer: [], events: [] };
   const d = createAppDirector({ startedAt: Date.now(), helper: fakeHelper(textEdit()) }, notes);
   d.focus({ x: 10, y: 20, width: 300, height: 40 }, 1);
@@ -1357,7 +1367,6 @@ test('the Director of a Take of Apps keeps time, says Lines, fast-forwards and f
   expect(notes.focus).toEqual([{ t: 1, box: { x: 10, y: 20, width: 300, height: 40 }, tab: 0 }]);
   expect(notes.said).toMatchObject([{ id: 'open', text: 'Open a document' }]);
   expect(notes.forwarded).toMatchObject([{ rate: 3 }]);
-  expect(() => d.mask()).toThrow('d.mask does not work in a Take of an App');
   expect(() => d.switchTo()).toThrow('d.switchTo does not work in a Take of an App until it can record several Apps');
 });
 
@@ -1378,6 +1387,28 @@ test('the Timeline of a Take of Apps has one Tab, its Desktop, with the windows 
   expect(edit.shortcuts).toMatchObject([{ t: 4, keys: ['Meta', 'S'] }]);
   expect(edit.narration.lines).toEqual([{ id: 'open', start: 0.5 }]);
   expect(edit.fastForward).toEqual([{ start: 2, end: 3, rate: 4 }]);
+});
+
+test('a Take of Apps draws the Cursor in the shape the helper saw, and the camera follows the element the App focused', () => {
+  const notes = { focus: [], said: [], forwarded: [], pointer: [[1, 120, 20]], events: [] };
+  const findField = { x: 820, y: 60, width: 200, height: 22 };
+  const stopped = { duration: 6, windows: sidecarWindows, shapes: [[0, 'default'], [1.5, 'text'], [2.8, 'default']], focused: [{ t: 2, box: findField, role: 'AXTextField' }] };
+  const timeline = desktopTimelineOf({ app: { path: 'com.apple.TextEdit', args: [] }, viewport: desktopViewport, scale: 2 }, stopped, notes);
+  expect(timeline.shapes).toEqual(stopped.shapes);
+  expect(shapeAt(timeline.shapes, 2)).toBe('text');
+  expect(timeline.events).toEqual([{ type: 'focused', t: 2, box: findField, role: 'AXTextField', tab: 0 }]);
+  // The focused element is an automatic camera target, as a click is: a d.focus target replaces it within its span.
+  const app = scenarioSchema.parse({ name: 'notes', app: { path: 'com.apple.TextEdit' } });
+  expect(createEdit(app, timeline, []).camera.targets).toEqual([{ t: 2, box: findField, tab: 0 }]);
+  const chosen = { t: 2.2, box: { x: 0, y: 0, width: 400, height: 300 }, tab: 0 };
+  expect(createEdit(app, timeline, [chosen]).camera.targets).toEqual([chosen]);
+  // A click that focuses what holds it, such as the text area around a link, already framed the camera there; the
+  // larger focused box would only pull it back out. Focus that a press or another element brings stays a target.
+  const link = { x: 40, y: 120, width: 60, height: 16 }, body = { x: 0, y: 100, width: 1200, height: 654 };
+  const clicked = desktopTimelineOf({ app: { path: 'com.apple.TextEdit', args: [] }, viewport: desktopViewport, scale: 2 },
+    { ...stopped, focused: [{ t: 1.04, box: body, role: 'AXTextArea' }, { t: 4, box: body, role: 'AXTextArea' }] },
+    { ...notes, events: [{ type: 'click', t: 1, end: 1.1, x: 70, y: 128, box: link }] });
+  expect(createEdit(app, clicked, []).camera.targets.map(target => target.t)).toEqual([1, 4]);
 });
 
 test('a key or combination names the macOS key code to post, the modifiers to hold, and the keydown a page would see', () => {
@@ -1505,6 +1536,42 @@ test('the App Director glides the real pointer at the capture rate, presses wher
   // focus: false keeps the camera wide for an action.
   await d.hover(d.page.getByRole('button', { name: 'Italic' }), { focus: false });
   expect(notes.wide.length).toBe(1);
+});
+
+test('an App\'s Mask follows every element its locator matches, as the helper reads their frames, and the first Edit masks it', async () => {
+  const windows = textEdit(), helper = fakeHelper(windows), ran = new AbortController();
+  const notes = { focus: [], wide: [], said: [], forwarded: [], pointer: [], events: [] };
+  const d = createAppDirector({ startedAt: Date.now(), fps: 120, helper, signal: ran.signal }, notes);
+  // A blur made before the Director first waits covers the Take from its first frame; several matches are all masked.
+  const masked = await d.mask(d.page.getByRole('button'));
+  const watched = () => helper.posted.filter(p => p.watch).map(p => p.watch);
+  expect(watched()).toEqual([{ id: 0, refs: [expect.any(Number), expect.any(Number)] }]);
+  expect(notes.elements).toEqual([{ id: 0, tab: 0, name: "d.page.getByRole('button')" }]);
+  expect(notes.masks).toEqual([{ t: 0, end: null, element: 0, effect: 'blur' }]);
+  // The App may replace the element: the Director resolves the locator again and the helper reads what it matches now.
+  const toolbar = windows[0].children[0];
+  toolbar.children = [button('Bold', { frame: { x: 140, y: 10, width: 80, height: 24 } })];
+  await d.wait(700);
+  expect(watched().at(-1).refs).toHaveLength(1);
+  expect(watched().at(-1).refs[0]).not.toBe(watched()[0].refs[0]);
+  const spotlight = await d.mask(d.page.getByRole('textbox'), { effect: 'spotlight', dim: 0.5 });
+  await d.wait(50);
+  spotlight.end();
+  ran.abort();
+  expect(notes.masks[1]).toMatchObject({ element: 1, effect: 'spotlight', dim: 0.5 });
+  expect(notes.masks[1].t).toBeGreaterThan(0.6);
+  expect(notes.masks[1].end).toBeGreaterThan(notes.masks[1].t);
+  await expect(d.mask(d.page.getByRole('button'), { effect: 'smudge' })).rejects.toThrow("d.mask needs effect blur, cover or spotlight, not 'smudge'");
+  await expect(d.mask({ x: 1, y: 2 })).rejects.toThrow("d.mask needs a locator of the App, such as d.page.getByRole('button', { name: 'Save' })");
+
+  // The helper's frames of each watched element join the Timeline as the boxes of its element, as a page's probe's do.
+  const boxes = [[0.02, [100, 10, 80, 24], [200, 10, 80, 24]], [0.7, [140, 10, 80, 24]]];
+  const timeline = desktopTimelineOf({ app: { path: 'com.apple.TextEdit', args: [] }, viewport: desktopViewport, scale: 2 },
+    { duration: 3, windows: sidecarWindows, watched: [{ id: 0, boxes }, { id: 1, boxes: [] }] }, notes);
+  expect(timeline.elements).toEqual([{ id: 0, tab: 0, name: "d.page.getByRole('button')", boxes }, { id: 1, tab: 0, name: "d.page.getByRole('textbox')", boxes: [] }]);
+  const edit = createEdit(scenarioSchema.parse({ name: 'notes', app: { path: 'com.apple.TextEdit' } }), timeline, []);
+  expect(edit.masks[0]).toEqual({ effect: 'blur', element: 0, start: 0 });
+  expect(maskProblems(edit.masks, timeline.elements)).toEqual([]);
 });
 
 test('a press over another app\'s window fails the Take, naming that app, and presses nothing', async () => {

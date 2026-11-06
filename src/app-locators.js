@@ -23,7 +23,7 @@ const ROLES = {
 };
 const WORKS = 'getByRole, getByTestId, value, text, isVisible and waitFor';
 const POLL_MS = 100, READ_TIMEOUT_MS = 10_000, WAIT_TIMEOUT_MS = 30_000;
-const RESOLVE = Symbol('resolve');
+const RESOLVE = Symbol('resolve'), MATCHES = Symbol('matches');
 
 /** The AX roles an ARIA role or a raw AX role names, as `{ role, subrole }`. */
 function axRoles(role) {
@@ -124,6 +124,7 @@ export function appLocators(helper) {
       },
       toString: () => describe(steps),
       [RESOLVE]: () => visibleOne(steps),
+      [MATCHES]: () => resolve(steps),
     };
     return new Proxy(methods, {
       get(target, prop) {
@@ -184,3 +185,6 @@ export const isAppLocator = target => typeof target?.[RESOLVE] === 'function';
 
 /** The one visible element an App locator matches, waiting for it, with its frame in Desktop points. */
 export const resolveOne = target => target[RESOLVE]();
+
+/** Every element an App locator matches now, shown or not, without waiting. */
+export const resolveAll = target => target[MATCHES]();

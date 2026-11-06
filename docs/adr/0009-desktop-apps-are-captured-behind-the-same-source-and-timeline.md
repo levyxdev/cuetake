@@ -19,7 +19,7 @@ CueTake records desktop Apps on macOS through one native Capture method that pro
 - The helper records each window's frame per frame. Render draws only the windows, each with its own corners and shadow, and the Background shows between them. This is the one change Render needs.
 - Menus opened from the menu bar sit outside the Desktop and are not recorded.
 - The helper is a prebuilt universal binary shipped inside the npm package and run as a child process over stdio, so runtime code stays Node-only. It is built on a Mac before publishing, as a release step.
-- macOS grants Screen Recording and Accessibility to the process responsible for CueTake: the terminal or the agent's host. `doctor` checks them with non-prompting preflight calls and names that app. Nothing is requested without the user agreeing.
+- macOS grants Screen Recording, Accessibility and Input Monitoring to the process responsible for CueTake: the terminal or the agent's host. Input Monitoring lets the helper's listen-only event tap notice input the Director did not make. `doctor` checks all three with non-prompting preflight calls and names that app. Nothing is requested without the user agreeing.
 - The Director moves the real pointer, so the Mac cannot be used during a Take. The Timeline holds only the Director's input, and `verify` warns when other input arrived. A click whose target is covered by another app's window fails the Take.
 - The cursor shape comes from `NSCursor.currentSystemCursor`, which Apple has deprecated, with a fallback inferred from the Accessibility role under the pointer.
 - Windows and Linux are out of scope until the macOS method ships.

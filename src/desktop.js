@@ -38,13 +38,17 @@ const at = t => `${t.toFixed(2)} s`;
 const size = w => `${w.width}×${w.height}`;
 const inside = (w, viewport) => w.x >= 0 && w.y >= 0 && w.x + w.width <= viewport.width && w.y + w.height <= viewport.height;
 
+const OTHER_INPUT = { pointer: 'the pointer', key: 'a key', scroll: 'a scroll' };
+const listed = times => times.slice(0, 5).map(at).join(', ') + (times.length > 5 ? ` and ${times.length - 5} more` : '');
+
 /**
  * What a Final of Apps shows other than as recorded: the App's first window (the largest at the start)
  * not filling the Desktop, or moving or resizing later; any other window reaching outside the Desktop,
- * which is cut off there; a Desktop recorded at scale 1 or across a change of scale; and frames the
- * encoder dropped. `capture` is the Tab's stats in capture.json.
+ * which is cut off there; a Desktop recorded at scale 1 or across a change of scale; frames the encoder
+ * dropped; and input the Director did not make (`otherInput`, as [t, kind]), which the Timeline leaves
+ * out but the App may have reacted to. `capture` is the Tab's stats in capture.json.
  */
-export function desktopWarnings({ viewport, windows = [] }, { frames = [], dropped = 0 }) {
+export function desktopWarnings({ viewport, windows = [] }, { frames = [], dropped = 0, otherInput = [] }) {
   // The first window is the largest of the first layer-0 windows to show: a dialog may show before it.
   const layer0 = state => state.shown.filter(w => w.layer === 0);
   const warnings = [], first = layer0(windows.find(state => layer0(state).length) ?? { shown: [] }).sort((a, b) => b.width * b.height - a.width * a.height)[0];
@@ -67,6 +71,11 @@ export function desktopWarnings({ viewport, windows = [] }, { frames = [], dropp
   const scales = new Set(frames.map(frame => frame.scale));
   if (scales.has(1)) warnings.push('The Desktop was recorded at scale 1, so the Final is half as sharp; record on a Retina display.');
   if (scales.size > 1) warnings.push(`The Desktop's scale changed during the Take (${[...scales].join(', ')}), as when a window moves to another display; record again with the App on one display.`);
+  if (otherInput.length) {
+    const kinds = Object.keys(OTHER_INPUT).filter(kind => otherInput.some(([, k]) => k === kind));
+    const what = kinds.map(kind => `${OTHER_INPUT[kind]} at ${listed(otherInput.filter(([, k]) => k === kind).map(([t]) => t))}`).join('; ');
+    warnings.push(`Someone used the Mac during the Take: ${what}. The Final's Cursor follows only the Scenario, but the App may have reacted; check those moments with frame, or record again and leave the Mac alone.`);
+  }
   if (dropped) warnings.push(`The encoder could not keep up and ${dropped} frames were dropped from the Source; close other work and record again.`);
   return warnings;
 }

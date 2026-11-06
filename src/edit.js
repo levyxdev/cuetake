@@ -62,10 +62,14 @@ export function withDefaults(edit) {
   return merge({ schemaVersion: EDIT_VERSION, ...DEFAULT_STYLE, output: { ...DEFAULT_STYLE.output, fps: 60 }, camera: { ...DEFAULT_STYLE.camera, targets: [] }, tabs: { ...DEFAULT_STYLE.tabs, placement: [] }, shortcuts: [], fastForward: [], masks: [], narration: { volume: 1, lines: [] } }, edit);
 }
 
+// Seconds after a click within which the App's focus moving to what holds its target counts as the click's.
+const FOCUS_AFTER_CLICK = 1;
+
 /**
- * Camera targets: observed clicks, typing and drags, each in the CSS pixels of its Tab, and each popup
- * window's whole page as it first comes in front, except those inside a `wide` window ({ start, end }
- * seconds) from an action with `focus: false`. Like a manual zoom in Screen Studio, an explicit focus
+ * Camera targets: observed clicks, typing and drags, and each element an App focused, each in the CSS
+ * pixels of its Tab, and each popup window's whole page as it first comes in front, except those
+ * inside a `wide` window ({ start, end } seconds) from an action with `focus: false`, and focus a click
+ * gave to what holds its target. Like a manual zoom in Screen Studio, an explicit focus
  * target replaces only the automatic targets inside its own span (from `lead` before it to `hold` after).
  */
 export function cameraTargets(timeline, focus, wide = [], camera = {}) {
@@ -73,9 +77,13 @@ export function cameraTargets(timeline, focus, wide = [], camera = {}) {
   const spans = focus.map(f => ({ start: f.t - lead, end: (f.until ?? f.t) + hold }));
   const inside = (t, windows) => windows.some(w => t >= w.start && t <= w.end);
   const tabs = new Map((timeline.tabs ?? []).map(tab => [tab.id, tab])), framed = new Set();
+  // Focus a click gave to what holds its target, such as the text area around a link, adds only a larger box.
+  const holds = (outer, inner) => outer.x <= inner.x && outer.y <= inner.y && outer.x + outer.width >= inner.x + inner.width && outer.y + outer.height >= inner.y + inner.height;
+  const byClick = focused => timeline.events.some(event => event.type === 'click' && event.box && event.tab === focused.tab && event.t <= focused.t && focused.t - event.t <= FOCUS_AFTER_CLICK && holds(focused.box, event.box));
   const automatic = timeline.events.filter(event => !inside(event.t, wide) && !inside(event.t, spans)).flatMap(event => {
     const tab = event.tab === undefined ? {} : { tab: event.tab };
-    if (event.type === 'click' && event.box) return [{ t: event.t, box: event.box, ...tab }];
+    if (event.type === 'focused' && byClick(event)) return [];
+    if ((event.type === 'click' || event.type === 'focused') && event.box) return [{ t: event.t, box: event.box, ...tab }];
     if (event.type === 'type' && event.box) return [{ t: event.t, box: event.box, until: event.end, ...tab }];
     if (event.type === 'drag') {
       const x = Math.min(event.from.x, event.to.x), y = Math.min(event.from.y, event.to.y);

@@ -39,7 +39,7 @@ The unedited picture of one Tab produced by Capture, in device pixels; a Take ha
 _Avoid_: raw video, recording
 
 **Timeline**:
-Every interaction observed during Capture (pointer path, presses and releases, the cursor shape the page asked for, typing, Shortcuts, focus targets, where each Line was said, the Fast-forwards the Scenario marked, each page load from a navigation or reload, which Tab is in front, the boxes of each element a Mask follows), timed from the start of Capture and positioned in the CSS pixels of the Tab it happened in.
+Every interaction observed during Capture (pointer path, presses and releases, the cursor shape the page asked for or macOS showed, typing, Shortcuts, focus targets, each element an App focused, where each Line was said, the Fast-forwards the Scenario marked, each page load from a navigation or reload, which Tab is in front, the boxes of each element a Mask follows), timed from the start of Capture and positioned in the CSS pixels of the Tab it happened in.
 _Avoid_: event log, camera events
 
 **Shortcut**:
@@ -69,7 +69,7 @@ What fills the Final around the window: a list of image and shader layers, each 
 _Avoid_: backdrop, wallpaper, gradient
 
 **Cursor**:
-The pointer Render draws over the page, following the Timeline's pointer path, in the shape the page showed at each moment, pressed while a button is held.
+The pointer Render draws over the page or Desktop, following the Timeline's pointer path, in the shape the page or macOS showed at each moment, pressed while a button is held.
 _Avoid_: mouse, pointer sprite
 
 **Look**:
