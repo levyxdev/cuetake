@@ -25,6 +25,7 @@ final class Observer {
   // Read and written under the lock.
   private var zero = Double.nan
   private var pointer: CGPoint
+  private var previous: CGPoint
   private var shapeLog: [[Any]] = []
   private var focusLog: [[String: Any]] = []
   private var watching: [Int: Watch] = [:]
@@ -45,6 +46,7 @@ final class Observer {
     app = AXUIElementCreateApplication(pid)
     AXUIElementSetMessagingTimeout(app, 0.25)
     pointer = desktop.origin
+    previous = desktop.origin
   }
 
   private static func now() -> Double { CMTimeGetSeconds(CMClockGetTime(CMClockGetHostTimeClock())) }
@@ -84,7 +86,7 @@ final class Observer {
   }
 
   /** Where the Director put the pointer, in global points: the AX fallback for the shape looks there, not where a person may have moved it. */
-  func pointerMoved(to point: CGPoint) { lock.lock(); pointer = point; lock.unlock() }
+  func pointerMoved(to point: CGPoint) { lock.lock(); previous = pointer; pointer = point; lock.unlock() }
 
   /** Follows `elements` as the boxes of the masked element `id`, in place of what it followed before. */
   func watch(_ id: Int, _ elements: [AXUIElement]) {
@@ -96,9 +98,13 @@ final class Observer {
 
   private func sample() {
     // The moment of this sample, before the reads, any of which may wait on a busy App.
-    lock.lock(); let at = pointer, watched = watching, moment = elapsed(); lock.unlock()
+    lock.lock(); let at = pointer, before = previous, watched = watching, moment = elapsed(); lock.unlock()
     guard let t = moment else { return }
-    let shape = shapes.current() ?? CursorShapes.inferred(at: at)
+    // The system cursor shows what lies under the real pointer, so it stands for the Cursor only while the real pointer
+    // is where the Director put it (or still on its way there); once a person moved it away, infer what lies under the Director's.
+    let real = CGEvent(source: nil)?.location
+    let directed = real.map { real in [at, before].contains { hypot($0.x - real.x, $0.y - real.y) <= 1 } } ?? false
+    let shape = (directed ? shapes.current() : nil) ?? CursorShapes.inferred(at: at)
     var read: [Int: Watch] = [:], boxes: [Int: [[Double]]] = [:]
     for (id, watch) in watched {
       // An element the App removed keeps its last frame until the Director resolves the locator again, so a Mask never lets go early.
