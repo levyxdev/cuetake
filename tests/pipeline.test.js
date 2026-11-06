@@ -1316,6 +1316,9 @@ test('verification warns when a window leaves the Desktop, the first window move
   const closed = [{ t: 0, shown: [appWindow] }, { t: 10.717, shown: [{ ...appWindow, x: 3, y: 1, width: 1194, height: 758 }] },
     { t: 10.75, shown: [{ ...appWindow, x: 9, y: 6, width: 1182, height: 748 }] }, { t: 10.767, shown: [] }];
   expect(desktopWarnings(timeline(closed), { frames: frames(2), dropped: 0 })).toEqual([]);
+  // The Take may end while the window is still shrinking, before it goes.
+  expect(desktopWarnings(timeline(closed.slice(0, -1), { duration: 10.76 }), { frames: frames(2), dropped: 0 })).toEqual([]);
+  expect(desktopWarnings(timeline(moved, { duration: 12 }), { frames: frames(2), dropped: 0 })).toHaveLength(1);
   // A move the window then stays at is still reported, even when the window closes later.
   expect(desktopWarnings(timeline([...moved, { t: 9, shown: [] }]), { frames: frames(2), dropped: 0 })).toHaveLength(1);
   // The first window is the first layer-0 window to show, even when a dialog shows before it.

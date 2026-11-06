@@ -48,15 +48,16 @@ const listed = times => times.slice(0, 5).map(at).join(', ') + (times.length > 5
  * dropped; and input the Director did not make (`otherInput`, as [t, kind]), which the Timeline leaves
  * out but the App may have reacted to. `capture` is the Tab's stats in capture.json.
  */
-export function desktopWarnings({ viewport, windows = [] }, { frames = [], dropped = 0, otherInput = [] }) {
+export function desktopWarnings({ viewport, windows = [], duration = Infinity }, { frames = [], dropped = 0, otherInput = [] }) {
   // The first window is the largest of the first layer-0 windows to show: a dialog may show before it.
   const layer0 = state => state.shown.filter(w => w.layer === 0);
   const warnings = [], first = layer0(windows.find(state => layer0(state).length) ?? { shown: [] }).sort((a, b) => b.width * b.height - a.width * a.height)[0];
   const same = (a, b) => a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
   if (first && !same(first, { x: 0, y: 0, ...viewport })) warnings.push(`The App's first window is ${size(first)} points, not the Desktop's ${size(viewport)}, so the Background shows around it: the App may limit its size; choose a viewport it can fill.`);
-  // A closing window shrinks for a moment before it goes; a change it leaves within CLOSING_S of is that, not a move.
+  // A closing window shrinks for a moment before it goes; a change it leaves within CLOSING_S of is that, not a move,
+  // and so is one within CLOSING_S of the Take's end, which may come before the window goes.
   const showsFirst = state => state.shown.some(w => w.id === first.id);
-  const closing = state => windows.some(later => later.t > state.t && later.t - state.t <= CLOSING_S && !showsFirst(later));
+  const closing = state => duration - state.t <= CLOSING_S || windows.some(later => later.t > state.t && later.t - state.t <= CLOSING_S && !showsFirst(later));
   const moved = first && windows.find(state => state.shown.some(w => w.id === first.id && !same(w, first)) && !closing(state));
   if (moved) {
     const w = moved.shown.find(w => w.id === first.id);
