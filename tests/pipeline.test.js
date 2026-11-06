@@ -20,7 +20,9 @@ import { timeMap, fastForwardProblems, retimed, linesInFinal, badgeAt } from '..
 import { windowMaps, tabTrack, inWindow, carried, seenBy } from '../src/tabs.js';
 import { maskTrack, maskProblems, maskWarnings, mergedPast } from '../src/masks.js';
 import { windowsAt, drawnWindows, desktopWarnings } from '../src/desktop.js';
-import { createAppDirector } from '../src/director.js';
+import { createAppDirector } from '../src/app-director.js';
+import { macKeys } from '../src/mac-keys.js';
+import { treeLines } from '../src/app-locators.js';
 import fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -1340,30 +1342,197 @@ test('a Take of Apps has no browser chrome or address bar by default, unless the
   expect(named.frame.chrome).toEqual({ draw: 'macos' });
 });
 
-test('the Director of a Take of Apps keeps time, says Lines, fast-forwards and focuses, and names the actions it cannot do yet', async () => {
-  const notes = { focus: [], wide: [], said: [], forwarded: [], pointer: [] };
-  const d = createAppDirector({ startedAt: Date.now() }, notes);
+test('the Director of a Take of Apps keeps time, says Lines, fast-forwards and focuses, and refuses what needs a page or several Apps', async () => {
+  const notes = { focus: [], wide: [], said: [], forwarded: [], pointer: [], events: [] };
+  const d = createAppDirector({ startedAt: Date.now(), helper: fakeHelper(textEdit()) }, notes);
   d.focus({ x: 10, y: 20, width: 300, height: 40 }, 1);
   await d.say('open', 'Open a document');
   expect(await d.fastForward(async () => 'done', 3)).toBe('done');
   expect(notes.focus).toEqual([{ t: 1, box: { x: 10, y: 20, width: 300, height: 40 }, tab: 0 }]);
   expect(notes.said).toMatchObject([{ id: 'open', text: 'Open a document' }]);
   expect(notes.forwarded).toMatchObject([{ rate: 3 }]);
-  expect(() => d.page).toThrow('d.page does not work in a Take of an App yet');
-  for (const action of ['click', 'type', 'press', 'move', 'hover', 'drag', 'mask', 'switchTo']) expect(() => d[action]()).toThrow(`d.${action} does not work in a Take of an App yet`);
+  expect(() => d.mask()).toThrow('d.mask does not work in a Take of an App');
+  expect(() => d.switchTo()).toThrow('d.switchTo does not work in a Take of an App until it can record several Apps');
 });
 
 test('the Timeline of a Take of Apps has one Tab, its Desktop, with the windows the helper saw and what the Director noted', () => {
-  const notes = { focus: [{ t: 1, box: { x: 10, y: 20, width: 300, height: 40 }, tab: 0 }], said: [{ t: 0.5, id: 'open', text: 'Open' }], forwarded: [{ t: 2, end: 3, rate: 4 }], pointer: [] };
+  const click = { type: 'click', t: 3.2, end: 3.3, x: 140, y: 22, box: { x: 100, y: 10, width: 80, height: 24 } };
+  const notes = { focus: [{ t: 1, box: { x: 10, y: 20, width: 300, height: 40 }, tab: 0 }], said: [{ t: 0.5, id: 'open', text: 'Open' }], forwarded: [{ t: 2, end: 3, rate: 4 }], pointer: [[1, 120, 20], [1.1, 140, 22]], events: [click, { type: 'shortcut', t: 4, keys: ['Meta', 'S'] }] };
   const timeline = desktopTimelineOf({ app: { path: 'com.apple.TextEdit', args: [] }, viewport: desktopViewport, scale: 2 }, { duration: 5.04, windows: sidecarWindows }, notes);
   expect(timeline).toMatchObject({
-    app: { path: 'com.apple.TextEdit' }, viewport: desktopViewport, scale: 2, duration: 5.04, windows: sidecarWindows, pointer: [], shapes: [],
+    app: { path: 'com.apple.TextEdit' }, viewport: desktopViewport, scale: 2, duration: 5.04, windows: sidecarWindows, pointer: [[1, 120, 20, 0], [1.1, 140, 22, 0]], shapes: [],
     tabs: [{ id: 0, opener: null, opened: 0, closed: null, viewport: desktopViewport, start: 0 }],
   });
-  expect(timeline.events.map(event => event.type)).toEqual(['say', 'focus', 'fastForward']);
+  // The Director's input is in the Desktop's one Tab, where Render draws the Cursor and keycaps and the camera follows it.
+  expect(timeline.events.map(event => event.type)).toEqual(['say', 'focus', 'fastForward', 'click', 'shortcut']);
+  expect(timeline.events[3]).toEqual({ ...click, tab: 0 });
   // The first Edit of such a Take keeps the Director's camera target, Line and fast-forward.
   const edit = createEdit(scenarioSchema.parse({ name: 'notes', app: { path: 'com.apple.TextEdit' } }), timeline, notes.focus);
-  expect(edit.camera.targets).toEqual([notes.focus[0]]);
+  expect(edit.camera.targets).toEqual([notes.focus[0], { t: 3.2, box: click.box, tab: 0 }]);
+  expect(edit.shortcuts).toMatchObject([{ t: 4, keys: ['Meta', 'S'] }]);
   expect(edit.narration.lines).toEqual([{ id: 'open', start: 0.5 }]);
   expect(edit.fastForward).toEqual([{ start: 2, end: 3, rate: 4 }]);
+});
+
+test('a key or combination names the macOS key code to post, the modifiers to hold, and the keydown a page would see', () => {
+  // Letters and digits by their place on an ANSI keyboard; a letter's case never adds Shift, so Meta+K is not Meta+Shift+K.
+  expect(macKeys('Meta+K')).toEqual({ keyCode: 40, modifiers: ['command'], down: { key: 'k', code: 'KeyK', ctrlKey: false, altKey: false, shiftKey: false, metaKey: true } });
+  expect(macKeys('k')).toEqual(macKeys('K'));
+  expect(macKeys('Enter')).toMatchObject({ keyCode: 36, modifiers: [], down: { key: 'Enter', code: 'Enter' } });
+  expect(macKeys('Control+Alt+Shift+Meta+ArrowUp')).toMatchObject({ keyCode: 126, modifiers: ['control', 'option', 'shift', 'command'] });
+  // ControlOrMeta presses Meta on the Mac, where Apps record; codes such as KeyZ work too.
+  expect(macKeys('ControlOrMeta+KeyZ')).toMatchObject({ keyCode: 6, modifiers: ['command'] });
+  expect(macKeys('Space').keyCode).toBe(49);
+  expect(macKeys('Escape').keyCode).toBe(53);
+  expect(macKeys('Backspace').keyCode).toBe(51);
+  expect(macKeys('Meta+,')).toMatchObject({ keyCode: 43, down: { key: ',', code: 'Comma' } });
+  expect(macKeys('7').keyCode).toBe(26);
+  expect(macKeys('F5').keyCode).toBe(96);
+  // The keydown shows as the same Shortcut a page would record for it.
+  expect(shortcutKeys({ ...macKeys('Meta+Shift+Z').down, field: true })).toEqual(['Shift', 'Meta', 'Z']);
+  expect(shortcutKeys({ ...macKeys('Space').down, field: false })).toEqual(['Space']);
+  expect(() => macKeys('Meta+Hyperdrive')).toThrow("d.press does not know the key 'Hyperdrive'");
+  expect(() => macKeys('Meta+')).toThrow("d.press does not know the key ''");
+});
+
+/**
+ * A stand-in for the helper's Accessibility and input requests during a Take of Apps: `windows` back to front,
+ * each element `{ role, subrole, title, description, label, identifier, value, text, frame, children }` in
+ * Desktop points. It notes what it posted, and `covered` names the app whose window lies over a point.
+ */
+function fakeHelper(windows, { covered = () => null, focused = { role: 'AXTextArea' } } = {}) {
+  const refs = [], posted = [];
+  const ref = element => { if (!refs.includes(element)) refs.push(element); return refs.indexOf(element); };
+  const summary = e => ({ ref: ref(e), role: e.role, subrole: e.subrole ?? null, title: e.title ?? '', description: e.description ?? '', label: e.label ?? '', identifier: e.identifier ?? '', frame: e.frame });
+  const descendants = e => (e.children ?? []).flatMap(child => [child, ...descendants(child)]);
+  return {
+    posted, windows,
+    async request(message) {
+      const [[kind, body]] = Object.entries(message);
+      if (kind === 'windows') return windows.map(w => ({ ...summary(w), focused: !!w.focused }));
+      if (kind === 'find') return descendants(refs[body.within]).filter(e => (!body.roles || body.roles.some(r => r.role === e.role && (!r.subrole || r.subrole === e.subrole))) && (!body.identifier || e.identifier === body.identifier)).map(summary);
+      if (kind === 'read') { const e = refs[body.ref]; return { value: e.value ?? null, text: e.text ?? '', frame: e.frame }; }
+      if (kind === 'focused') return focused;
+      // `covered` gives the covering app's name, or true where nothing at all lies under the point.
+      if (kind === 'down' && covered(body)) return covered(body) === true ? { nothing: true } : { covered: covered(body) };
+      posted.push({ [kind]: body });
+      return {};
+    },
+  };
+}
+const field = (more = {}) => ({ role: 'AXTextArea', frame: { x: 20, y: 60, width: 1160, height: 680 }, value: 'Hello', ...more });
+const button = (title, more = {}) => ({ role: 'AXButton', title, frame: { x: 100, y: 10, width: 80, height: 24 }, ...more });
+const textEdit = () => [
+  { role: 'AXWindow', subrole: 'AXStandardWindow', title: 'Untitled', focused: true, frame: { x: 0, y: 0, width: 1200, height: 760 }, children: [
+    { role: 'AXToolbar', frame: { x: 0, y: 0, width: 1200, height: 52 }, children: [button('Bold'), button('Italic', { frame: { x: 200, y: 10, width: 80, height: 24 } })] },
+    { role: 'AXScrollArea', frame: { x: 20, y: 60, width: 1160, height: 680 }, children: [field({ identifier: 'body' })] },
+  ] },
+  { role: 'AXWindow', subrole: 'AXStandardWindow', title: 'Fonts', frame: { x: 800, y: 100, width: 300, height: 400 }, children: [
+    button('', { description: 'Close fonts' }), button('Done', { description: 'Dismiss' }), { role: 'AXTextField', label: 'Size', frame: { x: 820, y: 140, width: 60, height: 22 }, value: '12' },
+  ] },
+];
+const appDirector = (helper, notes = { focus: [], wide: [], said: [], forwarded: [], pointer: [], events: [] }) => createAppDirector({ startedAt: Date.now(), fps: 120, helper }, notes);
+
+test('an App is located by Accessibility role and name in the window in front, as with getByRole, chained to narrow it', async () => {
+  const d = appDirector(fakeHelper(textEdit()));
+  // ARIA roles map to AX roles: a textbox is a text field or a text area; a name matches the title, a part of it, any case.
+  expect(await d.page.getByRole('textbox').value()).toBe('Hello');
+  expect(await d.page.getByRole('button', { name: 'bol' }).isVisible()).toBe(true);
+  expect(await d.page.getByRole('button', { name: 'bol', exact: true }).isVisible()).toBe(false);
+  expect(await d.page.getByRole('button', { name: /^Ital/ }).isVisible()).toBe(true);
+  expect(await d.page.getByRole('AXToolbar').getByRole('button', { name: 'Bold' }).isVisible()).toBe(true);
+  expect(await d.page.getByTestId('body').value()).toBe('Hello');
+  // Another window by its title; the name is the title, else the description, else the label.
+  expect(await d.app.window('Fonts').getByRole('button', { name: 'Close fonts' }).isVisible()).toBe(true);
+  expect(await d.app.window('Fonts').getByRole('button', { name: 'Dismiss' }).isVisible()).toBe(false);
+  expect(await d.app.window('Fonts').getByRole('textbox', { name: 'Size' }).value()).toBe('12');
+  expect(await d.page.getByRole('button', { name: 'Close fonts' }).isVisible()).toBe(false);
+  // Several matches fail at once, naming them, as Playwright's strict mode does.
+  await expect(d.page.getByRole('button').value()).rejects.toThrow("d.page.getByRole('button') matches 2 elements: AXButton 'Bold' at 100, 10, 80×24; AXButton 'Italic' at 200, 10, 80×24");
+  await expect(d.page.getByRole('link').waitFor({ timeout: 50 })).rejects.toThrow("d.page.getByRole('link') did not become visible within 50 ms");
+  await d.page.getByRole('link').waitFor({ state: 'hidden', timeout: 50 });
+  // Only Accessibility locators work; Playwright's other methods throw, naming those that do.
+  expect(() => d.page.locator('#body')).toThrow('d.page.locator does not work in a Take of an App: use getByRole, getByTestId');
+  expect(() => d.page.getByRole('textbox').fill('x')).toThrow('fill does not work on a locator of an App: use getByRole, getByTestId, value, text, isVisible and waitFor, and act with d.click, d.type');
+  expect(() => d.page.getByRole('blink')).toThrow("getByRole does not know the role 'blink'");
+});
+
+test('the App Director glides the real pointer at the capture rate, presses where it landed and notes it all in Desktop points', async () => {
+  const helper = fakeHelper(textEdit()), notes = { focus: [], wide: [], said: [], forwarded: [], pointer: [], events: [] };
+  const d = createAppDirector({ startedAt: Date.now(), fps: 60, speed: 4, helper }, notes);
+  await d.click(d.page.getByRole('button', { name: 'Bold' }));
+  const moves = helper.posted.filter(p => p.move).map(p => p.move), down = helper.posted.find(p => p.down).down, up = helper.posted.find(p => p.up).up;
+  // The pointer starts at the Desktop's top-left corner and arrives a little off the button's center, in several steps.
+  expect(moves.length).toBeGreaterThan(5);
+  expect(moves.at(-1)).toEqual({ x: down.x, y: down.y });
+  expect(Math.abs(down.x - 140)).toBeLessThanOrEqual(8);
+  expect(Math.abs(down.y - 22)).toBeLessThanOrEqual(4);
+  expect(down.button).toBe('left');
+  expect(up).toEqual(down);
+  expect(notes.pointer.length).toBe(moves.length);
+  expect(notes.pointer.at(-1).slice(1)).toEqual([down.x, down.y]);
+  const [click] = notes.events;
+  expect(click).toMatchObject({ type: 'click', x: down.x, y: down.y, box: { x: 100, y: 10, width: 80, height: 24 } });
+  expect(click.end).toBeGreaterThan(click.t);
+
+  // Typing clicks the field, then posts each character; Return and Tab go as their keys.
+  await d.type(d.page.getByRole('textbox'), 'Hi\n', { msPerChar: 5 });
+  expect(helper.posted.filter(p => p.text || p.key).map(p => p.text ?? p.key)).toEqual(['H', 'i', { keyCode: 36, modifiers: [], down: true }, { keyCode: 36, modifiers: [], down: false }]);
+  expect(notes.events.map(e => e.type)).toEqual(['click', 'click', 'type']);
+  expect(notes.events[2]).toMatchObject({ box: { x: 20, y: 60, width: 1160, height: 680 } });
+
+  // A Shortcut is noted as a page would note it; a key alone in a text field is typing, not a Shortcut.
+  await d.press('Meta+B');
+  await d.press('ArrowLeft');
+  expect(helper.posted.filter(p => p.key).slice(-4).map(p => p.key)).toEqual([
+    { keyCode: 11, modifiers: ['command'], down: true }, { keyCode: 11, modifiers: ['command'], down: false },
+    { keyCode: 123, modifiers: [], down: true }, { keyCode: 123, modifiers: [], down: false },
+  ]);
+  expect(notes.events.filter(e => e.type === 'shortcut').map(e => e.keys)).toEqual([['Meta', 'B']]);
+
+  // A point in Desktop points works where the App exposes no element; a drag notes where it went.
+  await d.click({ x: 600, y: 400 });
+  expect(helper.posted.filter(p => p.down).at(-1).down).toMatchObject({ x: 600, y: 400 });
+  await d.drag({ x: 300, y: 300 }, { x: 500, y: 320 });
+  expect(notes.events.at(-1)).toMatchObject({ type: 'drag', from: { x: 300, y: 300 }, to: { x: 500, y: 320 } });
+  expect(helper.posted.at(-1)).toEqual({ up: { x: 500, y: 320, button: 'left' } });
+  // focus: false keeps the camera wide for an action.
+  await d.hover(d.page.getByRole('button', { name: 'Italic' }), { focus: false });
+  expect(notes.wide.length).toBe(1);
+});
+
+test('a press over another app\'s window fails the Take, naming that app, and presses nothing', async () => {
+  const helper = fakeHelper(textEdit(), { covered: ({ x }) => x > 150 ? 'Finder' : null });
+  const d = createAppDirector({ startedAt: Date.now(), fps: 60, speed: 8, helper }, { focus: [], wide: [], said: [], forwarded: [], pointer: [], events: [] });
+  await expect(d.click(d.page.getByRole('button', { name: 'Italic' }))).rejects.toThrow("d.click target, d.page.getByRole('button', { name: 'Italic' }), is covered by a window of Finder");
+  expect(helper.posted.some(p => p.down)).toBe(false);
+  // Where nothing lies under the point, as off the Desktop, the press is refused as missing the App.
+  const empty = createAppDirector({ startedAt: Date.now(), fps: 60, speed: 8, helper: fakeHelper(textEdit(), { covered: () => true }) }, { focus: [], wide: [], said: [], forwarded: [], pointer: [], events: [] });
+  await expect(empty.click({ x: 1300, y: 20 })).rejects.toThrow('d.click target lands at 1300, 20, where no window shows; it may lie outside the Desktop');
+  // A drag goes between points; a locator there is refused, not moved to as NaN.
+  await expect(empty.drag(empty.page.getByRole('textbox'), { x: 1, y: 1 })).rejects.toThrow('d.drag goes from one point { x, y } to another, in Desktop points');
+});
+
+test('an App\'s Accessibility tree lists each element with the locator that names it and its frame from its window\'s corner', () => {
+  const at = (x, y, width, height) => ({ x, y, width, height });
+  const tree = { app: 'LocalSend', bundle: 'org.localsend.localsend_app', truncated: false, windows: [
+    { role: 'AXWindow', subrole: 'AXStandardWindow', title: 'LocalSend', frame: at(405, 239, 900, 600), children: [
+      { role: 'AXStaticText', value: 'Send\nTab 2 of 3', frame: at(405, 417, 256, 44), children: [] },
+      { role: 'AXButton', title: '', description: 'Receive via link', frame: at(897, 754, 172, 40), children: [] },
+      { role: 'AXTextField', identifier: 'alias', label: 'Alias', value: 'Mystic', frame: at(713, 301, 300, 24), children: [] },
+      { role: 'AXGroup', identifier: '_NS:6', frame: at(405, 271, 900, 568), children: [{ role: 'AXSplitter', frame: at(661, 271, 1, 568), children: [] }] },
+      { role: 'AXMenuButton', title: 'list style', frame: at(930, 278, 48, 22), children: [] },
+    ] },
+  ] };
+  expect(treeLines(tree)).toEqual([
+    "LocalSend (org.localsend.localsend_app): frames in points from each window's top-left corner, which are Desktop points for the window that fills the Desktop",
+    "window 'LocalSend' 900×600: d.app.window('LocalSend')",
+    "  text 'Send\\nTab 2 of 3' 0, 178, 256×44: getByRole('text', { name: 'Send' })",
+    "  button 'Receive via link' 492, 515, 172×40: getByRole('button', { name: 'Receive via link' })",
+    "  textbox 'Alias' = 'Mystic' 308, 62, 300×24: getByTestId('alias')",
+    '  group 0, 32, 900×568',
+    '    AXSplitter 256, 32, 1×568',
+    "  AXMenuButton 'list style' 525, 39, 48×22: getByRole('AXMenuButton', { name: 'list style' })",
+  ]);
+  expect(treeLines({ ...tree, truncated: true }).at(-1)).toBe('… the tree is longer than 5000 elements; the rest is left out');
 });

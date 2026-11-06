@@ -7,7 +7,9 @@ import { startRecording, getRecordingPage, beginCapture, stopRecording, cleanup 
 import { renderFinal, inspectFinal, composePreview, measureLines } from './render.js';
 import { outputSize, atShortSide } from './stage.js';
 import { resolveAuthProfile } from './auth.js';
-import { createDirector, createAppDirector } from './director.js';
+import { createDirector } from './director.js';
+import { createAppDirector } from './app-director.js';
+import { appLocators } from './app-locators.js';
 import { startDesktop } from './app-capture.js';
 import { desktopWarnings } from './desktop.js';
 import { collectTimeline } from './probe.js';
@@ -134,7 +136,8 @@ export function timelineOf(take, stopped, observed, notes, startedAtMs) {
 /**
  * The Timeline of a Take of Apps (ADR 0009) from `take` (the App, the Desktop's size in points as the
  * viewport, and its scale), what the helper saw (`stopped`: the duration and the App's windows over
- * time) and what the Director noted. The Take has one Tab, its Desktop; positions are Desktop points.
+ * time) and what the Director noted: its pointer path and input, since the App shows none of its own,
+ * focus targets, Lines and fast-forwards. The Take has one Tab, its Desktop; positions are Desktop points.
  */
 export function desktopTimelineOf({ app, viewport, scale }, stopped, notes) {
   return {
@@ -143,6 +146,7 @@ export function desktopTimelineOf({ app, viewport, scale }, stopped, notes) {
     pointer: notes.pointer.map(([t, x, y]) => [t, x, y, 0]), shapes: [], windows: stopped.windows,
     events: [
       ...notes.focus.map(f => ({ type: 'focus', ...f })), ...notes.said.map(line => ({ type: 'say', ...line })), ...notes.forwarded.map(span => ({ type: 'fastForward', ...span })),
+      ...notes.events.map(event => ({ ...event, tab: 0 })),
     ].sort((a, b) => a.t - b.t),
   };
 }
@@ -152,13 +156,11 @@ const sourcesOf = (dir, timeline) => Object.fromEntries(timeline.tabs.map(tab =>
 
 /**
  * Refuses what does not apply to an App: an Auth profile, since the App runs with the user's own login
- * and data; a resolution scale, since the Desktop takes its display's; and `prepare`, since the App has
- * no page for it yet (ADR 0009).
+ * and data; and a resolution scale, since the Desktop takes its display's (ADR 0009).
  */
-function refuseForApp(scenario, given, options) {
+function refuseForApp(given, options) {
   if (options.authProfile) throw new Error('--auth-profile is for web pages: an App runs with the login and data it already has');
   if (given.capture?.resolutionScale !== undefined) throw new Error('capture.resolutionScale does not apply to an App: the Desktop records at the scale of the display it sits on');
-  if (scenario.prepare) throw new Error('prepare(page) does not work for an App yet; start the App in the state the demo needs, or do it in run');
   if (options.headed) throw new Error('--headed is for web pages: an App always shows on the screen');
 }
 
@@ -192,17 +194,21 @@ async function capturePage(scenario, config, dir, { authState, headed, voiced })
 /**
  * Captures a Desktop of the App (ADR 0009) through the helper: source-0.mp4, capture.json and
  * poster.png in `dir`. The Desktop records at its display's scale, which `config.capture` then holds.
+ * `prepare(page)` gets the App's first window before Capture starts, to wait for what the demo needs.
  * Returns the Timeline, the Director's notes, the evidence, and whether the helper could quit the App.
  */
 async function captureApp(scenario, config, dir, { voiced }) {
   const { fps } = config.capture;
-  process.stderr.write(`CueTake starts ${config.app.path} and records it. Leave the Mac alone until the Take ends: the Scenario acts on the real App and its data.\n`);
+  process.stderr.write(`CueTake starts ${config.app.path} and records it. Leave the Mac alone until the Take ends: the Scenario moves the real pointer and acts on the real App and its data.\n`);
   const desktop = await startDesktop({ app: config.app, desktop: config.viewport, fps, source: join(dir, 'source-0.mp4'), poster: join(dir, 'poster.png') });
   try {
     config.capture.resolutionScale = desktop.ready.scale;
+    if (scenario.prepare) await scenario.prepare(appLocators(desktop).page('first'));
+    // The pointer starts at the Desktop's top-left corner, where the Director's starts.
+    await desktop.request({ move: { x: 0, y: 0 } });
     const startedAtMs = await desktop.start();
-    const notes = { focus: [], wide: [], said: [], forwarded: [], pointer: [] };
-    const evidence = await scenario.run(createAppDirector({ startedAt: startedAtMs, voiced }, notes));
+    const notes = { focus: [], wide: [], said: [], forwarded: [], pointer: [], events: [] };
+    const evidence = await scenario.run(createAppDirector({ startedAt: startedAtMs, fps, voiced, ...config.director, helper: desktop }, notes));
     const stopped = await desktop.stop();
     const { width, height } = stopped.size;
     await writeJson(join(dir, 'capture.json'), { tabs: [{
@@ -223,7 +229,7 @@ export async function recordScenario(scenarioPath, outputDir, options = {}) {
   const given = merge(look ? resolvedLook(look) : {}, absolute(scenario.config, dirname(resolve(scenarioPath))));
   const config = scenarioSchema.parse(given);
   if (typeof scenario.run !== 'function') throw new Error('Scenario must export run(director)');
-  if (config.app) refuseForApp(scenario, given, options);
+  if (config.app) refuseForApp(given, options);
   // A relative .app path names an App beside the Scenario.
   if (config.app?.path.includes('/')) config.app.path = resolve(dirname(resolve(scenarioPath)), config.app.path);
   const authState = options.authProfile ? await resolveAuthProfile(options.authProfile) : undefined;

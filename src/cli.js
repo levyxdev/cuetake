@@ -8,6 +8,8 @@ import { doctor, installBrowser } from './environment.js';
 import { uninstall } from './uninstall.js';
 import { login } from './auth.js';
 import { extractFrame } from './render.js';
+import { appTree } from './app-capture.js';
+import { treeLines } from './app-locators.js';
 import { writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
@@ -17,6 +19,7 @@ const help = `CueTake ${pkg.version} — browser demos directed by code
   cuetake install-browser
   cuetake uninstall [--auth] [--looks] [--dry-run]
   cuetake record <scenario.mjs> [--out <new-directory>] [--auth-profile <name>] [--look <name|file.json>] [--narration <narration.json>] [--headed]
+  cuetake tree <app>
   cuetake narrate import <take-directory> <narration.json>
   cuetake preview <take-directory> [--look <name|file.json>]... [--at <seconds>]
   cuetake render <take-directory>
@@ -38,6 +41,8 @@ record captures, renders and verifies a new take; an existing directory is never
   A Scenario naming an app instead of a url records a desktop App on macOS: its windows on a Desktop.
   --look seeds the first Edit from a Look; fields the Scenario config names win.
   --narration copies a Narration and its audio into the Take first: d.say(id) holds each Line for its audio.
+tree lists the Accessibility tree of a running App (bundle id, name or .app path) with the locator for each
+  element, for writing a Scenario of the App. It only reads the App.
 narrate import copies a Narration and its audio into a recorded Take, replacing its earlier one. Lines keep
   their start in edit.json; a new Line takes the start the file gives it. Render plays and subtitles them.
 preview writes preview.png in the take: the current Edit beside each Look, at --at seconds of the
@@ -62,6 +67,7 @@ try {
   else if (command === 'install-browser') console.log(JSON.stringify(await installBrowser(), null, 2));
   else if (command === 'uninstall' && !target) print(await uninstall({ auth: values.auth, looks: values.looks, dryRun: values['dry-run'] }));
   else if (command === 'record' && target && looks.length <= 1) print(await recordScenario(target, values.out, { authProfile: values['auth-profile'], look: looks[0], narration: values.narration, headed: values.headed }));
+  else if (command === 'tree' && target) console.log(treeLines(await appTree(target)).join('\n'));
   else if (command === 'narrate' && target === 'import' && positionals[3]) print(await importNarration(positionals[2], positionals[3]));
   else if (command === 'preview' && target) print(await previewTake(target, looks, { at: values.at === undefined ? undefined : Number(values.at) }));
   else if (command === 'render' && target) { await renderTake(target); console.log(JSON.stringify(await verifyTake(target), null, 2)); }

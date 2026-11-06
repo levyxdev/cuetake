@@ -142,18 +142,33 @@ export const config = {
   viewport: { width: 1200, height: 760 },   // the Desktop, in points
 };
 
+// Optional: the App's first window, before Capture starts. Only locators work here.
+export async function prepare(page) {
+  await page.getByRole('textbox').waitFor();
+}
+
 export async function run(d) {
+  const body = d.page.getByRole('textbox'), bold = d.page.getByRole('checkbox', { name: 'bold' });
   await d.say('intro', 'A fresh note in TextEdit.');
-  d.focus({ x: 0, y: 0, width: 600, height: 200 });   // Desktop points, from its top-left corner
-  await d.at(8);
+  await d.type(body, 'Hello from CueTake.');
+  await d.press('Meta+A');
+  await d.click(bold);
+  await d.wait(1500);
+  const evidence = { text: await body.value(), bold: await bold.value() };
+  // An edited untitled document asks to be kept when TextEdit quits, so close it without keeping it.
+  await d.press('Meta+W');
+  await d.click(d.page.getByRole('button', { name: 'Delete' }));
+  return evidence;
 }
 ```
 
-- **Before recording, tell the user** that the Mac cannot be used until the Take ends, and that the Scenario acts on their real App, with their own login and data. CueTake also prints this when Capture starts.
-- **The App must not be running.** `record` refuses and names it; ask the user to quit it, and never quit it for them. CueTake quits the App it started when the Take ends; if the App asks to save first, `record` reports it. To record the agent's own host app, run the agent from a terminal.
+- **Before recording, tell the user** that the Mac cannot be used until the Take ends, and that the Scenario acts on their real App, with their own login and data. The Director moves the real pointer and posts real keys, so the user's own input would mix with it. CueTake also prints this when Capture starts.
+- **The App must not be running.** `record` refuses and names it; ask the user to quit it, and never quit it for them. CueTake quits the App it started when the Take ends; if the App asks to save first, `record` reports it. To record the agent's own host app, such as Claude, run the agent from a terminal.
 - **Permissions.** Recording needs the Screen Recording and Accessibility grants of the app CueTake runs in (the terminal, or the agent's host). `doctor` reports both under `apps` without asking for them; follow its fix, with the user's agreement.
-- **Refused for an App:** `--auth-profile` (the App starts with the login it already has), `--headed`, `capture.resolutionScale` (the Desktop records at its display's scale, 2 on a Retina display, which `record` reports under `capture`) and `prepare`. Start the App in the state the demo needs through `args`. A sandboxed App, such as TextEdit, refuses a document passed there with a dialog; `record` then refuses too, since only a standard window fills the Desktop. A Cocoa App also reopens the windows and panels of its last session unless `args` holds `-ApplePersistenceIgnoreState YES`.
-- **What the Director does so far:** `at`, `wait`, `time`, `say`, `fastForward` and `focus`, in Desktop points. Clicking, typing and the other actions throw for now.
+- **Locators.** `d.page` is the App's window in front; `d.app.window(title)` is another window, by a part of its title; `prepare(page)` gets the first window. They offer only Accessibility locators, chainable to narrow inside one: `getByRole(role, { name, exact })` and `getByTestId(id)`, which matches the element's `AXIdentifier`. `role` is an ARIA role (`button`, `textbox`, `link`, `checkbox`, `radio`, `combobox`, `menuitem`, `tab`, `group`, `text`, ...), each mapped to the AX roles AppKit, SwiftUI and Chromium use (`textbox` is `AXTextField` or `AXTextArea`), or a raw AX role such as `AXPopUpButton`. `name` matches the element's AX title, description or label (a static text's text is its title): a part of it in any case, the whole of it with `exact: true`, or a RegExp. A locator also offers `value()` (the AX value: a field's text, a checkbox's 0 or 1), `text()` (its text, or the text inside it), `isVisible()` and `waitFor({ state: 'visible' | 'hidden', timeout })`, for evidence and for `d.fastForward(() => reply.waitFor())`. Reads and actions wait up to 10 s for the element; several matches fail at once, naming them, as Playwright's strict mode does. Playwright's other methods and `expect` do not apply, and throw.
+- **Finding locators.** Run `scripts/cuetake tree <app>` on the running App (bundle id, name or `.app` path) to list its Accessibility tree: each element's role, name, value and frame, with the locator that finds it. It only reads, so it may look at the user's own instance; or start a Take that holds the App open with `d.at(30)` and list it meanwhile. Use your computer use to explore the App while writing the Scenario, never to perform it. An App built on Chromium (an Electron app such as Claude) or Flutter (such as LocalSend) builds its tree only once asked; CueTake asks for it when the App starts, and `tree` waits for it. Where an App exposes no element, act on a point in Desktop points instead: `d.click({ x: 600, y: 400 })`.
+- **Actions** work as for a page, in Desktop points: `click`, `hover`, `type` and `move` glide the real pointer at the capture rate and press where they land; `press` posts keys such as `'Meta+S'` (`ControlOrMeta` is Meta); `drag` takes points. Before each press the Director checks that the App owns what lies under the pointer: a click covered by another app's window fails the Take, naming that app, and keys are refused while another app is in front. The Final draws the Cursor, click effects and keycaps from what the Director did, and the camera follows it.
+- **Refused for an App:** `--auth-profile` (the App starts with the login it already has), `--headed`, `capture.resolutionScale` (the Desktop records at its display's scale, 2 on a Retina display, which `record` reports under `capture`), `d.mask`, and `d.switchTo`, until a Take can record several Apps. Start the App in the state the demo needs through `args`. A sandboxed App, such as TextEdit, refuses a document passed there with a dialog; `record` then refuses too, since only a standard window fills the Desktop. A Cocoa App also reopens the windows and panels of its last session unless `args` holds `-ApplePersistenceIgnoreState YES`.
 - A Take of an App has no browser chrome by default (`frame.chrome: false`); a `frame.chrome` the Scenario names still applies. A window that leaves the Desktop is cut off where it does, and the first window moving or resizing is not corrected; `verify` warns about both, and about a Desktop recorded at scale 1. Menus opened from the menu bar sit outside the Desktop and are not recorded.
 
 ## Take folder
@@ -164,7 +179,7 @@ export async function run(d) {
   scenario.mjs       Snapshot of the original scenario module
   source-<tab>.webm  Source of each Tab (0 is the first page): original high-resolution VP9 capture; a Take of an App has source-0.mp4, its Desktop in H.264
   capture.json       Per Tab: track settings, video frame callback observations and the page's animation frames per second, in seconds from its own start
-  timeline.json      Timeline: for a Take of an App, the App's windows on the Desktop over time (`windows`); the Tabs (`tabs`: opener, when each opened, closed and started recording, viewport) and which is in front (`front` events), pointer path, cursor shapes, clicks and drags with their release, typing, Shortcuts, focus, said Lines, fast-forwards, masks and page loads, in seconds and each Tab's top-level CSS pixels, the boxes of each masked element over time (`elements`), plus any input inside an iframe it could not place exactly (`frameInput`)
+  timeline.json      Timeline: for a Take of an App, the App's windows on the Desktop over time (`windows`), and the Director's pointer path and input in Desktop points; the Tabs (`tabs`: opener, when each opened, closed and started recording, viewport) and which is in front (`front` events), pointer path, cursor shapes, clicks and drags with their release, typing, Shortcuts, focus, said Lines, fast-forwards, masks and page loads, in seconds and each Tab's top-level CSS pixels, the boxes of each masked element over time (`elements`), plus any input inside an iframe it could not place exactly (`frameInput`)
   edit.json          Edit: camera targets and settings, cursor, click effect, Shortcuts and keycaps, frame, how Tabs switch and where popups sit, fast-forwards, Masks, Line starts and volumes, Subtitles, output
   narration/         The Narration: narration.json (text, word timings) and each Line's audio, named by its id
   subtitles.srt/.vtt Subtitles of the placed Lines, from the last Render

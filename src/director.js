@@ -7,14 +7,14 @@ import { EFFECT_NAMES, MASK_EFFECTS } from './masks.js';
 const REWATCH_MS = 100;
 
 /** Options may be a bare number for the action's main timing; `focus: false` keeps the camera wide. */
-const options = (value, key) => typeof value === 'number' ? { [key]: value } : value ?? {};
+export const options = (value, key) => typeof value === 'number' ? { [key]: value } : value ?? {};
 
 /**
  * The Director's clock, shared by pages and Apps: waits, camera focus targets, Lines and fast-forwarded
  * waits, timed from `startedAt` (epoch ms) and noted in `notes`. `front()` is the Tab a focus target is
  * in. `state.waited` turns true once the Scenario first waits.
  */
-function clockOf({ startedAt, voiced = null }, { focus: focusTargets, said, forwarded }, front) {
+export function clockOf({ startedAt, voiced = null }, { focus: focusTargets, said, forwarded }, front) {
   const state = { waited: false, forwarding: null };
   // Node's clock, not a page's, since the page in front may close mid-wait.
   const wait = ms => { state.waited = true; return new Promise(resolve => setTimeout(resolve, Math.max(0, ms))); };
@@ -49,18 +49,6 @@ function clockOf({ startedAt, voiced = null }, { focus: focusTargets, said, forw
     }
   }
   return { state, wait, time, at: seconds => wait(seconds * 1000 - (Date.now() - startedAt)), focus, fastForward, say };
-}
-
-/**
- * The Director of a Take of Apps. For now it keeps time, says Lines, fast-forwards waits and adds
- * camera focus targets in Desktop points; acting on the App with real input and Accessibility
- * locators comes next, so those actions throw.
- */
-export function createAppDirector(options, notes) {
-  const clock = clockOf(options, notes, () => 0);
-  const later = name => () => { throw new Error(`d.${name} does not work in a Take of an App yet; use at, wait, time, say, fastForward and focus`); };
-  const actions = Object.fromEntries(['move', 'hover', 'click', 'press', 'type', 'drag', 'mask', 'switchTo'].map(name => [name, later(name)]));
-  return { get page() { return later('page')(); }, wait: clock.wait, time: clock.time, at: clock.at, focus: clock.focus, say: clock.say, fastForward: clock.fastForward, ...actions };
 }
 
 /**

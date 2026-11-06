@@ -57,6 +57,8 @@ export async function appChecks() {
  * - `start()`, which records and resolves with the wall-clock ms of the first frame;
  * - `stop()`, which ends the Source, quits the App and resolves with the sidecar: `duration`, `frames`
  *   ([t, scale] per frame), `windows` (the App's windows over time) and whether the App `quit`;
+ * - `request(message)`, which asks the helper to read the App's Accessibility tree or post input for
+ *   the Director (app-locators.js, app-director.js), in Desktop points, and resolves with its reply;
  * - `kill()`, which ends it all, for a failure; the helper then quits the App.
  * The helper's refusals (a running App, a missing grant) reject with its message.
  */
@@ -66,14 +68,23 @@ export async function startDesktop({ app, desktop, fps, source, poster }) {
   const child = spawn(path, ['record'], { stdio: ['pipe', 'pipe', 'pipe'] });
   let stderr = '';
   child.stderr.on('data', chunk => { stderr = (stderr + chunk).slice(-4000); });
-  const waiting = [];
-  let ended = null;
+  const waiting = [], requests = new Map();
+  let ended = null, next = 0;
   const settle = (key, value) => { const i = waiting.findIndex(w => w.key === key || key === 'error'); if (i >= 0) waiting.splice(i, 1)[0][key === 'error' ? 'reject' : 'resolve'](value); };
-  const failed = message => { ended = new Error(message); for (const w of waiting.splice(0)) w.reject(ended); };
+  const failed = message => {
+    ended = new Error(message);
+    for (const w of [...waiting.splice(0), ...requests.values()]) w.reject(ended);
+    requests.clear();
+  };
   createInterface({ input: child.stdout }).on('line', line => {
     let message;
     try { message = JSON.parse(line); } catch { return; }
     if (message.error) failed(message.error.message);
+    else if (requests.has(message.id)) {
+      const { resolve, reject } = requests.get(message.id);
+      requests.delete(message.id);
+      if ('failed' in message) reject(new Error(message.failed)); else resolve(message.reply);
+    }
     else for (const key of ['ready', 'started', 'stopped']) if (message[key]) settle(key, message[key]);
   });
   child.on('error', error => failed(error.message));
@@ -87,6 +98,23 @@ export async function startDesktop({ app, desktop, fps, source, poster }) {
     ready: await ready,
     async start() { const started = reply('started'); send({ start: true }); return (await started).epochMs; },
     async stop() { const stopped = reply('stopped'); send({ stop: true }); return stopped; },
+    request(message) {
+      if (ended) return Promise.reject(ended);
+      const id = ++next;
+      return new Promise((resolve, reject) => { requests.set(id, { resolve, reject }); send({ id, ...message }); });
+    },
     kill() { if (child.exitCode === null) child.stdin.end(); },
   };
+}
+
+/**
+ * The Accessibility tree of a running App (`app`: its bundle id, name or .app path), as the helper lists
+ * it, for writing a Scenario's locators. It only reads, so it may look at an App the user started.
+ */
+export async function appTree(app) {
+  const path = await helper();
+  if (!path) throw new Error(MISSING);
+  const tree = await run(path, ['tree', app]);
+  if (tree.error) throw new Error(tree.error.message);
+  return tree;
 }

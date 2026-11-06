@@ -22,6 +22,8 @@ struct Request: Decodable {
  *   {"started": {...}}  the first frame is written; `epochMs` is its wall-clock time
  *   {"stopped": {...}}  the Source is complete; `frames` and `windows` are the sidecar
  *   {"error": {...}}    then the helper exits
+ * Once ready, a line with an `id` is a request of the Director's (Controller), answered with
+ * {"id", "reply"} or, when it cannot be done, {"id", "failed": message}.
  * Closing stdin ends the Source and quits the App, as `stop` does.
  */
 final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
@@ -48,6 +50,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
   private var startedAt: CheckedContinuation<Double, Never>?
   private var failure: String?
   private var stopping = false
+  private var controller: Controller?
 
   private let commands = AsyncStream<String> { continuation in
     Thread.detachNewThread {
@@ -67,8 +70,13 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
       emit(["ready": try await launch()])
       ready = true
       while let line = await lines.next() {
-        if line.contains("\"start\"") { emit(["started": ["epochMs": try await start()]]) }
-        if line.contains("\"stop\"") { break }
+        guard let message = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any] else { continue }
+        if let id = message["id"] as? Int {
+          do { emit(["id": id, "reply": try controller!.handle(message)]) }
+          catch { emit(["id": id, "failed": (error as? Refusal)?.message ?? "\(error)"]) }
+        }
+        else if message["start"] != nil { emit(["started": ["epochMs": try await start()]]) }
+        else if message["stop"] != nil { break }
       }
       emit(["stopped": try await stop()])
       exit(0)
@@ -121,7 +129,9 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
         : "\(name) opened no window within 30 s; open it yourself to see why, quit it, then record again.")
     }
     AX.setFrame(window, desktop)
+    AX.exposeContent(ax)
     app.activate()
+    controller = Controller(app: app, desktop: desktop)
     try await Task.sleep(nanoseconds: 500_000_000)
     let frame = AX.frame(window) ?? desktop
     return ["app": name, "bundle": bundle?.bundleIdentifier ?? "", "pid": Int(app.processIdentifier), "scale": scale, "display": screen.localizedName,

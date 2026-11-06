@@ -1,5 +1,6 @@
 import ApplicationServices
 import CoreGraphics
+import Foundation
 
 /** Accessibility reads, in global points with a top-left origin. */
 enum AX {
@@ -29,6 +30,39 @@ enum AX {
   static func windows(_ app: AXUIElement) -> [AXUIElement] { value(app, kAXWindowsAttribute) as? [AXUIElement] ?? [] }
 
   /**
+   * Asks an App to expose all its content: one built on Chromium, an Electron app such as Claude, through
+   * AXManualAccessibility, which other Apps ignore; and one built on Flutter, such as LocalSend, by reading
+   * its windows' children, after which it builds its semantics within about a second.
+   */
+  static func exposeContent(_ app: AXUIElement) {
+    AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+    for window in windows(app) { _ = value(window, kAXChildrenAttribute) }
+  }
+
+  /**
+   * Visits the descendants of `root`, depth first, each with its role and subrole, read with its children
+   * in one call. Stops after `limit` elements, so a runaway tree cannot hold the Take.
+   */
+  static func walk(_ root: AXUIElement, limit: Int = 20_000, depth maxDepth: Int = 64, _ visit: (AXUIElement, String, String?) -> Void) {
+    var count = 0
+    func children(_ element: AXUIElement) -> [AXUIElement] { value(element, kAXChildrenAttribute) as? [AXUIElement] ?? [] }
+    func descend(_ element: AXUIElement, _ depth: Int) {
+      guard depth < maxDepth else { return }
+      for child in children(element) {
+        guard count < limit else { return }
+        count += 1
+        var values: CFArray?
+        let names = [kAXRoleAttribute, kAXSubroleAttribute] as CFArray
+        AXUIElementCopyMultipleAttributeValues(child, names, [], &values)
+        let read = values as? [Any] ?? []
+        visit(child, read.first as? String ?? "", read.count > 1 ? read[1] as? String : nil)
+        descend(child, depth + 1)
+      }
+    }
+    descend(root, 0)
+  }
+
+  /**
    * The frame of what a window shows: the outermost element at its centre that lies inside its bounds.
    * A menu's window is 75 points larger than the menu on every side, for its shadow; a window's own
    * element fills its bounds. Nil when the App exposes nothing there.
@@ -46,3 +80,6 @@ enum AX {
     return outermost
   }
 }
+
+/** A string for JSON, or null. */
+func orNull(_ value: String?) -> Any { value ?? NSNull() }
