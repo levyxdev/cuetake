@@ -31,9 +31,9 @@ export async function prepare(page) {
 }
 
 export async function run(d) {
-  await d.at(1);
+  await d.at(1.5);
   await d.click(d.page.getByRole('button', { name: 'Preview' }));
-  await d.at(5);
+  await d.wait(3000); // hold the result; see directing.md
   return { previewOpened: true }; // Prefer evidence checked against the real UI.
 }
 ```
@@ -55,7 +55,7 @@ Only `name` and `url` are required in config; a Scenario of a desktop App names 
 | `press(keys, { focus })` | Pause, press a key or combination on whatever has focus, such as `'Meta+K'`, `'ControlOrMeta+Z'` or `'Escape'`, hold it for a moment, pause. The Final shows it as keycaps (see below). |
 | `type(locator, text, { msPerChar=70, focus })` | Click a field, then type with uneven per-character delays averaging `msPerChar`, longer after a word. |
 | `drag({x,y}, {x,y}, { duration, focus })` | Move to the start, press, move more slowly than an empty-handed move, then release. |
-| `focus({x,y,width,height}, seconds?)` | Add a camera target; defaults to the current time. |
+| `focus({x,y,width,height}, seconds?)` | Add a camera target in CSS pixels (Desktop points for an App); defaults to the current time. See [directing.md](directing.md), Camera. |
 | `say(id, text?)` | Start a Narration Line. With `--narration` it waits until the Line's audio ends; without, `text` is required and it does not wait. See [narration.md](narration.md). |
 | `fastForward(wait, { rate=4 })` | Run `wait`, a function that waits on the page, such as `() => reply.waitFor()`, and return its result; the Final plays that span `rate` times faster. |
 | `mask(locator, { effect='blur', ... })` | Mask every element the locator matches, in any Tab, from now until the returned `end()` is called or the Take ends. `effect` is `'blur'`, `'cover'` or `'spotlight'`. See Masks below. |
@@ -70,19 +70,9 @@ Capture records each Shortcut, a key pressed outside a text field or with Contro
 
 Capture records the cursor shape the page asks for (a hand over links, an I-beam over text, whatever a canvas app sets), and Render draws the Cursor in that shape; the page's own cursor never appears in the Source.
 
-The camera works like Screen Studio's auto zoom. It follows the clicks, typing and drags the page observed, whether they came from the director or from Playwright input directly, and in any frame: input inside an iframe, such as an embedded checkout or sign-in, is placed where the iframe shows on the page, through scrolling, fixed positioning and scaling. An iframe that is rotated, skewed or 3D-transformed is placed as if it were only scaled, and verification warns; record once it is upright, after any opening animation.
+The camera follows the clicks, typing and drags the page observed, in any frame; how it moves, and when to steer it with `focus`, is in [directing.md](directing.md), Camera.
 
-- It arrives `lead` seconds before each action, so the zoom is in place when the action happens.
-- Actions whose zoom windows sit within `chainGap` seconds share one zoom segment: the camera stays zoomed and moves between them instead of zooming out and back in. A segment holds one zoom, the closest that fits every target in it.
-- Within a segment the camera centers on the first target, then stays still while later targets are already in view (with `padding`) and otherwise moves only far enough to bring them in.
-- It holds `hold` seconds after the segment's last action (after typing ends, for typing), then returns to the wide shot.
-- While zoomed it follows the cursor only when it nears the edge, keeping it in the central 80% of the view, and stays where the cursor left it (`follow: false` turns this off).
-- Movement eases in and out, settles in about `response` seconds and never overshoots.
-- Every Final ends wide: the camera heads back `endWide` seconds before the end, so leave at least 2 seconds after the last action for the result to be seen in context.
-
-Each target is framed with `padding` CSS px around its box, zooming at most `maxZoom`; boxes too large to reach `minZoom` stay wide. Set `zoom` on a target in `edit.json` to fix it; its segment then zooms no further. Pass `focus: false` to an action to keep the camera wide for it; a bare number still works as the action's timing. `d.focus(box)` adds a deliberate target and, like a manual zoom in Screen Studio, replaces only the automatic targets within its own span; the rest of the Take keeps following actions. Focus boxes always use CSS pixels, even when the source is captured at 2× scale.
-
-Wrap only dead time in `fastForward`: a page load, a server, an AI response streaming in. A deliberate hold such as `d.at(5)` on a result stays outside, so the viewer can read it. The Final eases into and out of the faster speed inside the span; the page, the Cursor and click effects speed up with it, while the camera, keycaps and Subtitles keep their pace. To show viewers the speed-up, turn on the Edit's `fastForwardBadge` ([styling.md](styling.md)). A Line cannot play faster, so `say` inside `fastForward` fails the Take: say it before the wait. Keep the cursor still inside `fastForward`: a move there plays `rate` times faster, and a zoomed camera can lose it. If it would cover what the viewer waits for, move it aside before the wait. Each span is copied into `edit.json` as `fastForward: [{ "start": 3.2, "end": 9.8, "rate": 4 }]` (Source seconds), where it can be retimed or removed without recording again.
+`fastForward` eases into and out of the faster speed inside the span; the page, the Cursor and click effects speed up with it, while the camera, keycaps and Subtitles keep their pace. To show viewers the speed-up, turn on the Edit's `fastForwardBadge` ([styling.md](styling.md)). A Line cannot play faster, so `say` inside `fastForward` fails the Take: say it before the wait. Each span is copied into `edit.json` as `fastForward: [{ "start": 3.2, "end": 9.8, "rate": 4 }]` (Source seconds), where it can be retimed or removed without recording again. What to fast-forward is in [directing.md](directing.md).
 
 ## Masks
 
@@ -95,7 +85,7 @@ export async function run(d) {
   await d.at(1);
   // ...
   const result = await d.mask(d.page.getByRole('row', { name: 'Paid' }), { effect: 'spotlight' });
-  await d.at(6);
+  await d.wait(3000);
   result.end();                                                            // the spotlight ends here
 }
 ```
@@ -129,7 +119,7 @@ Which Tab is in front follows the browser: a new Tab comes in front when it open
 
 In the Final, a Tab the size of the viewport replaces the page in the same window, with a cut by default, and the camera cuts to wide. Any other Tab is a popup window over the Tab that opened it, which keeps playing behind it; the camera frames it as it opens. The Cursor stays one pointer across Tabs, where it was on the window. Each Tab's input is in its own CSS pixels in `timeline.json`, and each event names its `tab`.
 
-Use actual locators for clicks. Canvas drags often require coordinates; derive or validate them for the configured viewport. Keep setup outside capture, hold important states, and assert meaningful application changes. An exception marks the take failed and closes the isolated browser.
+Use actual locators for clicks. Canvas drags often require coordinates; derive or validate them for the configured viewport. Keep setup outside capture and assert meaningful application changes. An exception marks the take failed and closes the isolated browser.
 
 ## Apps
 

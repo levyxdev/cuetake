@@ -31,7 +31,7 @@ CueTake measures each Line's duration from its audio; any duration the file stat
 
 ```js
 export async function run(d) {
-  await d.at(0.5);
+  await d.at(1.5);
   await d.say('intro');                 // holds until the intro audio ends
   await d.type(d.page.getByLabel('Email'), 'ada@example.com');
   await d.say('send');
