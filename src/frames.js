@@ -18,12 +18,24 @@ export function contentOf(element) {
 export async function boxOnPage(locator) {
   const handle = await locator.elementHandle();
   try {
-    let box = await handle.evaluate(e => e.getClientRects().length ? e.getBoundingClientRect().toJSON() : null);
-    for (let frame = await handle.ownerFrame(); box && frame?.parentFrame(); frame = frame.parentFrame()) {
-      const element = await frame.frameElement();
-      const content = await element.evaluate(contentOf).finally(() => element.dispose());
-      box = { x: content.x + box.x * content.sx, y: content.y + box.y * content.sy, width: box.width * content.sx, height: box.height * content.sy };
-    }
-    return box && { x: box.x, y: box.y, width: box.width, height: box.height };
+    const box = await handle.evaluate(e => e.getClientRects().length ? e.getBoundingClientRect().toJSON() : null);
+    return box && onPage(await placeOf(await handle.ownerFrame()), box);
   } finally { await handle.dispose(); }
 }
+
+/**
+ * Where a frame's viewport shows in top-level CSS pixels: the offset of its origin and its scale,
+ * through every iframe it is in. The top frame's is { x: 0, y: 0, sx: 1, sy: 1 }.
+ */
+export async function placeOf(frame) {
+  let map = { x: 0, y: 0, sx: 1, sy: 1 };
+  for (let f = frame; f?.parentFrame(); f = f.parentFrame()) {
+    const element = await f.frameElement();
+    const content = await element.evaluate(contentOf).finally(() => element.dispose());
+    map = { x: content.x + map.x * content.sx, y: content.y + map.y * content.sy, sx: map.sx * content.sx, sy: map.sy * content.sy };
+  }
+  return map;
+}
+
+/** A box in a frame's CSS pixels placed in top-level CSS pixels by the frame's `map` (placeOf). */
+export const onPage = (map, box) => ({ x: map.x + box.x * map.sx, y: map.y + box.y * map.sy, width: box.width * map.sx, height: box.height * map.sy });

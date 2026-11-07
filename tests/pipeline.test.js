@@ -8,7 +8,7 @@ import { drawsWithGpu } from '../src/environment.js';
 import { fitZoom, cropAround, zoomSegments, cameraTrack } from '../src/camera.js';
 import { cameraTargets, createEdit, DEFAULT_STYLE, withDefaults, addressBar, addressOf, merge } from '../src/edit.js';
 import { pointerAt, presses, sparksAt, heldSpans, pressScale, shapeAt, drawnShape, cursorTrack } from '../src/cursor.js';
-import { random, reachMs, reach, landing, pauseMs, typingDelays } from '../src/motion.js';
+import { random, reachMs, reach, landing, pauseMs, typingDelays, scrollMs } from '../src/motion.js';
 import { atShortSide, layout, cameraView, brandHue, brandColor, previewSheet } from '../src/stage.js';
 import { exposure, moments, cropAt, shutterOf } from '../src/shutter.js';
 import { lookFromEdit, applyLook, mergeLook, summarize, saveLook, loadLook, listLooks, removeLook, resolvedLook } from '../src/look.js';
@@ -717,6 +717,19 @@ test('moves take longer the farther and smaller the target, slower while draggin
     const ms = reachMs(distance, size);
     expect(ms).toBeGreaterThan(250);
     expect(ms).toBeLessThan(1600);
+  }
+});
+
+test('a scroll takes longer the farther it goes, quickly at first for a long one, scaled by speed', () => {
+  expect(scrollMs(0)).toBe(0);
+  expect(scrollMs(300)).toBeLessThan(scrollMs(1200));
+  expect(scrollMs(1200, { speed: 2 })).toBeCloseTo(scrollMs(1200) / 2);
+  for (const distance of [200, 800, 3000, 8000]) {
+    const ms = scrollMs(distance);
+    expect(ms).toBeGreaterThan(400);
+    expect(ms).toBeLessThan(3000);
+    // Never faster on average than a quick flick of a wheel or trackpad.
+    expect(distance / ms * 1000).toBeLessThanOrEqual(3000 + 1e-9);
   }
 });
 

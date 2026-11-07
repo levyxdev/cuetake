@@ -203,5 +203,6 @@ export function createAppDirector({ startedAt, fps = 60, voiced = null, speed = 
     app: locators.app,
     wait, time, at: clock.at, focus: clock.focus, say: clock.say, fastForward: clock.fastForward,
     move: (x, y, duration) => glide({ x, y }, { duration }), hover, click, press, type, drag, mask, switchTo,
+    async scroll() { throw new Error('d.scroll works only on pages for now, not in a Take of Apps'); },
   };
 }

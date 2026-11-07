@@ -1,5 +1,5 @@
-import { landing, pauseMs, random, reach, typingDelays } from './motion.js';
-import { boxOnPage } from './frames.js';
+import { ease, landing, pauseMs, random, reach, scrollMs, typingDelays } from './motion.js';
+import { boxOnPage, onPage, placeOf } from './frames.js';
 import { carried, seenBy, windowMaps } from './tabs.js';
 import { EFFECT_NAMES, MASK_EFFECTS } from './masks.js';
 
@@ -30,6 +30,93 @@ export function followMask({ id, tab, name, t, effect, params }, notes, { watch,
   signal?.addEventListener('abort', () => clearInterval(timer), { once: true });
   if (signal?.aborted) clearInterval(timer);
   return { end() { entry.end ??= time(); } };
+}
+
+/** Where `d.scroll` puts its target in what scrolls it, as scrollIntoView names them. */
+const ALIGNS = ['start', 'center', 'end', 'nearest'];
+// A scroll lands its target this share of the scrolled view from its edge, so it is not flush against it.
+const SCROLL_MARGIN = 0.1;
+// A container already scrolled once is scrolled again only to correct a target this far off, such as after images loaded above it.
+const CORRECTION_PX = 4;
+
+/**
+ * Runs in the target's frame: how a person would scroll to `target`, outermost container first. Each
+ * container that scrolls either way, the page last of all, is one step: it brings the next container in
+ * that scrolls the same way into view (`nearest`), or the target itself, by `block` and `inline`, where
+ * no container inside it does. Each step's `delta` is what is left to scroll, in its frame's CSS pixels,
+ * clamped to where the container can go; `aim` is null when a wheel at `point` reaches that container
+ * first, else a spot of it a wheel does reach, or false when none shows; `at` is its scroll position, to
+ * see that it moved. Null when the target shows no box.
+ */
+function scrollPlan(target, { block, inline, point, margin }) {
+  if (!target.getClientRects().length) return null;
+  const page = document.scrollingElement ?? document.documentElement;
+  const parentOf = node => node.parentElement ?? node.getRootNode().host ?? null;
+  const scrolls = (e, axis) => {
+    const range = axis === 'y' ? e.scrollHeight - e.clientHeight : e.scrollWidth - e.clientWidth;
+    if (range < 1) return false;
+    if (e === page) return ![document.documentElement, document.body].some(root => root && /hidden|clip/.test(getComputedStyle(root)[axis === 'y' ? 'overflowY' : 'overflowX']));
+    return /auto|scroll|overlay/.test(getComputedStyle(e)[axis === 'y' ? 'overflowY' : 'overflowX']);
+  };
+  const containers = [];
+  for (let node = parentOf(target); node; node = parentOf(node)) if (node !== page && node instanceof Element && (scrolls(node, 'y') || scrolls(node, 'x'))) containers.push(node);
+  containers.push(page);
+  containers.reverse();
+  const viewOf = e => {
+    // The scrolling element's client size is the viewport's, less any scroll bars, in standards and quirks mode alike.
+    if (e === page) return { x: 0, y: 0, width: page.clientWidth, height: page.clientHeight };
+    const r = e.getBoundingClientRect();
+    return { x: r.x + e.clientLeft, y: r.y + e.clientTop, width: e.clientWidth, height: e.clientHeight };
+  };
+  const shown = v => {
+    const x = Math.max(0, v.x), y = Math.max(0, v.y), right = Math.min(innerWidth, v.x + v.width), bottom = Math.min(innerHeight, v.y + v.height);
+    return { x, y, width: Math.max(0, right - x), height: Math.max(0, bottom - y) };
+  };
+  const want = (subject, view, align, axis) => {
+    const r = subject.getBoundingClientRect();
+    const [low, size, start, length] = axis === 'y' ? [r.top, r.height, view.y, view.height] : [r.left, r.width, view.x, view.width];
+    const edge = margin * length, toStart = low - (start + edge), toEnd = low + size - (start + length - edge);
+    if (align === 'start') return toStart;
+    if (align === 'end') return toEnd;
+    if (align === 'center') return low + size / 2 - (start + length / 2);
+    if (toStart >= 0 && toEnd <= 0) return 0;
+    return toStart < 0 || size > length - 2 * edge ? toStart : toEnd;
+  };
+  const innermost = (element, axis) => {
+    for (let node = element; node; node = parentOf(node)) if (node === page || (node instanceof Element && scrolls(node, axis))) return node;
+    return page;
+  };
+  const hitAt = (x, y) => {
+    let hit = document.elementFromPoint(x, y);
+    for (let inner; hit?.shadowRoot && (inner = hit.shadowRoot.elementFromPoint(x, y)) && inner !== hit;) hit = inner;
+    return hit;
+  };
+  // Whether a wheel at (x, y) scrolls `container` first along `axis`: no frame and no other container lies there.
+  const reaches = (x, y, container, axis) => { const hit = hitAt(x, y); return !!hit && !/^(iframe|frame|embed|object)$/.test(hit.localName) && innermost(hit, axis) === container; };
+  const steps = containers.map((container, index) => {
+    const view = viewOf(container), delta = {}, at = { x: container.scrollLeft, y: container.scrollTop };
+    for (const axis of ['x', 'y']) {
+      if (!scrolls(container, axis)) { delta[axis] = 0; continue; }
+      const inner = containers.slice(index + 1).find(c => scrolls(c, axis));
+      const wanted = want(inner ?? target, view, inner ? 'nearest' : axis === 'y' ? block : inline, axis);
+      const range = axis === 'y' ? container.scrollHeight - container.clientHeight : container.scrollWidth - container.clientWidth;
+      delta[axis] = Math.round(Math.min(Math.max(wanted, -at[axis]), range - at[axis]));
+    }
+    const axis = delta.y ? 'y' : 'x', visible = shown(view);
+    // Where the cursor goes when the wheel would not reach the container from where it rests: the
+    // middle of what shows of it, or the first spot nearest the middle that reaches it.
+    let aim = null;
+    if (!reaches(point.x, point.y, container, axis)) {
+      const spots = [];
+      for (let i = 1; i < 8; i++) for (let j = 1; j < 8; j++) spots.push({ x: visible.x + visible.width * i / 8, y: visible.y + visible.height * j / 8 });
+      const middle = { x: visible.x + visible.width / 2, y: visible.y + visible.height / 2 };
+      spots.sort((a, b) => Math.hypot(a.x - middle.x, a.y - middle.y) - Math.hypot(b.x - middle.x, b.y - middle.y));
+      aim = spots.find(spot => reaches(spot.x, spot.y, container, axis)) ?? false;
+    }
+    const name = container === page ? 'the page' : `<${container.localName}${container.id ? `#${container.id}` : ''}>`;
+    return { index, delta, aim, at, name };
+  });
+  return { steps };
 }
 
 /** Options may be a bare number for the action's main timing; `focus: false` keeps the camera wide. */
@@ -249,6 +336,66 @@ export function createDirector(tabs, { startedAt, fps, voiced = null, speed = 1,
     // The page may replace the element, or navigate; watching again follows what the locator matches now.
     return followMask({ id, tab: tab.id, name: String(target), t, effect, params }, notes, { watch, skip: () => target.page().isClosed(), signal, time });
   }
+  /** The Director's plan to scroll to `target` (scrollPlan), with where the target's frame shows on the page. */
+  async function scrollSteps(target, block, inline) {
+    const handle = await target.elementHandle();
+    try {
+      const map = await placeOf(await handle.ownerFrame());
+      const point = { x: (cursor.x - map.x) / map.sx, y: (cursor.y - map.y) / map.sy };
+      const plan = await handle.evaluate(scrollPlan, { block, inline, point, margin: SCROLL_MARGIN });
+      if (!plan) throw new Error('Scroll target has no visible bounding box');
+      return { map, steps: plan.steps };
+    } finally { await handle.dispose(); }
+  }
+  /** Turns the wheel by `delta` CSS px over `duration` ms, a little each frame, starting fast and settling long. */
+  async function wheel(page, delta, duration) {
+    const start = Date.now(), sent = { x: 0, y: 0 };
+    for (let i = 1, t = 0; t < 1; i++) {
+      await wait(start + i * 1000 / fps - Date.now());
+      t = duration ? Math.min(1, (Date.now() - start) / duration) : 1;
+      const k = ease(t), step = { x: Math.round(delta.x * k) - sent.x, y: Math.round(delta.y * k) - sent.y };
+      if (!step.x && !step.y) continue;
+      sent.x += step.x; sent.y += step.y;
+      await page.mouse.wheel(step.x, step.y);
+    }
+  }
+  /**
+   * Scrolls until the target shows where `block` (vertically) and `inline` (horizontally) put it in
+   * what scrolls it, as a person turns a wheel or swipes a trackpad: the page first, then each container
+   * inside it, each moving both ways at once where it scrolls both. The cursor moves onto a container
+   * first when a wheel where it rests would scroll something else. A container that cannot go farther
+   * stops there; one that does not move at all fails the Take. Returns the target's box on the page.
+   */
+  async function scroll(locator, opts) {
+    const { duration, block = 'start', inline = 'nearest' } = options(opts, 'duration');
+    for (const [name, value] of [['block', block], ['inline', inline]]) if (!ALIGNS.includes(value)) throw new Error(`d.scroll needs ${name} ${ALIGNS.map(a => `'${a}'`).join(', ')}, not '${value}'`);
+    const target = await located(locator, 'Scroll'), times = new Map();
+    let first = true;
+    for (;;) {
+      const { map, steps } = await scrollSteps(target, block, inline);
+      const step = steps.find(({ index, delta }) => {
+        const far = Math.max(Math.abs(delta.x), Math.abs(delta.y)), done = times.get(index) ?? 0;
+        return far >= 1 && (done === 0 || (done === 1 && far > CORRECTION_PX));
+      });
+      if (!step) break;
+      const { page } = await inFront();
+      if (step.aim === false) throw new Error(`Scroll cannot reach ${step.name}: no part of it a wheel would scroll shows`);
+      if (step.aim) await glide(onPage(map, { ...step.aim, width: 0, height: 0 }));
+      await wheel(page, step.delta, first && duration !== undefined ? duration : scrollMs(Math.hypot(step.delta.x, step.delta.y), { speed }));
+      first = false;
+      times.set(step.index, (times.get(step.index) ?? 0) + 1);
+      const after = (await scrollSteps(target, block, inline)).steps[step.index];
+      if (after?.at.x === step.at.x && after?.at.y === step.at.y) {
+        throw new Error(`Scroll moved nothing: a wheel at (${Math.round(cursor.x)}, ${Math.round(cursor.y)}) did not scroll ${step.name}; the page may take the wheel itself, or something lies over it`);
+      }
+    }
+    if (!first) await pause('afterScroll');
+    const box = await boxOnPage(target), { viewport } = tabs.front;
+    if (!box || box.x + box.width <= 0 || box.y + box.height <= 0 || box.x >= viewport.width || box.y >= viewport.height) {
+      throw new Error('Scroll could not bring the target into view; if it is inside an iframe, scroll the iframe into view first with d.scroll(d.page.locator(\'iframe\'))');
+    }
+    return box;
+  }
   /** Brings a Tab back in front, such as the one a closed tab's demo continues in; the cursor stays where it was. */
   async function switchTo(page) {
     await tabs.switchTo(page);
@@ -257,6 +404,6 @@ export function createDirector(tabs, { startedAt, fps, voiced = null, speed = 1,
   return {
     /** The Tab in front. */
     get page() { return tabs.front.page; },
-    wait, time, at: clock.at, move, hover, click, press, type, drag, focus, say, fastForward, mask, switchTo,
+    wait, time, at: clock.at, move, hover, click, press, type, drag, scroll, focus, say, fastForward, mask, switchTo,
   };
 }

@@ -45,6 +45,8 @@ Trust the automatic camera, and step in only for these:
 - **An incidental action.** Closing a dialog, clicking a tab to get somewhere, moving focus: pass `focus: false`, so the camera stays wide and does not chain the beats around it into one long zoom.
 - **A busy camera.** Actions within about 4 s of each other chain into one segment, and the camera pans between them. Finish each area before moving to the next, and never go back and forth between two areas: each change of area is a pan.
 
+- **A scroll.** `d.scroll` adds no camera target and does not end a zoom, as in Screen Studio: the camera stays still while the page moves under it. Scroll with the camera wide, since a long scroll under a zoom rushes past: give the click just before it `focus: false` when it is incidental, or let its hold end first. To show what the scroll reached, focus on it once it stops: `d.focus(await d.scroll(heading))`, or on the whole section below the heading.
+
 Keep the cursor off the reveal. If the last action leaves it covering what the viewer must read, `d.move` it a short way aside, 100 to 150 CSS px, within the view: a long move while zoomed pulls the camera with it.
 
 ## Waiting and emphasis

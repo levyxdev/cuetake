@@ -21,8 +21,8 @@ A Narration is voiced before Capture by a separate speech tool (ADR 0006). The D
 ## Modules
 
 - `pipeline.js`: scenario validation, artifact lifecycle, render and verification.
-- `director.js`: timed interactions, focus targets, said Lines and fast-forwarded waits.
-- `motion.js`: how the Director moves like a person (durations, path, pauses, typing rhythm); pure and seeded.
+- `director.js`: timed interactions, scrolling to an element through each container that holds it, focus targets, said Lines and fast-forwarded waits.
+- `motion.js`: how the Director moves like a person (durations, path, pauses, typing rhythm, how long a scroll takes); pure and seeded.
 - `recorder.js` / `tab-capture.js`: supported HD capture only, one stream per Tab from one recorder page.
 - `follow-tabs.js`: the Tabs a Take shows, which is in front, and starting each one's capture.
 - `app-capture.js` / `helper/`: Capture of a Desktop of macOS Apps (ADR 0009) through `cuetake-capture`, a Swift helper run as a child process over JSON lines, and the `doctor` checks of its grants. The helper starts the Take's Apps and records their windows (ScreenCaptureKit, filtered to those Apps, no pointer) to an H.264 Source and samples each window's frame, layer and corner radius with every frame.
@@ -41,7 +41,7 @@ A Narration is voiced before Capture by a separate speech tool (ADR 0006). The D
 - `uninstall.js`: the `uninstall` command; it removes only what CueTake owns.
 - `render.js` / `render-page.js`: the Render driver and the in-browser compositor, encoder and inspector.
 - `probe.js`: Timeline recording in every frame of the page, and placing each frame's input in top-level CSS pixels.
-- `frames.js`: where an iframe's content shows in its parent, and an element's box on the page through all its iframes; the probe and the Director both measure with it.
+- `frames.js`: where an iframe's content shows in its parent, where a frame shows on the page, and an element's box on the page through all its iframes; the probe and the Director both measure with it.
 - `edit.js`: the Edit's defaults, merging, and its first version from a Scenario.
 - `auth.js`: the `login` command and Auth profile storage.
 - `cli.js`: the command interface, the only entry point.

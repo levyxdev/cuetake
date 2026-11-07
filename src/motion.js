@@ -1,6 +1,7 @@
 /**
  * How the Director's hand moves: durations from Fitts's law, a quick start and a long settle, a
- * slight arc, pauses around presses and Shortcuts, a held click or key and uneven typing. Pure and
+ * slight arc, pauses around presses and Shortcuts, a held click or key, uneven typing and scrolls that
+ * flick quickly and settle long. Pure and
  * seeded, so a Scenario moves the same way on every recording. CSS pixels and milliseconds throughout.
  */
 
@@ -10,7 +11,9 @@ const DRAG_SLOWDOWN = 1.5; // a held button makes people slower
 const POINT_SIZE = 24; // target size for moves to a bare point
 const BEND = 0.1, MAX_BEND = 80; // the arc's sideways offset, as a share of the distance and in CSS px
 const LANDING = 0.15, MAX_LANDING = 8; // a click lands at most this share of its box's size, and CSS px, from the center
-const PAUSES = { beforePress: 120, press: 100, afterRelease: 150, afterGrab: 100, beforeDrop: 100, beforeKey: 150, afterKey: 250 }; // press: how long a click or key is held
+const SCROLL_MS = 300, SCROLL_MS_PER_BIT = 300, SCROLL_UNIT = 300; // a scroll takes SCROLL_MS + SCROLL_MS_PER_BIT * log2(distance / SCROLL_UNIT + 1)
+const MAX_SCROLL_SPEED = 3000; // CSS px/s on average: a quick flick of a wheel or trackpad
+const PAUSES = { beforePress: 120, press: 100, afterRelease: 150, afterGrab: 100, beforeDrop: 100, beforeKey: 150, afterKey: 250, afterScroll: 200 }; // press: how long a click or key is held
 const PAUSE_JITTER = 0.25, TYPING_JITTER = 0.4, WORD_BREAK = 1.5;
 
 /** A deterministic source of numbers in [0, 1) (mulberry32). */
@@ -31,8 +34,14 @@ export function reachMs(distance, size = POINT_SIZE, { speed = 1, drag = false }
   return Math.max(fitts, distance / MAX_AVERAGE_SPEED * 1000) * (drag ? DRAG_SLOWDOWN : 1) / speed;
 }
 
-/** Progress along a move at time share `t`: minimum-jerk, warped so it peaks early and settles long. */
-const ease = t => { const u = t ** 0.75; return u * u * u * (10 - 15 * u + 6 * u * u); };
+/** How long a person takes to scroll `distance` CSS px: longer the farther, but a long scroll flicks fast. */
+export function scrollMs(distance, { speed = 1 } = {}) {
+  if (distance < 1) return 0;
+  return Math.max(SCROLL_MS + SCROLL_MS_PER_BIT * Math.log2(distance / SCROLL_UNIT + 1), distance / MAX_SCROLL_SPEED * 1000) / speed;
+}
+
+/** Progress along a move or scroll at time share `t`: minimum-jerk, warped so it peaks early and settles long. */
+export const ease = t => { const u = t ** 0.75; return u * u * u * (10 - 15 * u + 6 * u * u); };
 
 /** A move from `from` to `to`: its duration and its point at time share `t`, along a slight arc. */
 export function reach(from, to, { size, duration, speed, drag, rand }) {

@@ -11,7 +11,7 @@ A trusted script describing one demo: the start page or App, the timed interacti
 _Avoid_: script, flow file, recipe
 
 **Director**:
-What a Scenario's `run` is handed to act on the page or App like a person: it moves the cursor, clicks, types and drags at a human pace, and marks camera targets and Lines.
+What a Scenario's `run` is handed to act on the page or App like a person: it moves the cursor, clicks, types, drags and scrolls at a human pace, and marks camera targets and Lines.
 _Avoid_: driver, bot, automation
 
 **App**:

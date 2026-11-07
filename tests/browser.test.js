@@ -503,6 +503,108 @@ test('the Director marks a fast-forwarded wait, and refuses Lines and fast-forwa
   } finally { await browser.close(); }
 }, 30_000);
 
+/** Notes each wheel event the page takes: when, by how much, and what it scrolled, as [ms, dx, dy, target id]. */
+const noteWheels = () => { window.wheels = []; addEventListener('wheel', e => wheels.push([performance.now(), e.deltaX, e.deltaY, e.target.closest('[id]')?.id ?? '']), { capture: true, passive: true }); };
+
+test('the Director scrolls like a person, a little each frame, fast first and settling long, and lands the target where asked', async () => {
+  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
+  try {
+    const page = await browser.newPage({ viewport: { width: 640, height: 480 } });
+    await page.setContent(`<body style="margin:0"><div style="height:5000px;position:relative">
+      <h2 id="far" style="position:absolute;top:2500px;margin:0;height:40px">Far</h2>
+      <h2 id="mid" style="position:absolute;top:3200px;margin:0;height:40px">Mid</h2>
+      <h2 id="last" style="position:absolute;top:4900px;margin:0;height:40px">Last</h2></div></body>`);
+    await page.evaluate(noteWheels);
+    const d = createDirector(followTabs(page), { startedAt: Date.now(), fps: 60, speed: 2 }, { focus: [], wide: [], said: [], forwarded: [], pointer: [] });
+    await expect(d.scroll('#far', { block: 'top' })).rejects.toThrow("d.scroll needs block 'start', 'center', 'end', 'nearest', not 'top'");
+    const box = await d.scroll('#far');
+    // 'start' leaves a tenth of the view above the target.
+    expect(box.y).toBeCloseTo(48, 0);
+    expect(await page.evaluate(() => scrollY)).toBe(2452);
+    const wheels = await page.evaluate(() => wheels);
+    expect(wheels.length).toBeGreaterThan(10);
+    expect(wheels.every(([, dx]) => dx === 0)).toBe(true);
+    const span = wheels.at(-1)[0] - wheels[0][0];
+    expect(span).toBeGreaterThan(300);
+    // Most of the distance goes in the first half of the time; the rest settles slowly.
+    const early = wheels.filter(([ms]) => ms - wheels[0][0] < span / 2).reduce((sum, [, , dy]) => sum + dy, 0);
+    expect(early).toBeGreaterThan(2452 * 0.6);
+    // Already where it was asked to be, a scroll does nothing.
+    await d.scroll('#far');
+    expect(await page.evaluate(() => wheels.length)).toBe(wheels.length);
+    expect((await d.scroll('#mid', { block: 'center', duration: 800 })).y).toBeCloseTo(220, 0);
+    const timed = (await page.evaluate(() => wheels)).slice(wheels.length);
+    expect(timed.at(-1)[0] - timed[0][0]).toBeGreaterThan(650);
+    // A target the page cannot bring to the start goes as far as the page scrolls, and no farther.
+    const last = await d.scroll('#last');
+    expect(await page.evaluate(() => scrollY)).toBe(5000 - 480);
+    expect(last.y).toBeCloseTo(4900 - 4520, 0);
+  } finally { await browser.close(); }
+}, 30_000);
+
+test('the Director scrolls the page to a container, moves onto it and scrolls it, both ways at once where it scrolls both', async () => {
+  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
+  try {
+    const page = await browser.newPage({ viewport: { width: 640, height: 480 } });
+    const items = Array.from({ length: 50 }, (_, i) => `<div id="item${i}" style="height:40px">Item ${i}</div>`).join('');
+    await page.setContent(`<body style="margin:0"><div style="height:1500px"></div>
+      <div id="list" style="margin-left:300px;width:300px;height:200px;overflow:auto">${items}</div>
+      <div style="height:300px"></div>
+      <div id="wide" style="width:400px;height:120px;overflow-x:auto;overflow-y:hidden"><div style="width:3000px;height:100px;position:relative"><span id="cell" style="position:absolute;left:2000px;top:10px;width:80px">Cell</span></div></div>
+      <div style="height:300px"></div>
+      <div id="both" style="width:300px;height:200px;overflow:auto"><div style="width:2000px;height:2000px;position:relative"><span id="corner" style="position:absolute;left:1500px;top:1500px;width:60px;height:20px">Corner</span></div></div>
+      <div style="height:1000px"></div></body>`);
+    await page.evaluate(noteWheels);
+    const notes = { focus: [], wide: [], said: [], forwarded: [], pointer: [] };
+    const moves = [], move = page.mouse.move.bind(page.mouse);
+    page.mouse.move = (x, y, options) => { moves.push({ x, y }); return move(x, y, options); };
+    const d = createDirector(followTabs(page), { startedAt: Date.now(), fps: 60, speed: 4 }, notes);
+    const item = await d.scroll('#item40');
+    const list = await page.locator('#list').boundingBox();
+    // The page brought the list into view first, then the list scrolled the item to the start of its view.
+    expect(list.y).toBeGreaterThanOrEqual(0);
+    expect(list.y + list.height).toBeLessThanOrEqual(480);
+    expect(item.y - list.y).toBeCloseTo(20, 0);
+    const wheels = await page.evaluate(() => wheels), turned = wheels.findIndex(([, , , id]) => id.startsWith('item'));
+    expect(turned).toBeGreaterThan(0);
+    expect(wheels.slice(0, turned).every(([, , , id]) => !id.startsWith('item'))).toBe(true);
+    // The cursor moved onto the list before scrolling it, and stayed on it.
+    const onList = ({ x, y }) => x >= list.x && x <= list.x + list.width && y >= list.y && y <= list.y + list.height;
+    expect(onList(moves.at(-1))).toBe(true);
+    // Sideways: the cell comes into view inside its container; 'nearest' scrolls the page only as far as the cell needs.
+    const cell = await d.scroll('#cell', { block: 'nearest' }), wide = await page.locator('#wide').boundingBox();
+    expect(cell.x).toBeGreaterThanOrEqual(wide.x);
+    expect(cell.x + cell.width).toBeLessThanOrEqual(wide.x + wide.width);
+    // A container passing under the resting cursor may take a few of the page's wheel events, as for a person; a scroll is corrected only past 4 px.
+    expect(Math.abs(cell.y + cell.height - (480 - 48))).toBeLessThanOrEqual(4);
+    // A container that scrolls both ways scrolls diagonally, in one stream of wheel events.
+    const before = (await page.evaluate(() => wheels)).length;
+    const corner = await d.scroll('#corner', { inline: 'center' }), both = await page.locator('#both').boundingBox();
+    expect(corner.x + corner.width / 2).toBeCloseTo(both.x + both.width / 2, 0);
+    const diagonal = (await page.evaluate(() => wheels)).slice(before).filter(([, , , id]) => id === 'corner' || id === 'both');
+    expect(diagonal.some(([, dx, dy]) => dx > 0 && dy > 0)).toBe(true);
+  } finally { await browser.close(); }
+}, 30_000);
+
+test('the Director fails a scroll that moves nothing, and one that cannot bring its target into view', async () => {
+  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
+  try {
+    const page = await browser.newPage({ viewport: { width: 640, height: 480 } });
+    await page.setContent(`<body style="margin:0"><div style="height:3000px"><h2 id="far" style="margin-top:2000px">Far</h2></div>
+      <script>addEventListener('wheel', e => e.preventDefault(), { passive: false })</script></body>`);
+    const d = createDirector(followTabs(page), { startedAt: Date.now(), fps: 60, speed: 4 }, { focus: [], wide: [], said: [], forwarded: [], pointer: [] });
+    await expect(d.scroll('#far')).rejects.toThrow('Scroll moved nothing: a wheel at (0, 0) did not scroll the page');
+    // Closed, so Chromium does not throttle the next page as one behind it.
+    await page.close();
+    const framed = await browser.newPage({ viewport: { width: 640, height: 480 } });
+    await framed.setContent(`<body style="margin:0"><div style="height:2000px"></div><iframe srcdoc="<p id=deep>Deep</p>" style="height:100px;border:0"></iframe></body>`);
+    const e = createDirector(followTabs(framed), { startedAt: Date.now(), fps: 60, speed: 4 }, { focus: [], wide: [], said: [], forwarded: [], pointer: [] });
+    await expect(e.scroll(e.page.frameLocator('iframe').locator('#deep'))).rejects.toThrow('Scroll could not bring the target into view');
+    await e.scroll(e.page.locator('iframe'));
+    expect((await e.scroll(e.page.frameLocator('iframe').locator('#deep'))).y).toBeLessThan(480);
+  } finally { await browser.close(); }
+}, 30_000);
+
 test('the Director masks every element a locator matches, following it as the page scrolls, inside iframes and when it is replaced', async () => {
   const browser = await chromium.launch({ headless: true, channel: 'chromium' });
   try {
