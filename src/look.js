@@ -5,7 +5,7 @@ import { merge } from './edit.js';
 import { absolute, bundle, codeRefs, fileRefs } from './styles.js';
 
 /**
- * A Look is the part of an Edit that does not depend on one Take: everything except camera targets,
+ * A Look is the part of an Edit that does not depend on one Take: everything except camera targets and scrolls,
  * the address bar's url and its changes, where popups sit, the frame rate, the Shortcuts, the fast-forwards, the masks and the Narration's Lines. A
  * Look sets only what it names, and is not validated.
  */
@@ -13,7 +13,7 @@ export const mergeLook = merge;
 
 /** The Look an Edit carries. */
 export function lookFromEdit(edit) {
-  const { schemaVersion, narration, shortcuts, fastForward, masks, output: { fps, ...output } = {}, frame, camera: { targets, ...camera } = {}, tabs: { placement, ...tabs } = {}, ...rest } = edit;
+  const { schemaVersion, narration, shortcuts, fastForward, masks, output: { fps, ...output } = {}, frame, camera: { targets, scrolls, ...camera } = {}, tabs: { placement, ...tabs } = {}, ...rest } = edit;
   const { url, urls, ...styling } = frame ?? {};
   return { ...rest, output, frame: styling, camera, tabs };
 }

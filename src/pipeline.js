@@ -129,6 +129,7 @@ export function timelineOf(take, stopped, observed, notes, startedAtMs) {
     events: [
       ...[...observed].flatMap(([tab, seen]) => inTab(seen.events, tab)),
       ...notes.focus.map(f => ({ type: 'focus', ...f })), ...notes.said.map(line => ({ type: 'say', ...line })), ...notes.forwarded.map(span => ({ type: 'fastForward', ...span })), ...(notes.masks ?? []).map(mask => ({ type: 'mask', ...mask })),
+      ...(notes.scrolls ?? []).map(span => ({ type: 'scroll', ...span })),
       ...stopped.tabs.flatMap(tab => inTab(tab.navigations.map(load => ({ type: 'navigate', ...load })), tab.id)),
       ...stopped.fronts.filter(front => front.t > 0).map(front => ({ type: 'front', ...front })),
     ].sort((a, b) => a.t - b.t),

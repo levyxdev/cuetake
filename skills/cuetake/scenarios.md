@@ -91,7 +91,7 @@ await d.scroll(d.page.getByRole('cell', { name: 'Total' }), { block: 'center', i
 - A page that moves its layout while it scrolls, such as images loading above the target, gets one short second scroll to correct it, only when it is off by more than 4 CSS px.
 - A scroll fails the Take when the wheel moves nothing (the page takes the wheel itself, or something lies over the container), when no part of a container the wheel would reach shows, and when the target still is not in view at the end.
 - A target inside an iframe scrolls only within the iframe's own document; scroll to the iframe first with `d.scroll(d.page.locator('iframe'))`.
-- Wheel input is not recorded in the Timeline: the Source shows the page scrolling, and the camera ignores it ([directing.md](directing.md), Camera).
+- Each scroll is recorded in the Timeline as a `scroll` event and copied into `edit.json` as `camera.scrolls: [{ "start": 8.1, "end": 9.9 }]` (Source seconds): the camera is back wide `response` before a scroll starts and stays wide until it ends ([directing.md](directing.md), Camera). Remove a span there to keep a zoom through that scroll. Wheel input sent through Playwright directly is not recorded, and the camera ignores it.
 
 ## Masks
 
@@ -113,7 +113,7 @@ export async function run(d) {
 - Capture records each element's box as it moves, so the Mask stays on it as the page scrolls, the layout changes or the element is replaced, and inside iframes. A locator matching several elements masks all of them; one that matches nothing masks nothing until it does.
 - A blur or cover made before the Director first waits or acts covers the Take from its first frame. A Mask made later starts when it is made, so mask before the private data shows.
 - While its element moves, a blur or cover also covers where it was for 0.2 s before and 0.25 s after, since the Source shows a change a little after the page makes it and Capture finds a replaced element within a tenth of a second, so it never trails the page.
-- Masks sit on the page under the camera, so they stay on their element as the camera zooms and pans. A spotlight dims every window, popups included, their chrome and the Background, but not the Cursor, click effects, keycaps or Subtitles. Spotlights showing together light each of their regions and dim the rest once.
+- Masks sit on the page under the camera, so they stay on their element as the camera zooms and pans. A spotlight dims every window, popups included, their chrome and the Background, but not click effects, keycaps or Subtitles. The Cursor fades out as a spotlight fades in and back as it ends. Spotlights showing together light each of their regions and dim the rest once.
 
 Each Mask is copied into `edit.json` as `masks: [{ "effect": "blur", "element": 0, "start": 0 }]` (Source seconds; without `end` it lasts to the end of the Take), where its span or parameters can be changed or it can be removed without recording again. `element` is one of `timeline.json`'s `elements`, which names its locator. To mask what the Scenario did not, add a fixed box in the Tab's CSS pixels and render again:
 

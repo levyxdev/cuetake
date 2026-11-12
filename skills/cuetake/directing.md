@@ -45,14 +45,14 @@ Trust the automatic camera, and step in only for these:
 - **An incidental action.** Closing a dialog, clicking a tab to get somewhere, moving focus: pass `focus: false`, so the camera stays wide and does not chain the beats around it into one long zoom.
 - **A busy camera.** Actions within about 4 s of each other chain into one segment, and the camera pans between them. Finish each area before moving to the next, and never go back and forth between two areas: each change of area is a pan.
 
-- **A scroll.** `d.scroll` adds no camera target and does not end a zoom, as in Screen Studio: the camera stays still while the page moves under it. Scroll with the camera wide, since a long scroll under a zoom rushes past: give the click just before it `focus: false` when it is incidental, or let its hold end first. To show what the scroll reached, focus on it once it stops: `d.focus(await d.scroll(heading))`, or on the whole section below the heading.
+- **A scroll.** The camera steps back for it: it is wide by the time `d.scroll` starts the wheel, cutting short the hold of whatever came before, and stays wide until the page stops, so the viewer sees where on the page they are going. `d.scroll` adds no target of its own. To show what the scroll reached, focus on it once it stops: `d.focus(await d.scroll(heading))`, or on the whole section below the heading. Finish talking about a zoomed area before scrolling away from it.
 
 Keep the cursor off the reveal. If the last action leaves it covering what the viewer must read, `d.move` it a short way aside, 100 to 150 CSS px, within the view: a long move while zoomed pulls the camera with it.
 
 ## Waiting and emphasis
 
 - **Dead time** goes in `d.fastForward`: a page load, a server, an AI response streaming in. A hold on a result stays outside it, so the viewer can read it. Keep the cursor still inside it: a move there plays `rate` times faster, and a zoomed camera can lose it. If the cursor would cover what the viewer waits for, move it aside before the wait.
-- **A small change** in a busy page, such as one figure in a table, is hard to see even zoomed in. Spotlight it for its hold with `d.mask(locator, { effect: 'spotlight' })` and `end()` the spotlight when the hold ends ([scenarios.md](scenarios.md), Masks).
+- **A small change** in a busy page, such as one figure in a table, is hard to see even zoomed in. Spotlight it for its hold with `d.mask(locator, { effect: 'spotlight' })` and `end()` the spotlight when the hold ends ([scenarios.md](scenarios.md), Masks). The Cursor fades out while a spotlight shows, so pointing at the element first is fine: the light takes over from the Cursor, which comes back where it rests when the spotlight ends.
 
 ## Narration
 

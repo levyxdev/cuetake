@@ -286,6 +286,19 @@ test('actions close together share one zoom; far apart ones zoom out between', (
   expect(zoomAt(far, 4.5)).toBeLessThan(1.05);
 });
 
+test('the camera is wide before a scroll starts and stays wide until it ends', () => {
+  // A focus held right up to the scroll, and one on what the scroll reached: one segment each, none across it.
+  const scrolls = [{ start: 4, end: 5 }];
+  const targets = [{ t: 2, box: small(0, 100) }, { t: 3.5, box: small(0, 100) }, { t: 5, box: small(300, 100) }];
+  const segments = zoomSegments(targets, viewport, camera, 12, [], scrolls);
+  expect(segments).toHaveLength(2);
+  expect(segments[0].end).toBeCloseTo(4 - camera.response, 9);
+  expect(segments[1].start).toBe(5);
+  const track = cameraTrack({ targets, viewport, camera, duration: 12, fps: 60, scrolls });
+  for (let t = 4; t < 5; t += 0.1) expect(zoomAt(track, t)).toBeLessThan(1.1);
+  expect(zoomAt(track, 6)).toBeGreaterThan(1.9);
+});
+
 test('typing keeps the zoom for the whole burst', () => {
   const [segment] = zoomSegments([{ t: 1, box: small(0, 0), until: 4 }], viewport, camera, 10);
   expect(segment.end).toBe(5.5);

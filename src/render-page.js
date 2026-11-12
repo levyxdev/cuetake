@@ -396,7 +396,7 @@ function createCompositor(stage, brand) {
      * in stage pixels, with the window effects around it when `effects` and its blurred and covered boxes
      * (`hidden`: `{ count, rects, styles, colors }`) drawn with the page. Every window's `spotlights`
      * (`{ rects, corner, feather, color, dim, opacity }`) then dim the windows and the Background together
-     * in one pass, and `draw(texture, rect, opacity)` in `overlay` places sprites in stage pixels. Then each of `cursors`, `{ view, texture, rect }` at the moments
+     * in one pass, and `draw(texture, rect, opacity)` in `overlay` places sprites in stage pixels. Then each of `cursors`, `{ view, texture, rect, opacity }` at the moments
      * the Cursor averages, within `cursorArea` in output pixels; and `screen` places sprites in output
      * pixels, outside the camera. Several views or cursors need `blurs`.
      */
@@ -431,7 +431,7 @@ function createCompositor(stage, brand) {
         sprites(view);
         overlay(place);
       });
-      if (cursors.length) averaged(cursors.length, i => { sprites(cursors[i].view); place(cursors[i].texture, cursors[i].rect); }, cursorArea);
+      if (cursors.length) averaged(cursors.length, i => { sprites(cursors[i].view); place(cursors[i].texture, cursors[i].rect, cursors[i].opacity); }, cursorArea);
       if (screen) { sprites({ x: width / 2, y: height / 2, zoom: 1 }); screen(place); }
       if (effects.length) checkGpu('A window effect');
     },
@@ -819,8 +819,8 @@ async function createScene(edit, viewport, { pointer, shapes, events, tabs, elem
      * window shows another tab.
      */
     crops() {
-      const targets = retimed(placed.targets, map, ['t', 'until']);
-      return cameraTrack({ targets, viewport, camera, duration: map.duration, fps: edit.output.fps, pointerAt: t => pointerAt(placed.pointer, map.sourceAt(t)), cuts: shownTabs.cuts });
+      const targets = retimed(placed.targets, map, ['t', 'until']), scrolls = retimed(camera.scrolls ?? [], map, ['start', 'end']);
+      return cameraTrack({ targets, viewport, camera, duration: map.duration, fps: edit.output.fps, pointerAt: t => pointerAt(placed.pointer, map.sourceAt(t)), cuts: shownTabs.cuts, scrolls });
     },
     /**
      * Draws Final time `t` with the camera showing `camera(time)`, a viewport rectangle in CSS pixels at
@@ -837,11 +837,13 @@ async function createScene(edit, viewport, { pointer, shapes, events, tabs, elem
       const viewAt = time => cameraView(camera(time), stage, viewport), view = viewAt(t), source = map.sourceAt(t);
       const span = compositor.blurs ? exposure(t, edit.output.fps, edit.output.shutter, shownTabs.cuts) : null, startView = span && viewAt(span.start);
       const views = moments(t, span, span ? cameraMoved(startView, view) : 0, spacing).map(time => time === t ? view : viewAt(time));
-      const cursorEnd = cursorAt(t, view), cursorStart = span && cursorEnd && cursorAt(span.start, startView);
-      const cursors = moments(t, cursorStart ? span : null, cursorStart ? apart(onScreen(cursorStart.tip, startView), onScreen(cursorEnd.tip, view)) : 0, spacing)
-        .map(time => time === t ? cursorEnd : cursorAt(time, viewAt(time))).filter(Boolean);
       // The window's effects are drawn once, under the tab it shows first. Each window carries the masks on its Tab.
       const maskedNow = masks.at(t);
+      // The Cursor fades out as a spotlight fades in, so nothing but the light draws the eye.
+      const lit = Math.max(0, ...maskedNow.filter(mask => mask.effect === 'spotlight').map(mask => mask.opacity));
+      const cursorEnd = lit < 1 ? cursorAt(t, view) : null, cursorStart = span && cursorEnd && cursorAt(span.start, startView);
+      const cursors = moments(t, cursorStart ? span : null, cursorStart ? apart(onScreen(cursorStart.tip, startView), onScreen(cursorEnd.tip, view)) : 0, spacing)
+        .map(time => time === t ? cursorEnd : cursorAt(time, viewAt(time))).filter(Boolean).map(cursor => ({ ...cursor, opacity: 1 - lit }));
       const shownNow = shownTabs.at(t).filter(({ tab }) => pages.has(tab)).flatMap((shownTab, i) => {
         const w = windowOf(shownTab, source, i === 0 || shownTab.popup);
         return (windows ? desktopWindows(w, source) : [w]).map(each => masked(each, shownTab.tab, maskedNow));

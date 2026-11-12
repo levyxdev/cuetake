@@ -167,7 +167,8 @@ export function clockOf({ startedAt, voiced = null }, { focus: focusTargets, sai
 /**
  * Timed, viewport-aligned interactions shared by all scenarios, moving like a person (see motion.js).
  * `tabs` are the Tabs Capture follows (follow-tabs.js); the Director acts only on the one in front.
- * `notes` collects the camera's focus targets and `wide` windows, where each Line starts (`said`),
+ * `notes` collects the camera's focus targets and `wide` windows, each scroll (`scrolls`, { t, end }),
+ * where each Line starts (`said`),
  * each fast-forwarded wait (`forwarded`) and the pointer path no Tab could see (`pointer`, as
  * [epoch ms, x, y, tab]), and each element masked (`elements`, { id, tab, name }) with its mask
  * (`masks`). `voiced` maps the Narration's Line ids to their audio's seconds, or is null
@@ -175,8 +176,8 @@ export function clockOf({ startedAt, voiced = null }, { focus: focusTargets, sai
  * equally human ways to move. `signal` aborts once the Scenario has run, when masks stop following.
  */
 export function createDirector(tabs, { startedAt, fps, voiced = null, speed = 1, seed = 1, signal }, notes) {
-  const { wide: wideWindows, pointer, elements = [], masks = [] } = notes;
-  Object.assign(notes, { elements, masks });
+  const { wide: wideWindows, pointer, elements = [], masks = [], scrolls = [] } = notes;
+  Object.assign(notes, { elements, masks, scrolls });
   let cursor = { x: 0, y: 0, tab: tabs.front.id };
   const rand = random(seed);
   const clock = clockOf({ startedAt, voiced }, notes, () => tabs.front.id), { wait, time, focus, fastForward, say } = clock;
@@ -369,7 +370,7 @@ export function createDirector(tabs, { startedAt, fps, voiced = null, speed = 1,
   async function scroll(locator, opts) {
     const { duration, block = 'start', inline = 'nearest' } = options(opts, 'duration');
     for (const [name, value] of [['block', block], ['inline', inline]]) if (!ALIGNS.includes(value)) throw new Error(`d.scroll needs ${name} ${ALIGNS.map(a => `'${a}'`).join(', ')}, not '${value}'`);
-    const target = await located(locator, 'Scroll'), times = new Map();
+    const target = await located(locator, 'Scroll'), times = new Map(), start = time();
     let first = true;
     for (;;) {
       const { map, steps } = await scrollSteps(target, block, inline);
@@ -389,7 +390,11 @@ export function createDirector(tabs, { startedAt, fps, voiced = null, speed = 1,
         throw new Error(`Scroll moved nothing: a wheel at (${Math.round(cursor.x)}, ${Math.round(cursor.y)}) did not scroll ${step.name}; the page may take the wheel itself, or something lies over it`);
       }
     }
-    if (!first) await pause('afterScroll');
+    if (!first) {
+      // The camera goes wide before the page moves and stays wide until it stops (camera.js).
+      scrolls.push({ t: start, end: time() });
+      await pause('afterScroll');
+    }
     const box = await boxOnPage(target), { viewport } = tabs.front;
     if (!box || box.x + box.width <= 0 || box.y + box.height <= 0 || box.x >= viewport.width || box.y >= viewport.height) {
       throw new Error('Scroll could not bring the target into view; if it is inside an iframe, scroll the iframe into view first with d.scroll(d.page.locator(\'iframe\'))');

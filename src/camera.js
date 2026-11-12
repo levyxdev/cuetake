@@ -31,20 +31,28 @@ export function cropAround(x, y, zoom, viewport) {
  * its typing ends); targets whose windows touch or sit within `chainGap` share one segment. Segments
  * stop `endWide` before the Final ends, and targets that would barely zoom (below `minZoom`) stay wide.
  * A segment's zoom is the closest that fits all its targets, so the camera never zooms within one.
- * No segment spans one of the `cuts`, the times the camera cuts to wide.
+ * No segment spans one of the `cuts`, the times the camera cuts to wide, or one of the `scrolls`
+ * ({ start, end }): the camera is back wide `response` before a scroll starts and stays wide until it
+ * ends, so the page never moves under a zoom.
  */
-export function zoomSegments(targets, viewport, camera, duration, cuts = []) {
-  const { lead, hold, chainGap, minZoom, endWide } = camera;
+export function zoomSegments(targets, viewport, camera, duration, cuts = [], scrolls = []) {
+  const { lead, hold, chainGap, minZoom, endWide, response = 0 } = camera;
   const last = duration - endWide;
   const cutBefore = t => cuts.findLast(cut => cut <= t) ?? -Infinity;
+  // Targets between the same cuts and scrolls may share a segment; a scroll's span belongs to none.
+  const period = t => `${cutBefore(t)}/${scrolls.filter(s => s.start - response <= t).length}`;
   const segments = [];
   for (const target of targets.toSorted((a, b) => a.t - b.t)) {
     const zoom = target.zoom ?? fitZoom(target.box, viewport, camera);
     if (zoom < minZoom || target.t - lead >= last) continue;
     const shot = { t: target.t, box: target.box, zoom };
-    const start = Math.max(0, target.t - lead, cutBefore(target.t)), end = Math.min(last, cuts.find(cut => cut > target.t) ?? Infinity, Math.max(target.t, target.until ?? target.t) + hold);
+    const scrolledBefore = scrolls.findLast(s => s.start - response <= target.t)?.end ?? -Infinity;
+    const nextScroll = scrolls.find(s => s.start - response > target.t);
+    const start = Math.max(0, target.t - lead, cutBefore(target.t), scrolledBefore);
+    const end = Math.min(last, cuts.find(cut => cut > target.t) ?? Infinity, nextScroll ? nextScroll.start - response : Infinity, Math.max(target.t, target.until ?? target.t) + hold);
+    if (end <= start) continue;
     const segment = segments.at(-1);
-    if (segment && start - segment.end <= chainGap && cutBefore(segment.shots[0].t) === cutBefore(target.t)) {
+    if (segment && start - segment.end <= chainGap && period(segment.shots[0].t) === period(target.t)) {
       segment.shots.push(shot);
       segment.end = Math.max(segment.end, end);
       segment.zoom = Math.min(segment.zoom, zoom);
@@ -93,8 +101,8 @@ export function intents(segments, viewport, camera, pointerAt) {
  * springs in series on center and log-zoom, which ease each move in and out and settle in about
  * `response` seconds. At each of the `cuts` the camera is wide at once.
  */
-export function cameraTrack({ targets, viewport, camera, duration, fps, pointerAt, cuts = [] }) {
-  const intentAt = intents(zoomSegments(targets, viewport, camera, duration, cuts), viewport, camera, pointerAt);
+export function cameraTrack({ targets, viewport, camera, duration, fps, pointerAt, cuts = [], scrolls = [] }) {
+  const intentAt = intents(zoomSegments(targets, viewport, camera, duration, cuts, scrolls), viewport, camera, pointerAt);
   // The pair settles about as fast as one spring with omega 4 / response.
   const omega = 6.8 / camera.response, steps = 4, dt = 1 / (fps * steps);
   const start = intentAt(0);

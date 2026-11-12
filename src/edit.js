@@ -59,7 +59,7 @@ export function merge(base, over) {
 
 /** A complete Edit: the defaults under whatever `edit` names. */
 export function withDefaults(edit) {
-  return merge({ schemaVersion: EDIT_VERSION, ...DEFAULT_STYLE, output: { ...DEFAULT_STYLE.output, fps: 60 }, camera: { ...DEFAULT_STYLE.camera, targets: [] }, tabs: { ...DEFAULT_STYLE.tabs, placement: [] }, shortcuts: [], fastForward: [], masks: [], narration: { volume: 1, lines: [] } }, edit);
+  return merge({ schemaVersion: EDIT_VERSION, ...DEFAULT_STYLE, output: { ...DEFAULT_STYLE.output, fps: 60 }, camera: { ...DEFAULT_STYLE.camera, targets: [], scrolls: [] }, tabs: { ...DEFAULT_STYLE.tabs, placement: [] }, shortcuts: [], fastForward: [], masks: [], narration: { volume: 1, lines: [] } }, edit);
 }
 
 // Seconds after a click within which the App's focus moving to what holds its target counts as the click's.
@@ -138,7 +138,7 @@ export function createEdit(config, timeline, focus, wide = []) {
     // The browser chrome shows the host the page is on, unless the config names something else. A Take
     // of Apps shows the App's own windows, without chrome, unless the config names one (ADR 0009).
     frame: config.app ? { chrome: false, ...config.frame } : { ...config.frame, ...addressBar(config, timeline) },
-    camera: { ...config.camera, targets: cameraTargets(timeline, focus, wide, config.camera) }, tabs: config.tabs,
+    camera: { ...config.camera, targets: cameraTargets(timeline, focus, wide, config.camera), scrolls: timeline.events.filter(event => event.type === 'scroll').map(({ t, end }) => ({ start: t, end })) }, tabs: config.tabs,
     shortcuts: timeline.events.filter(event => event.type === 'shortcut').map(({ t, keys }) => ({ t, keys })),
     fastForward: timeline.events.filter(event => event.type === 'fastForward').map(({ t, end, rate }) => ({ start: t, end, rate })),
     masks: timeline.events.filter(event => event.type === 'mask').map(({ type, t, end, effect, element, ...params }) => ({ effect, element, start: t, ...(end !== null && end !== undefined && { end }), ...params })),
