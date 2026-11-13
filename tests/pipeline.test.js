@@ -14,6 +14,7 @@ import { exposure, moments, cropAt, shutterOf } from '../src/shutter.js';
 import { lookFromEdit, applyLook, mergeLook, summarize, saveLook, loadLook, listLooks, removeLook, resolvedLook } from '../src/look.js';
 import { bundle, codeRefs, forRender, BUILTIN_DIR } from '../src/styles.js';
 import { npxFolders, uninstall } from '../src/uninstall.js';
+import { serveRange } from '../src/render.js';
 import { subtitleRows, subtitleCues, lineProblems, toSrt, toVtt } from '../src/narration.js';
 import { shortcutKeys, keycapShows, keycapTrack } from '../src/shortcuts.js';
 import { timeMap, fastForwardProblems, retimed, linesInFinal, badgeAt } from '../src/time-map.js';
@@ -1746,4 +1747,31 @@ test('record reports the Apps it left running, and refuses --use-running for a p
   const dir = await tmp('cuetake-use-running-');
   await fs.writeFile(join(dir, 'page.mjs'), "export const config = { name: 'page', url: 'https://example.test/' };\nexport async function run() {}\n");
   await expect(recordScenario(join(dir, 'page.mjs'), join(dir, 'take'), { useRunning: true })).rejects.toThrow('--use-running is for Apps');
+});
+
+test('a file is served to the render page in bounded parts, so a long Source or Final never crosses Playwright at once', async () => {
+  const dir = await tmp('cuetake-range-');
+  const path = join(dir, 'final.mp4');
+  const size = 9 * 1024 * 1024 + 5;
+  const bytes = Buffer.alloc(size);
+  for (let i = 0; i < size; i += 4096) bytes[i] = (i / 4096) % 251;
+  await fs.writeFile(path, bytes);
+  const served = async range => {
+    let answer;
+    await serveRange({ request: () => ({ headers: () => (range ? { range } : {}) }), fulfill: async a => { answer = a; } }, path);
+    return answer;
+  };
+  // An open-ended range gets the first 8 MB and says where it stops, so the reader asks again from there.
+  const first = await served('bytes=0-');
+  expect(first.status).toBe(206);
+  expect(first.headers['content-range']).toBe(`bytes 0-8388607/${size}`);
+  expect(first.body.equals(bytes.subarray(0, 8388608))).toBe(true);
+  const rest = await served('bytes=8388608-');
+  expect(rest.headers['content-range']).toBe(`bytes 8388608-${size - 1}/${size}`);
+  expect(rest.body.equals(bytes.subarray(8388608))).toBe(true);
+  // A bounded range is answered as asked; a request without one, such as a Line's audio, gets the whole file.
+  expect((await served('bytes=100-199')).headers['content-range']).toBe(`bytes 100-199/${size}`);
+  const whole = await served(null);
+  expect(whole.status).toBe(200);
+  expect(whole.body.equals(bytes)).toBe(true);
 });

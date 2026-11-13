@@ -30,11 +30,16 @@ const pageFiles = {
   '/mediabunny.js': { path: mediabunnyBundle, type: 'text/javascript' },
 };
 
-async function serveRange(route, path) {
+// A range reader such as Mediabunny's UrlSource asks for `bytes=N-`; answering with the rest of a long
+// Source or Final at once sends hundreds of MB through one Playwright message and takes the browser down.
+const RANGE_CHUNK = 8 * 1024 * 1024;
+
+/** Answers `route` from the file at `path`: a range with at most RANGE_CHUNK bytes, a plain request with the whole file. */
+export async function serveRange(route, path) {
   const { size } = await fs.stat(path);
   const match = /bytes=(\d+)-(\d*)/.exec(route.request().headers().range ?? '');
   const start = match ? Number(match[1]) : 0;
-  const end = match && match[2] ? Math.min(Number(match[2]), size - 1) : size - 1;
+  const end = match ? Math.min(match[2] ? Number(match[2]) : size - 1, start + RANGE_CHUNK - 1, size - 1) : size - 1;
   const handle = await fs.open(path);
   try {
     const body = Buffer.alloc(end - start + 1);
