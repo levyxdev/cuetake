@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { isPopup } from './tabs.js';
+import { SETTLE } from './cursor.js';
 
 /**
  * An Edit holds every choice Render makes; a Scenario's config only seeds the first one. Styling is
@@ -14,9 +15,10 @@ export const evenSize = z.number().int().min(240).max(7680).refine(n => n % 2 ==
 
 /** Times are seconds except clickEffect.duration, which is milliseconds; geometry is CSS pixels. */
 export const DEFAULT_STYLE = {
-  // The Cursor shrinks to `press` while a button is held; `false` turns that off. A click shows on the
-  // Cursor, so no click effect is drawn unless named.
-  cursor: { draw: 'arrow', size: 24, color: '#ffffff', press: 0.8 },
+  // The Cursor shrinks to `press` while a button is held; `false` turns that off. It takes a shape only
+  // once the page has asked for it `settle` seconds or at a press; 0 shows every shape. A click shows on
+  // the Cursor, so no click effect is drawn unless named.
+  cursor: { draw: 'arrow', size: 24, color: '#ffffff', press: 0.8, settle: SETTLE },
   clickEffect: false,
   // quality is the H.264 quantizer (lower is sharper and larger). shutter is the fraction of each
   // frame over which the camera and the Cursor blur as they move (shutter.js); 0 turns blur off.

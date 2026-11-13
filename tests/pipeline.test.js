@@ -627,9 +627,31 @@ test('the Cursor track puts point, press and shape together, is hidden before th
   expect(track.at(30)).toEqual({ x: 30, y: 40, scale: 1, shape: 'text' });
 });
 
+// A move from 0 to 1 s across a list of links and text to an arrow, with the shapes the page asked for on the way.
+const passOver = { pointer: [[0, 0, 0], [1, 500, 0]], shapes: [[0, 'default'], [0.2, 'pointer'], [0.26, 'text'], [0.3, 'pointer'], [0.38, 'default'], [0.6, 'pointer'], [0.7, 'default']], events: [] };
+
+test('a Cursor passing over links keeps its shape, unless the Edit settles at 0', () => {
+  const track = cursorTrack(passOver, { press: 0.8 });
+  for (const t of [0.1, 0.22, 0.28, 0.35, 0.5, 0.65, 0.9]) expect(track.at(t).shape).toBe('default');
+  expect(cursorTrack(passOver, { press: 0.8, settle: 0 }).at(0.22).shape).toBe('pointer');
+});
+
+test('a Cursor resting on a link shows the hand from its arrival, and a press shows the shape the page asked for', () => {
+  const rest = cursorTrack({ ...passOver, shapes: passOver.shapes.slice(0, -1) }, { press: 0.8 });
+  expect(rest.at(0.65).shape).toBe('pointer');
+  expect(rest.at(3).shape).toBe('pointer');
+  const click = cursorTrack({ ...passOver, events: [{ type: 'click', t: 0.62, end: 0.66 }] }, { press: 0.8 });
+  expect(click.at(0.6).shape).toBe('pointer');
+  expect(click.at(0.62).shape).toBe('pointer');
+  expect(click.at(0.22).shape).toBe('default');
+  // The page may ask for the hand just after the button goes down, and stop asking as the click navigates.
+  const late = cursorTrack({ ...passOver, shapes: [[0, 'default'], [0.63, 'pointer'], [0.67, 'default']], events: [{ type: 'click', t: 0.6, end: 0.7 }] }, { press: 0.8 });
+  expect(late.at(0.65).shape).toBe('pointer');
+});
+
 test('the default Edit shows clicks on the Cursor, without a click effect', () => {
   expect(DEFAULT_STYLE.clickEffect).toBe(false);
-  expect(DEFAULT_STYLE.cursor).toEqual({ draw: 'arrow', size: 24, color: '#ffffff', press: 0.8 });
+  expect(DEFAULT_STYLE.cursor).toEqual({ draw: 'arrow', size: 24, color: '#ffffff', press: 0.8, settle: 0.15 });
 });
 
 test('clicks and drag starts spark for the click effect duration', () => {
@@ -911,7 +933,7 @@ test('adopting a Look keeps camera targets, the frame rate and the address bar',
   expect(next.output).toMatchObject({ width: 1080, height: 1920, fps: 30, quality: 22 });
   expect(next.camera.targets).toEqual(edit.camera.targets);
   // Changing an item's parameters merges; naming a new drawing replaces the item.
-  expect(applyLook(edit, { cursor: { size: 40 } }).cursor).toEqual({ draw: 'arrow', size: 40, color: '#ffffff', press: 0.8 });
+  expect(applyLook(edit, { cursor: { size: 40 } }).cursor).toEqual({ draw: 'arrow', size: 40, color: '#ffffff', press: 0.8, settle: 0.15 });
   expect(applyLook(edit, { cursor: { image: 'hand.png', hotspot: [4, 2] } }).cursor).toEqual({ image: 'hand.png', hotspot: [4, 2] });
   expect(edit.clickEffect).toBe(false);
   expect(applyLook(edit, { clickEffect: { draw: 'spark' } }).clickEffect).toEqual({ draw: 'spark' });

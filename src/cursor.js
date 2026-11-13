@@ -68,17 +68,37 @@ const ALIASES = {
 /** The shape a cursor drawing `drawn` (a Set of names) shows for `keyword`: itself, its alias, or `default`. */
 export const drawnShape = (keyword, drawn) => drawn.has(keyword) ? keyword : drawn.has(ALIASES[keyword]) ? ALIASES[keyword] : 'default';
 
+// Seconds a shape must be asked for before the Cursor takes it. The Edit's default, also used when its cursor
+// item has no `settle`: an item naming its own drawing, and any Edit written before `settle`, replace the default item.
+export const SETTLE = 0.15;
+
 /**
- * The Cursor through a Take: `at(t)` gives its point, scale and the shape the page asked for,
- * or null before the first pointer sample. `cursor` is the Edit's cursor item.
+ * The shapes the Cursor shows: each the page asked for at least `settle` seconds, or while a button was held
+ * (`spans`), from the moment it was asked; a shorter one, asked only while the Cursor passed over, keeps the
+ * shape before it.
+ */
+function settledShapes(shapes, spans, settle) {
+  if (!(settle > 0)) return shapes;
+  const shown = [];
+  shapes.forEach(([t, shape], i) => {
+    const end = shapes[i + 1]?.[0] ?? Infinity;
+    const keep = end - t >= settle || spans.some(span => span.t < end && span.end >= t);
+    if (keep && shape !== (shown.at(-1)?.[1] ?? 'default')) shown.push([t, shape]);
+  });
+  return shown;
+}
+
+/**
+ * The Cursor through a Take: `at(t)` gives its point, scale and the shape it shows, or null before
+ * the first pointer sample. `cursor` is the Edit's cursor item.
  */
 export function cursorTrack({ pointer, shapes = [], events }, cursor) {
-  const spans = heldSpans(events);
+  const spans = heldSpans(events), shown = settledShapes(shapes, spans, cursor.settle ?? SETTLE);
   return {
     at(t) {
       const point = pointerAt(pointer, t);
       if (!point) return null;
-      return { ...point, scale: pressScale(spans, cursor.press, t), shape: shapeAt(shapes, t) };
+      return { ...point, scale: pressScale(spans, cursor.press, t), shape: shapeAt(shown, t) };
     },
   };
 }

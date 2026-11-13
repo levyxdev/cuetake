@@ -69,7 +69,7 @@ What fills the Final around the window: a list of image and shader layers, each 
 _Avoid_: backdrop, wallpaper, gradient
 
 **Cursor**:
-The pointer Render draws over the page or Desktop, following the Timeline's pointer path, in the shape the page or macOS showed at each moment, pressed while a button is held.
+The pointer Render draws over the page or Desktop, following the Timeline's pointer path, in the shape the page or macOS showed once it settled, so passing over links and text keeps the shape before, pressed while a button is held.
 _Avoid_: mouse, pointer sprite
 
 **Look**:
