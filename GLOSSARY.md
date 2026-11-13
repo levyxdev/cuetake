@@ -46,6 +46,10 @@ _Avoid_: event log, camera events
 A key or combination pressed outside a text field, or with Control, Alt or Meta held inside one, which the Final shows as keycaps, a key pressed alone only when the Edit asks; typing into a field is not one, since the page already shows it.
 _Avoid_: hotkey, keystroke, key event
 
+**Home**:
+Where CueTake keeps Scenarios, Takes and Looks: a project's own, when the skill that ran is installed in that project, otherwise the user's, shared by every project.
+_Avoid_: workspace, data dir, storage
+
 **Auth profile**:
 A saved, named login state that a Take of a web page can start from, so login never happens on camera. A Take of an App starts with the login the App already has.
 _Avoid_: session, cookies, login state
@@ -73,7 +77,7 @@ The pointer Render draws over the page or Desktop, following the Timeline's poin
 _Avoid_: mouse, pointer sprite
 
 **Look**:
-A named, reusable set of the Edit choices that do not depend on one Take (frame styling, how Tabs switch, cursor, click effects, keycap styling, Subtitle styling, output size and quality, camera behavior), with the files they name, that a new or existing Take can adopt. A Look is saved locally, for the directory CueTake runs in, or globally, for every directory; a local Look hides a global one with the same name.
+A named, reusable set of the Edit choices that do not depend on one Take (frame styling, how Tabs switch, cursor, click effects, keycap styling, Subtitle styling, output size and quality, camera behavior), with the files they name, that a new or existing Take can adopt. A Look is saved in a Home; one in a project's Home hides one with the same name in the user's.
 _Avoid_: style, theme, preset
 
 **Preview**:

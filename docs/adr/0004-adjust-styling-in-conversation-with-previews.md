@@ -11,4 +11,4 @@ The user never operates styling controls. They tell the agent what they want; th
 ## Consequences
 
 - A Preview composes stills without encoding, so styling iterations take seconds; the Final is rendered once, after the user approves.
-- Chosen styling is reused as Looks, saved locally (the directory CueTake runs in) or globally. Looks are not stored in the skill's folder: skill installers replace that folder on upgrade, its location differs per agent, and the CLI launched through `npx` cannot know it.
+- Chosen styling is reused as Looks, saved in a project's Home or the user's (ADR 0011). Looks are not stored in the skill's folder: skill installers replace that folder on upgrade.
