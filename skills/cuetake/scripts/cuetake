@@ -9,4 +9,4 @@ root=${agent%/*}
 case ${skills##*/}/${agent##*/} in
   skills/.*) if [ -z "${CUETAKE_HOME:-}" ] && [ -n "$root" ] && [ "$root" != "$(cd -- "$HOME" && pwd)" ]; then export CUETAKE_HOME="$root/.cuetake"; fi ;;
 esac
-exec ${CUETAKE_BIN:-npx -y cuetake@0.5.0} "$@"
+exec ${CUETAKE_BIN:-npx -y cuetake@0.6.0} "$@"
