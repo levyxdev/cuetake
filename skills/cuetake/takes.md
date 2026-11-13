@@ -3,7 +3,7 @@
 Read this after `record` finishes, to find a file in a Take or to change a Take without recording again. What happens on the page is fixed at Capture; changing it means writing the Scenario again ([scenarios.md](scenarios.md)).
 
 ```text
-<output>/<scenario>/<take>/
+<home>/takes/<scenario>/<take>/   or the --out directory
   project.json       Scenario config, status, application evidence, duration
   scenario.mjs       Snapshot of the original scenario module
   source-<tab>.webm  Source of each Tab (0 is the first page): original high-resolution VP9 capture; a Take of an App has source-0.mp4, its Desktop in H.264
@@ -20,7 +20,7 @@ Read this after `record` finishes, to find a file in a Take or to change a Take 
   verification.json Output metadata, decode result, capture observations per Tab, and warnings when the browser fell behind, iframe input could not be placed exactly, a Mask found no element, or, for an App, someone used the Mac during the Take
 ```
 
-A copied scenario snapshot may import helper modules from its original project. It is a record of the scenario, not a bundled runnable archive. Keep business scenarios in their application repository.
+A copied scenario snapshot may import helper modules from its original project. It is a record of the scenario, not a bundled runnable archive. The Scenario itself stays in the Home's `scenarios/` folder.
 
 Times in `edit.json` and `timeline.json` are Source seconds, from the start of Capture; a fast-forward only changes when they happen in the Final. To edit a completed take, change `edit.json` (camera settings, target boxes and times, fast-forwards, Masks, the Shortcuts shown as `shortcuts: [{ "t": 2.4, "keys": ["Meta", "K"] }]`, and the styling in [styling.md](styling.md)), then run `cuetake render <take>`. To compare styling first, run `cuetake preview <take> --look <name|file.json>...`, which composes stills without touching `edit.json` or the Final. A Look is a partial Edit holding any styling and camera settings, but not camera targets, Shortcuts, fast-forwards, Masks, `frame.url`, `frame.urls`, `tabs.placement` or `output.fps`. `cuetake look apply` merges one into `edit.json`, and `cuetake record --look` seeds a new take's Edit with it under the Scenario config. The Scenario config only seeds the first Edit. Changing what happens on the page requires recording again. `render` automatically runs verification; `verify` checks without rendering.
 

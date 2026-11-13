@@ -36,9 +36,10 @@ A Narration is voiced before Capture by a separate speech tool (ADR 0006). The D
 - `masks.js`: which Masks show at each moment, where their element's boxes are, and what stops one from being drawn; shared by Node and the render page.
 - `time-map.js`: the map between Final and Source time that fast-forwards make, and what moves to Final time; shared by Node and the render page.
 - `styles.js` / `styles/`: built-in styling files, and the file refs an Edit or Look names (copying, serving).
-- `look.js`: saving, listing and adopting Looks.
+- `home.js`: the Home, where Scenarios, Takes and Looks live: `CUETAKE_HOME`, which the skill's launcher sets for a skill installed in a project, else the user Home (ADR 0011).
+- `look.js`: saving, listing and adopting Looks, in the Home and then the user Home.
 - `environment.js`: `doctor`, `install-browser`, and removing the browser.
-- `uninstall.js`: the `uninstall` command; it removes only what CueTake owns.
+- `uninstall.js`: the `uninstall` command; it removes only what CueTake owns, and the user Home's files only when asked.
 - `render.js` / `render-page.js`: the Render driver and the in-browser compositor, encoder and inspector.
 - `probe.js`: Timeline recording in every frame of the page, and placing each frame's input in top-level CSS pixels.
 - `frames.js`: where an iframe's content shows in its parent, where a frame shows on the page, and an element's box on the page through all its iframes; the probe and the Director both measure with it.

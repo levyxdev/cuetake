@@ -5,14 +5,14 @@ description: Record product demo videos of web pages and macOS Apps with the Cue
 
 # CueTake agent operating manual
 
-CueTake is a local execution engine for AI agents. You direct the story; CueTake captures the browser, or a desktop App on macOS, and renders the finished take. Run every command through `scripts/cuetake` in this skill's folder; it launches the pinned CueTake version with `npx`. Read [scenarios.md](scenarios.md) and [directing.md](directing.md) when writing a scenario, [takes.md](takes.md) when finding a file in a recorded Take or changing one, [narration.md](narration.md) when a demo needs a voice or subtitles, [styling.md](styling.md) when changing how a Final looks, [authentication.md](authentication.md) when a page needs login, and [setup.md](setup.md) when Node or `npx` is missing, `doctor` reports a failed check, or the user wants CueTake removed.
+CueTake is a local execution engine for AI agents. You direct the story; CueTake captures the browser, or a desktop App on macOS, and renders the finished take. Run every command through `scripts/cuetake` in this skill's folder; it launches the pinned CueTake version with `npx`. Read [scenarios.md](scenarios.md) and [directing.md](directing.md) when writing a scenario, [takes.md](takes.md) when finding a file in a recorded Take or changing one, [narration.md](narration.md) when a demo needs a voice or subtitles, [styling.md](styling.md) when changing how a Final looks, [authentication.md](authentication.md) when a page needs login, and [setup.md](setup.md) when Node or `npx` is missing, `doctor` reports a failed check, the user asks how to install CueTake or where its files live, or wants it removed.
 
 ## Workflow
 
 1. Infer the audience, demonstrated outcome, duration and framing from the request. Inspect the actual page with the available browser tool, or the App with `cuetake tree` ([scenarios.md](scenarios.md), Apps); use real locators and measured coordinates.
 2. Run `doctor`. If it fails, follow [setup.md](setup.md): nothing installs without the user's agreement. This does not start the application's dev server.
-3. Write a trusted `.mjs` scenario in the business project. `prepare(page)` loads examples/assets before capture. `run(d)` performs the demo, paced and framed as [directing.md](directing.md) describes, and returns evidence of the demonstrated changes. Never embed credentials or copied browser state in a scenario. When the page shows a real account's data (emails, names, amounts, keys), mask it with `d.mask` before the Director first waits ([scenarios.md](scenarios.md), Masks).
-4. Run `record` with the scenario path and a new Take directory. It captures, renders and verifies in the foreground, then prints the verification report; a failure exits non-zero. Capture lasts as long as the scenario and Render adds its own time, so run it in the background when your shell would time out.
+3. Run `home` once: it prints the Home, where this skill keeps Scenarios, Takes and Looks. Write a trusted `.mjs` scenario in its `scenarios/` folder, unless the user names another place. `prepare(page)` loads examples/assets before capture. `run(d)` performs the demo, paced and framed as [directing.md](directing.md) describes, and returns evidence of the demonstrated changes. Never embed credentials or copied browser state in a scenario. When the page shows a real account's data (emails, names, amounts, keys), mask it with `d.mask` before the Director first waits ([scenarios.md](scenarios.md), Masks).
+4. Run `record` with the scenario path. It makes the Take in the Home's `takes/` folder; pass `--out <new-take-directory>` only when the user names a place. It captures, renders and verifies in the foreground, then prints the verification report; a failure exits non-zero. Capture lasts as long as the scenario and Render adds its own time, so run it in the background when your shell would time out.
 5. Read the verification report and the application evidence. A `warnings` entry means the browser fell behind during Capture and the page in the Final jumps, that input inside an iframe could not be placed exactly, or that a Mask found no element; follow its fix and record again, or tell the user when it says nothing more can be done. When the Take shows a real account, view a frame with `frame <take> <seconds>` at each moment its data is on screen and confirm the Masks cover it; add a fixed Mask to `edit.json` and render again rather than recording again ([takes.md](takes.md)). Deliver the absolute final path and relevant limitations. When the user reports a problem in the Final, view the frames around it with `frame` before changing anything. Technical verification is not editorial approval or authorization to publish.
 
 Cursor, click effect, camera and output all live in the Edit, so restyling never requires recording again ([takes.md](takes.md)). How the cursor moves is decided at Capture: when the user finds it too fast, too slow or wants it to feel different, change `director.speed` or `director.seed` in the Scenario config and record again ([scenarios.md](scenarios.md)).
@@ -27,16 +27,16 @@ The user never edits files or runs these commands; they say what they want and y
 2. Run `preview <take> --look <file-or-name>...` and show the user `preview.png`. It puts the current Edit, labeled `current`, beside each candidate, composed by the same compositor as the Final, in seconds. By default it shows the last moment with the camera wide, so the frame is visible; add `--at <seconds>` (seconds of the Final) to see the real Final moment with camera, cursor and click effect.
 3. Ask them to pick or comment, then adjust and preview again. Do not render between iterations.
 4. When they are happy, run `look apply <file-or-name> <take>` (or edit `edit.json`), then `render`.
-5. Ask once whether to save the styling as a Look and what to call it, then run `look save <name> <take>`. It saves locally, in `.cuetake/looks` of the directory you run in, which can be committed with the business project; add `--global` only when they want it in every project. If the name exists, ask before passing `--replace`. Tell them how to reuse it: next time they can just ask for a recording "with <name>", and you pass `--look <name>` to `record`.
+5. Ask once whether to save the styling as a Look and what to call it, then run `look save <name> <take>`. It saves in the Home: a project's, which can be committed with the project, when this skill is installed in one; add `--global` only when they want it in every project, which saves it in the user Home. If the name exists, ask before passing `--replace`. Tell them how to reuse it: next time they can just ask for a recording "with <name>", and you pass `--look <name>` to `record`.
 
-When the user asks what styles they have, run `look list`: it shows each Look's scope, a one-line summary and the code files it runs, and marks a global Look hidden by a local one with the same name. A Look holds all styling (frame, cursor, click effect, output, camera settings) with the files it names; never camera targets, Masks, the address bar's url and its changes, or the frame rate, which belong to one take. With `record --look`, fields the Scenario config names still win.
+When the user asks what styles they have, run `look list`: it shows each Look's scope, a one-line summary and the code files it runs, and marks a user Look hidden by a project one with the same name. A Look holds all styling (frame, cursor, click effect, output, camera settings) with the files it names; never camera targets, Masks, the address bar's url and its changes, or the frame rate, which belong to one take. With `record --look`, fields the Scenario config names still win.
 
 A Look you did not write in this conversation, such as one shared with the user, runs its code during Preview and Render. Read each file `look list` names, tell the user in a sentence what it draws, and ask before using it if the code sends page pixels anywhere or loads anything remote.
 
 ## Division of responsibility
 
 - Skill: story, pacing, discovery, authorization boundaries, quality judgment, and tool usage.
-- Scenario: site-specific selectors, actions and assertions. Store it in the business project.
+- Scenario: site-specific selectors, actions and assertions. Store it in the Home's `scenarios/` folder.
 - CLI: recording, cursor/click effects, camera math, auth-state loading, output files and verification. Do not duplicate the engine under skill scripts.
 
 ## Login
@@ -52,8 +52,9 @@ Reuse a named auth profile when the user has authorized that account for the dem
 ```sh
 <skill>/scripts/cuetake doctor
 <skill>/scripts/cuetake install-browser
-<skill>/scripts/cuetake uninstall [--auth] [--looks] [--dry-run]
-<skill>/scripts/cuetake record <scenario.mjs> --out <new-take-directory> [--auth-profile product-demo] [--look brand] [--narration narration.json] [--headed] [--use-running]
+<skill>/scripts/cuetake home
+<skill>/scripts/cuetake uninstall [--auth] [--looks] [--takes] [--scenarios] [--dry-run]
+<skill>/scripts/cuetake record <scenario.mjs> [--out <new-take-directory>] [--auth-profile product-demo] [--look brand] [--narration narration.json] [--headed] [--use-running]
 <skill>/scripts/cuetake tree <app>
 <skill>/scripts/cuetake narrate import <take-directory> narration.json
 <skill>/scripts/cuetake preview <take-directory> [--look brand --look ./ocean.json] [--at 2.5]

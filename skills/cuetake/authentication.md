@@ -6,7 +6,7 @@ The default recorder launches an isolated browser context. It does not inherit t
 
 1. `cuetake login product-demo https://your-app.example/login` opens a separate headed browser. No recording starts. Run it in the background; it exits when the window closes.
 2. The user completes login, including SSO/2FA, then closes the window. The command saves the state it last read and prints `saved: true`.
-3. Record with `cuetake record <scenario.mjs> --out <new-take-directory> --auth-profile product-demo`.
+3. Record with `cuetake record <scenario.mjs> --auth-profile product-demo`.
 4. In the scenario's `prepare`, wait for a reliable authenticated anchor. If it is absent or the site redirects to login, fail before capture and renew the profile.
 
 The state loader uses Playwright `storageState`, including cookies, localStorage, and IndexedDB. See [Playwright authentication](https://playwright.dev/docs/auth).

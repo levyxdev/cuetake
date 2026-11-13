@@ -15,6 +15,7 @@ import { desktopWarnings } from './desktop.js';
 import { collectTimeline } from './probe.js';
 import { createEdit, evenSize, merge, withDefaults } from './edit.js';
 import { loadLook, resolvedLook, applyLook, lookFromEdit, saveLook, summarize } from './look.js';
+import { ensureHome } from './home.js';
 import { absolute, bundle, forRender } from './styles.js';
 import { burnsIn, cuesFor, isCjk, lineProblems, toSrt, toVtt } from './narration.js';
 import { linesInFinal, timeMap } from './time-map.js';
@@ -273,7 +274,7 @@ export async function recordScenario(scenarioPath, outputDir, options = {}) {
   const gpu = ready.checks.find(check => check.name === 'gpu');
   const { resolutionScale, lowered } = config.app ? { resolutionScale: config.capture.resolutionScale, lowered: false } : captureScale(given.capture?.resolutionScale, gpu);
   config.capture.resolutionScale = resolutionScale;
-  const dir = resolve(outputDir || join('recordings', config.name, new Date().toISOString().replace(/[:.]/g, '-')));
+  const dir = resolve(outputDir || join(await ensureHome(), 'takes', config.name, new Date().toISOString().replace(/[:.]/g, '-')));
   await fs.mkdir(resolve(dir, '..'), { recursive: true });
   await fs.mkdir(dir); // EEXIST is intentional, including for empty existing folders.
   let project = { schemaVersion: SCHEMA_VERSION, tool: 'CueTake', version: pkg.version, createdAt: new Date().toISOString(), status: 'recording', authenticated: Boolean(authState), ...(look && { look: look.name }), config };
@@ -384,7 +385,7 @@ export async function applyLookToTake(ref, directory) {
   return { look: look.name, edit: join(dir, 'edit.json'), summary: summarize(lookFromEdit(next)), next: `cuetake render ${dir}` };
 }
 
-/** Saves the Take's styling as a Look, locally unless `global`. */
+/** Saves the Take's styling as a Look in the Home, or the user Home when `global`. */
 export async function saveLookFromTake(name, directory, options) {
   const dir = resolve(directory), { edit } = await loadTake(dir);
   return saveLook(name, lookFromEdit(edit), { ...options, from: dir });

@@ -18,7 +18,7 @@ export async function startRecording(url, options = {}) {
     headless: !options.headed, channel: 'chromium',
     args: [...captureArgs, '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', ...(options.headed ? [] : [`--force-device-scale-factor=${resolutionScale}`])],
   });
-  const outputDir = options.outputDir || './recordings';
+  const { outputDir } = options;
   await mkdir(outputDir, { recursive: true });
   const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: resolutionScale, ...(options.storageState ? { storageState: options.storageState } : {}) });
   const sessionId = randomUUID().slice(0, 8);

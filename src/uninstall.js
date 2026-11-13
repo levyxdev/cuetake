@@ -3,7 +3,8 @@ import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { authProfileFiles } from './auth.js';
-import { globalLookFiles } from './look.js';
+import { userLookFiles } from './look.js';
+import { userHome } from './home.js';
 import { uninstallBrowser } from './environment.js';
 
 const PACKAGE_DIR = fileURLToPath(new URL('..', import.meta.url)).replace(/[\\/]$/, '');
@@ -26,13 +27,24 @@ export async function npxFolders({ cache = process.env.npm_config_cache || join(
   return found.sort();
 }
 
+const entries = async dir => (await fs.readdir(dir, { withFileTypes: true }).catch(error => { if (error.code === 'ENOENT') return []; throw error; }))
+  .sort((a, b) => a.name.localeCompare(b.name)).map(entry => ({ path: join(dir, entry.name), folder: entry.isDirectory() }));
+
+/** Each Take folder in the user Home, at `takes/<scenario>/<time>`. */
+async function userTakes() {
+  const dir = join(userHome(), 'takes'), folders = (await entries(dir)).filter(e => e.folder).map(e => e.path), paths = [];
+  for (const folder of folders) for (const take of await entries(folder)) if (take.folder) paths.push(take.path);
+  return { dir, paths, folders };
+}
+const userScenarios = async () => { const dir = join(userHome(), 'scenarios'); return { dir, paths: (await entries(dir)).map(e => e.path) }; };
+
 /**
  * Removes what CueTake put on this machine outside the user's projects: its npx folders and, through
- * Playwright, the browser unless another Playwright installation still uses it. Auth profiles and global
- * Looks are the user's and go only when asked. Take folders and local Looks are never touched.
+ * Playwright, the browser unless another Playwright installation still uses it. Auth profiles and the user
+ * Home's Looks, Takes and Scenarios are the user's and go only when asked. A project Home is never touched.
  */
-export async function uninstall({ auth = false, looks = false, dryRun = false, removeBrowser = uninstallBrowser } = {}) {
-  const npx = await npxFolders(), profiles = await authProfileFiles(), globalLooks = await globalLookFiles();
+export async function uninstall({ auth = false, looks = false, takes = false, scenarios = false, dryRun = false, removeBrowser = uninstallBrowser } = {}) {
+  const npx = await npxFolders();
   const removed = [], kept = [];
   const remove = async (item, paths) => {
     for (const path of paths) {
@@ -47,16 +59,17 @@ export async function uninstall({ auth = false, looks = false, dryRun = false, r
   if (browser.existed && dryRun) removed.push({ item: 'browser', path: browser.path, note: 'kept if another Playwright installation still uses it' });
   else if (browser.removed) removed.push({ item: 'browser', path: browser.path });
   else if (browser.existed) kept.push({ item: 'browser', path: browser.path, reason: 'another Playwright installation still uses it' });
-  for (const [item, flag, wanted, { dir, paths }] of [['Auth profile', '--auth', auth, profiles], ['global Look', '--looks', looks, globalLooks]]) {
+  const kinds = [['Auth profile', '--auth', auth, await authProfileFiles()], ['Look', '--looks', looks, await userLookFiles()], ['Take', '--takes', takes, await userTakes()], ['Scenario', '--scenarios', scenarios, await userScenarios()]];
+  for (const [item, flag, wanted, { dir, paths, folders = [] }] of kinds) {
     if (wanted) await remove(item, paths);
     else if (paths.length) kept.push({ item, path: dir, count: paths.length, reason: `pass ${flag} to remove` });
-    if (wanted && !dryRun) await fs.rmdir(dir).catch(() => {});
+    if (wanted && !dryRun) for (const folder of [...folders, dir]) await fs.rmdir(folder).catch(() => {});
   }
   // This CLI's own npx folder goes last, once nothing else needs its files.
   await remove('npx cache', npx.filter(path => path === own));
-  if (!dryRun) await fs.rmdir(join(homedir(), '.local/share/cuetake')).catch(() => {});
+  if (!dryRun) await fs.rmdir(userHome()).catch(() => {});
   return {
     dryRun, [dryRun ? 'wouldRemove' : 'removed']: removed, kept,
-    note: 'Take folders and local Looks (.cuetake/looks) stay in your projects. The skill is removed by the tool that installed it.',
+    note: 'Every project Home (.cuetake in a project) stays. The skill is removed by the tool that installed it.',
   };
 }

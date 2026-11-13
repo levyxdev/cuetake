@@ -14,6 +14,7 @@ import { exposure, moments, cropAt, shutterOf } from '../src/shutter.js';
 import { lookFromEdit, applyLook, mergeLook, summarize, saveLook, loadLook, listLooks, removeLook, resolvedLook } from '../src/look.js';
 import { bundle, codeRefs, forRender, BUILTIN_DIR } from '../src/styles.js';
 import { npxFolders, uninstall } from '../src/uninstall.js';
+import { ensureHome } from '../src/home.js';
 import { serveRange } from '../src/render.js';
 import { subtitleRows, subtitleCues, lineProblems, toSrt, toVtt } from '../src/narration.js';
 import { shortcutKeys, keycapShows, keycapTrack } from '../src/shortcuts.js';
@@ -26,6 +27,7 @@ import { macKeys } from '../src/mac-keys.js';
 import { treeLines, appLocators } from '../src/app-locators.js';
 import fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 
 test('validates capture settings but passes styling through untouched', () => {
@@ -990,49 +992,55 @@ test('Render reads built-ins with their parameters under the item and every file
   expect(() => forRender(withDefaults({ cursor: { draw: 'hand' } }), '/take')).toThrow('No built-in named');
 });
 
-test('local Looks hide global ones with the same name; saving never overwrites unless asked', async () => {
-  const cwd = await tmp('cuetake-look-'), global = await tmp('cuetake-look-global-');
-  const old = process.env.CUETAKE_LOOK_DIR;
-  process.env.CUETAKE_LOOK_DIR = global;
+test('a project Look hides a user Look with the same name; saving never overwrites unless asked', async () => {
+  const project = await tmp('cuetake-project-'), user = await tmp('cuetake-user-');
+  const own = join(project, '.cuetake'), userLooks = join(user, '.local', 'share', 'cuetake', 'looks');
   try {
-    await saveLook('brand', { frame: { chrome: { draw: 'macos' } } }, { global: true, cwd });
-    await saveLook('minimal', { frame: { chrome: false } }, { global: true, cwd });
-    expect((await loadLook('brand', cwd)).look.frame.chrome.draw).toBe('macos');
-    await saveLook('brand', { frame: { chrome: { draw: 'browser-dark' } } }, { cwd });
-    expect(await loadLook('brand', cwd)).toMatchObject({ scope: 'local', look: { frame: { chrome: { draw: 'browser-dark' } } } });
-    await expect(saveLook('brand', { cursor: { size: 30 } }, { cwd })).rejects.toThrow('--replace');
-    await saveLook('brand', { frame: { chrome: { draw: 'macos-dark' } } }, { cwd, replace: true });
-    const listed = await listLooks(cwd);
-    expect(listed.map(({ name, scope, shadowed }) => [name, scope, shadowed])).toEqual([['brand', 'local', false], ['brand', 'global', true], ['minimal', 'global', false]]);
-    expect(listed[0].summary).toBe('macos-dark');
-    await fs.writeFile(join(cwd, 'try.json'), JSON.stringify({ name: 'try-portrait', output: { width: 1080, height: 1920 } }));
-    expect(await loadLook('try.json', cwd)).toEqual({ name: 'try-portrait', dir: cwd, look: { output: { width: 1080, height: 1920 } } });
-    await expect(loadLook('missing', cwd)).rejects.toThrow(global);
-    await expect(saveLook('../escape', {}, { cwd })).rejects.toThrow();
-    await removeLook('brand', { cwd });
-    expect((await loadLook('brand', cwd)).scope).toBe('global');
-  } finally {
-    if (old === undefined) delete process.env.CUETAKE_LOOK_DIR; else process.env.CUETAKE_LOOK_DIR = old;
-    await fs.rm(cwd, { recursive: true, force: true }); await fs.rm(global, { recursive: true, force: true });
-  }
+    await withEnv({ CUETAKE_HOME: own, HOME: user }, async () => {
+      await saveLook('brand', { frame: { chrome: { draw: 'macos' } } }, { global: true });
+      await saveLook('minimal', { frame: { chrome: false } }, { global: true });
+      expect((await loadLook('brand')).look.frame.chrome.draw).toBe('macos');
+      await saveLook('brand', { frame: { chrome: { draw: 'browser-dark' } } });
+      expect(await loadLook('brand')).toMatchObject({ scope: 'project', look: { frame: { chrome: { draw: 'browser-dark' } } } });
+      expect(await fs.readFile(join(own, '.gitignore'), 'utf8')).toBe('takes/\n');
+      await expect(saveLook('brand', { cursor: { size: 30 } })).rejects.toThrow('--replace');
+      await saveLook('brand', { frame: { chrome: { draw: 'macos-dark' } } }, { replace: true });
+      const listed = await listLooks();
+      expect(listed.map(({ name, scope, shadowed }) => [name, scope, shadowed])).toEqual([['brand', 'project', false], ['brand', 'user', true], ['minimal', 'user', false]]);
+      expect(listed[0].summary).toBe('macos-dark');
+      await fs.writeFile(join(project, 'try.json'), JSON.stringify({ name: 'try-portrait', output: { width: 1080, height: 1920 } }));
+      expect(await loadLook('try.json', project)).toEqual({ name: 'try-portrait', dir: project, look: { output: { width: 1080, height: 1920 } } });
+      await expect(loadLook('missing')).rejects.toThrow(userLooks);
+      await expect(saveLook('../escape', {})).rejects.toThrow();
+      await removeLook('brand');
+      expect((await loadLook('brand')).scope).toBe('user');
+    });
+    await withEnv({ CUETAKE_HOME: undefined, HOME: user }, async () => {
+      await saveLook('calm', { cursor: { size: 30 } });
+      expect((await listLooks()).map(({ name, scope }) => [name, scope])).toEqual([['brand', 'user'], ['calm', 'user'], ['minimal', 'user']]);
+    });
+  } finally { await fs.rm(project, { recursive: true, force: true }); await fs.rm(user, { recursive: true, force: true }); }
 });
 
 test('a Look that names files is saved as a folder with copies of them, and lists its code', async () => {
-  const cwd = await tmp('cuetake-look-'), take = await tmp('cuetake-take-');
+  const project = await tmp('cuetake-project-'), user = await tmp('cuetake-user-'), take = await tmp('cuetake-take-');
+  const looks = join(project, '.cuetake', 'looks');
   try {
-    await fs.mkdir(join(take, 'styles'));
-    await fs.writeFile(join(take, 'styles', 'glow.glsl'), 'void main() { color = vec4(1.0); }');
-    await fs.writeFile(join(take, 'styles', 'photo.png'), 'png');
-    const look = { frame: { background: [{ image: 'styles/photo.png' }, { shader: 'styles/glow.glsl', amount: 0.4 }] } };
-    const saved = await saveLook('glow', look, { cwd, from: take });
-    expect(saved.path).toBe(join(cwd, '.cuetake', 'looks', 'glow', 'look.json'));
-    const loaded = await loadLook('glow', cwd);
-    expect(loaded.look.frame.background).toEqual([{ image: 'photo.png' }, { shader: 'glow.glsl', amount: 0.4 }]);
-    expect(resolvedLook(loaded).frame.background[1].shader).toBe(join(cwd, '.cuetake', 'looks', 'glow', 'glow.glsl'));
-    expect((await listLooks(cwd))[0].code).toEqual([join(cwd, '.cuetake', 'looks', 'glow', 'glow.glsl')]);
-    await removeLook('glow', { cwd });
-    expect(await listLooks(cwd)).toEqual([]);
-  } finally { await fs.rm(cwd, { recursive: true, force: true }); await fs.rm(take, { recursive: true, force: true }); }
+    await withEnv({ CUETAKE_HOME: join(project, '.cuetake'), HOME: user }, async () => {
+      await fs.mkdir(join(take, 'styles'));
+      await fs.writeFile(join(take, 'styles', 'glow.glsl'), 'void main() { color = vec4(1.0); }');
+      await fs.writeFile(join(take, 'styles', 'photo.png'), 'png');
+      const look = { frame: { background: [{ image: 'styles/photo.png' }, { shader: 'styles/glow.glsl', amount: 0.4 }] } };
+      const saved = await saveLook('glow', look, { from: take });
+      expect(saved.path).toBe(join(looks, 'glow', 'look.json'));
+      const loaded = await loadLook('glow');
+      expect(loaded.look.frame.background).toEqual([{ image: 'photo.png' }, { shader: 'glow.glsl', amount: 0.4 }]);
+      expect(resolvedLook(loaded).frame.background[1].shader).toBe(join(looks, 'glow', 'glow.glsl'));
+      expect((await listLooks())[0].code).toEqual([join(looks, 'glow', 'glow.glsl')]);
+      await removeLook('glow');
+      expect(await listLooks()).toEqual([]);
+    });
+  } finally { for (const dir of [project, user, take]) await fs.rm(dir, { recursive: true, force: true }); }
 });
 
 test('a Preview shows one tile as is and several at half size, labeled, in up to three columns', () => {
@@ -1047,11 +1055,50 @@ test('a Preview shows one tile as is and several at half size, labeled, in up to
   expect(previewSheet(Array(5).fill({ width: 1920, height: 1080 })).tiles[2].y).toBe(sheet.tiles[0].y);
 });
 
+const setEnv = vars => { for (const [key, value] of Object.entries(vars)) if (value === undefined) delete process.env[key]; else process.env[key] = value; };
 const withEnv = async (vars, run) => {
   const old = Object.fromEntries(Object.keys(vars).map(key => [key, process.env[key]]));
-  Object.assign(process.env, vars);
-  try { return await run(); } finally { for (const [key, value] of Object.entries(old)) if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  setEnv(vars);
+  try { return await run(); } finally { setEnv(old); }
 };
+
+test('a project Home is created with a .gitignore for its Takes, written once; the user Home gets none', async () => {
+  const project = await tmp('cuetake-project-'), user = await tmp('cuetake-user-');
+  const own = join(project, '.cuetake'), ignore = join(own, '.gitignore');
+  try {
+    await withEnv({ CUETAKE_HOME: own, HOME: user }, async () => {
+      expect(await ensureHome()).toBe(own);
+      expect(await fs.readFile(ignore, 'utf8')).toBe('takes/\n');
+      await fs.rm(ignore);
+      await ensureHome();
+      await expect(fs.access(ignore)).rejects.toThrow();
+    });
+    await withEnv({ CUETAKE_HOME: undefined, HOME: user }, async () => {
+      expect(await ensureHome()).toBe(join(user, '.local', 'share', 'cuetake'));
+      expect(await fs.readdir(join(user, '.local', 'share', 'cuetake'))).toEqual([]);
+    });
+  } finally { await fs.rm(project, { recursive: true, force: true }); await fs.rm(user, { recursive: true, force: true }); }
+});
+
+test('the launcher sets the Home to the project its skill is installed in, and leaves it to the user Home otherwise', async () => {
+  const root = await fs.realpath(await tmp('cuetake-launcher-')), user = join(root, 'home'), project = join(root, 'project');
+  const launcher = readFileSync(new URL('../skills/cuetake/scripts/cuetake', import.meta.url), 'utf8');
+  const install = async skill => { await fs.mkdir(join(skill, 'scripts'), { recursive: true }); await fs.writeFile(join(skill, 'scripts', 'cuetake'), launcher); return join(skill, 'scripts', 'cuetake'); };
+  const homeOf = (path, { cwd = root, ...env } = {}) => spawnSync('sh', [path, 'CUETAKE_HOME'], { cwd, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: user, CUETAKE_BIN: 'printenv', ...env } }).stdout.trim();
+  try {
+    const own = await install(join(project, '.agents', 'skills', 'cuetake'));
+    await fs.mkdir(join(project, '.claude', 'skills'), { recursive: true });
+    await fs.symlink('../../.agents/skills/cuetake', join(project, '.claude', 'skills', 'cuetake'));
+    await fs.mkdir(join(project, 'src'));
+    expect(homeOf(own)).toBe(join(project, '.cuetake'));
+    expect(homeOf(join(project, '.claude', 'skills', 'cuetake', 'scripts', 'cuetake'), { cwd: join(project, 'src') })).toBe(join(project, '.cuetake'));
+    expect(homeOf('.claude/skills/cuetake/scripts/cuetake', { cwd: project })).toBe(join(project, '.cuetake'));
+    expect(homeOf(own, { CUETAKE_HOME: '/elsewhere' })).toBe('/elsewhere');
+    expect(homeOf(await install(join(user, '.claude', 'skills', 'cuetake')))).toBe('');
+    expect(homeOf(await install(join(user, '.claude', 'plugins', 'cache', 'cuetake', 'cuetake', '0.5.0', 'skills', 'cuetake')))).toBe('');
+    expect(homeOf(await install(join(root, 'checkout', 'skills', 'cuetake')))).toBe('');
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
 const writeJson = async (path, data) => { await fs.mkdir(join(path, '..'), { recursive: true }); await fs.writeFile(path, JSON.stringify(data)); };
 
 test('npx folders made for CueTake alone are found, including the one the CLI runs from', async () => {
@@ -1068,37 +1115,50 @@ test('npx folders made for CueTake alone are found, including the one the CLI ru
   } finally { await fs.rm(cache, { recursive: true, force: true }); await fs.rm(other, { recursive: true, force: true }); }
 });
 
-test('uninstall removes caches and the browser, and keeps Auth profiles and global Looks unless asked', async () => {
-  const home = await tmp('cuetake-uninstall-');
-  const auth = join(home, 'auth'), looks = join(home, 'looks'), cache = join(home, 'npm');
+test('uninstall removes caches and the browser, and keeps the user Home and every project Home unless asked', async () => {
+  const user = await tmp('cuetake-uninstall-'), data = join(user, '.local', 'share', 'cuetake'), project = join(user, 'project', '.cuetake');
+  const auth = join(data, 'auth'), looks = join(data, 'looks'), takes = join(data, 'takes'), scenarios = join(data, 'scenarios'), cache = join(user, 'npm');
   const browser = { path: '/cache/chromium/chrome', existed: true, removed: true };
   const removeBrowser = async ({ dryRun }) => ({ ...browser, removed: !dryRun });
   try {
-    await withEnv({ CUETAKE_AUTH_DIR: auth, CUETAKE_LOOK_DIR: looks, npm_config_cache: cache }, async () => {
+    await withEnv({ HOME: user, CUETAKE_HOME: project, CUETAKE_AUTH_DIR: undefined, npm_config_cache: cache }, async () => {
       await writeJson(join(cache, '_npx', 'old', 'package.json'), { dependencies: { cuetake: '^0.2.0' } });
       await writeJson(join(auth, 'product-demo.json'), {});
       await writeJson(join(auth, 'product-demo.json.0b6c1a2e-0000-4000-8000-000000000000.tmp'), {});
       await fs.writeFile(join(auth, 'notes.txt'), 'not CueTake\'s');
-      await saveLook('brand', { cursor: { size: 30 } }, { global: true, cwd: home });
+      await saveLook('brand', { cursor: { size: 30 } }, { global: true });
       await writeJson(join(looks, 'ocean', 'look.json'), {});
       await fs.mkdir(join(looks, 'scratch'));
+      for (const take of ['demo/2026-11-01T10-00-00-000Z', 'demo/2026-11-02T10-00-00-000Z', 'signup/2026-11-03T10-00-00-000Z']) await writeJson(join(takes, take, 'project.json'), {});
+      await writeJson(join(scenarios, 'demo.mjs'), {});
+      await writeJson(join(scenarios, 'helpers.mjs'), {});
+      await saveLook('mine', { cursor: { size: 40 } });
 
       const plan = await uninstall({ dryRun: true, removeBrowser });
       expect(plan.wouldRemove.map(r => r.item)).toEqual(['npx cache', 'browser']);
-      expect(plan.kept).toMatchObject([{ item: 'Auth profile', count: 2, reason: 'pass --auth to remove' }, { item: 'global Look', count: 2, reason: 'pass --looks to remove' }]);
+      expect(plan.kept).toMatchObject([
+        { item: 'Auth profile', path: auth, count: 2, reason: 'pass --auth to remove' }, { item: 'Look', path: looks, count: 2, reason: 'pass --looks to remove' },
+        { item: 'Take', path: takes, count: 3, reason: 'pass --takes to remove' }, { item: 'Scenario', path: scenarios, count: 2, reason: 'pass --scenarios to remove' },
+      ]);
       await fs.access(join(cache, '_npx', 'old'));
 
       const done = await uninstall({ removeBrowser });
       expect(done.removed).toEqual([{ item: 'npx cache', path: join(cache, '_npx', 'old') }, { item: 'browser', path: browser.path }]);
       expect((await fs.readdir(auth)).length).toBe(3);
 
-      const all = await uninstall({ auth: true, looks: true, removeBrowser: async () => ({ ...browser, removed: false }) });
+      const all = await uninstall({ auth: true, looks: true, takes: true, scenarios: true, removeBrowser: async () => ({ ...browser, removed: false }) });
       expect(all.kept).toEqual([{ item: 'browser', path: browser.path, reason: 'another Playwright installation still uses it' }]);
-      expect(all.removed.map(r => r.path)).toEqual([join(auth, 'product-demo.json'), join(auth, 'product-demo.json.0b6c1a2e-0000-4000-8000-000000000000.tmp'), join(looks, 'brand.json'), join(looks, 'ocean')]);
+      expect(all.removed.map(r => r.path)).toEqual([
+        join(auth, 'product-demo.json'), join(auth, 'product-demo.json.0b6c1a2e-0000-4000-8000-000000000000.tmp'), join(looks, 'brand.json'), join(looks, 'ocean'),
+        join(takes, 'demo', '2026-11-01T10-00-00-000Z'), join(takes, 'demo', '2026-11-02T10-00-00-000Z'), join(takes, 'signup', '2026-11-03T10-00-00-000Z'),
+        join(scenarios, 'demo.mjs'), join(scenarios, 'helpers.mjs'),
+      ]);
+      expect((await fs.readdir(data)).sort()).toEqual(['auth', 'looks']);
       expect(await fs.readdir(auth)).toEqual(['notes.txt']);
       expect(await fs.readdir(looks)).toEqual(['scratch']);
+      expect(await fs.readdir(join(project, 'looks'))).toEqual(['mine.json']);
     });
-  } finally { await fs.rm(home, { recursive: true, force: true }); }
+  } finally { await fs.rm(user, { recursive: true, force: true }); }
 });
 
 test('subtitle rows break at sentence and clause ends, then between words, within the row width', () => {

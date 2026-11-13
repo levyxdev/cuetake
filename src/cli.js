@@ -3,6 +3,7 @@ import { parseArgs } from 'node:util';
 import pkg from '../package.json' with { type: 'json' };
 import { recordScenario, renderTake, verifyTake, previewTake, applyLookToTake, saveLookFromTake, importNarration } from './pipeline.js';
 import { listLooks, removeLook } from './look.js';
+import { ensureHome } from './home.js';
 import { BUILTINS, BUILTIN_DIR } from './styles.js';
 import { doctor, installBrowser } from './environment.js';
 import { uninstall } from './uninstall.js';
@@ -17,7 +18,8 @@ const help = `CueTake ${pkg.version} — browser demos directed by code
 
   cuetake doctor
   cuetake install-browser
-  cuetake uninstall [--auth] [--looks] [--dry-run]
+  cuetake home
+  cuetake uninstall [--auth] [--looks] [--takes] [--scenarios] [--dry-run]
   cuetake record <scenario.mjs> [--out <new-directory>] [--auth-profile <name>] [--look <name|file.json>] [--narration <narration.json>] [--headed] [--use-running]
   cuetake tree <app>
   cuetake narrate import <take-directory> <narration.json>
@@ -33,10 +35,14 @@ const help = `CueTake ${pkg.version} — browser demos directed by code
   cuetake styles
 
 install-browser downloads the Chromium build this CueTake version drives (about 150 MB).
+home prints the Home, where Scenarios, Takes and Looks live, and creates it when missing: <project>/.cuetake
+  when the skill that ran is installed in a project, else the user Home, ~/.local/share/cuetake.
+  CUETAKE_HOME overrides it. A project Home starts with a .gitignore for takes/, which you may change.
 uninstall removes CueTake's npx cache and its browser, unless another Playwright installation uses it.
-  It keeps Auth profiles unless --auth and global Looks unless --looks; Take folders and local Looks
-  are never touched. --dry-run lists what would go and removes nothing.
-record captures, renders and verifies a new take; an existing directory is never overwritten.
+  It keeps Auth profiles unless --auth, and the user Home's Looks, Takes and Scenarios unless --looks,
+  --takes and --scenarios; a project Home is never touched. --dry-run lists what would go and removes nothing.
+record captures, renders and verifies a new take in <home>/takes/<name>/<time>, or in --out; an existing
+  directory is never overwritten.
   Capture runs headless; --headed shows the browser window while recording.
   A Scenario naming an app instead of a url records a desktop App on macOS: its windows on a Desktop.
   An App the user already runs stops it; --use-running, with the user's consent, records it as it is,
@@ -52,22 +58,23 @@ preview writes preview.png in the take: the current Edit beside each Look, at --
 render reuses source.webm, timeline.json and edit.json, replacing final.mp4 only on success.
 frame saves one Final frame as a PNG for inspection.
 login opens a separate browser; close its window after logging in to save the profile.
-A Look is a take's reusable styling, with the files it draws with. Looks are saved locally
-  (.cuetake/looks in this directory) unless --global; a local Look hides a global one with the same
-  name. list names the code each Look runs. apply rewrites edit.json and copies files into styles/.
+A Look is a take's reusable styling, with the files it draws with. Looks are saved in the Home, or the
+  user Home with --global; a project Look hides a user Look with the same name. list names the code
+  each Look runs. apply rewrites edit.json and copies files into styles/.
 styles lists the built-in shaders and drawing code, with their files and starting parameters.
 Styling is agent-written code and is not validated; the render page has no network.
 Scenario files are trusted JavaScript. Recording runs locally and captures no page audio; Narration is
   voiced beforehand by a speech tool of your choice.
 `;
 try {
-  const { values, positionals } = parseArgs({ args: process.argv.slice(2), allowPositionals: true, options: { out: { type: 'string' }, help: { type: 'boolean', short: 'h' }, 'auth-profile': { type: 'string' }, headed: { type: 'boolean' }, look: { type: 'string', multiple: true }, narration: { type: 'string' }, at: { type: 'string' }, global: { type: 'boolean' }, replace: { type: 'boolean' }, auth: { type: 'boolean' }, looks: { type: 'boolean' }, 'dry-run': { type: 'boolean' }, 'use-running': { type: 'boolean' } } });
+  const { values, positionals } = parseArgs({ args: process.argv.slice(2), allowPositionals: true, options: { out: { type: 'string' }, help: { type: 'boolean', short: 'h' }, 'auth-profile': { type: 'string' }, headed: { type: 'boolean' }, look: { type: 'string', multiple: true }, narration: { type: 'string' }, at: { type: 'string' }, global: { type: 'boolean' }, replace: { type: 'boolean' }, auth: { type: 'boolean' }, looks: { type: 'boolean' }, takes: { type: 'boolean' }, scenarios: { type: 'boolean' }, 'dry-run': { type: 'boolean' }, 'use-running': { type: 'boolean' } } });
   const [command, target] = positionals, looks = values.look ?? [];
   const print = data => console.log(JSON.stringify(data, null, 2));
   if (values.help || !command) console.log(help);
   else if (command === 'doctor') { const result = await doctor(); console.log(JSON.stringify(result, null, 2)); if (!result.ok) process.exitCode = 1; }
   else if (command === 'install-browser') console.log(JSON.stringify(await installBrowser(), null, 2));
-  else if (command === 'uninstall' && !target) print(await uninstall({ auth: values.auth, looks: values.looks, dryRun: values['dry-run'] }));
+  else if (command === 'home' && !target) console.log(await ensureHome());
+  else if (command === 'uninstall' && !target) print(await uninstall({ auth: values.auth, looks: values.looks, takes: values.takes, scenarios: values.scenarios, dryRun: values['dry-run'] }));
   else if (command === 'record' && target && looks.length <= 1) print(await recordScenario(target, values.out, { authProfile: values['auth-profile'], look: looks[0], narration: values.narration, headed: values.headed, useRunning: values['use-running'] }));
   else if (command === 'tree' && target) console.log(treeLines(await appTree(target)).join('\n'));
   else if (command === 'narrate' && target === 'import' && positionals[3]) print(await importNarration(positionals[2], positionals[3]));

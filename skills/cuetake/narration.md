@@ -40,7 +40,7 @@ export async function run(d) {
 }
 ```
 
-Record with `record <scenario> --out <take> --narration narration.json`. The Narration and its audio are copied into the Take's `narration/` folder first. Each `d.say(id)` starts its Line and waits for its audio to end, and the Line's start seeds `edit.json`. To speak over an action, start it without awaiting the Line: `const intro = d.say('intro'); await d.click(...); await intro;`.
+Record with `record <scenario> --narration narration.json`. The Narration and its audio are copied into the Take's `narration/` folder first. Each `d.say(id)` starts its Line and waits for its audio to end, and the Line's start seeds `edit.json`. To speak over an action, start it without awaiting the Line: `const intro = d.say('intro'); await d.click(...); await intro;`.
 
 Without `--narration`, `d.say(id, text)` only marks where a Line starts and does not wait. Use it for a first draft, then import audio for the same ids.
 

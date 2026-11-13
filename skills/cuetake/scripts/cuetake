@@ -1,4 +1,12 @@
 #!/bin/sh
 # Runs the CueTake CLI pinned to the version this skill was released with.
 # CUETAKE_BIN overrides the command, e.g. CUETAKE_BIN="node /path/to/cuetake/src/cli.js" for a source checkout.
+# A skill installed in a project, at <project>/.<agent>/skills/cuetake, keeps its files in <project>/.cuetake;
+# any other copy leaves CUETAKE_HOME unset, so the CLI uses the user Home (ADR 0011).
+scripts=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+skills=${scripts%/*/*} agent=${scripts%/*/*/*}
+root=${agent%/*}
+case ${skills##*/}/${agent##*/} in
+  skills/.*) if [ -z "${CUETAKE_HOME:-}" ] && [ -n "$root" ] && [ "$root" != "$(cd -- "$HOME" && pwd)" ]; then export CUETAKE_HOME="$root/.cuetake"; fi ;;
+esac
 exec ${CUETAKE_BIN:-npx -y cuetake@0.5.0} "$@"

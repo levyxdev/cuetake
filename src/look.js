@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { merge } from './edit.js';
+import { ensureHome, home, userHome } from './home.js';
 import { absolute, bundle, codeRefs, fileRefs } from './styles.js';
 
 /**
@@ -37,11 +37,11 @@ export function summarize(look) {
   return parts.filter(Boolean).join(' · ') || Object.keys(look).join(', ') || 'empty';
 }
 
-/** Local Looks live in the directory CueTake runs in; global ones serve every directory. */
-const scopes = (cwd = process.cwd()) => ({
-  local: join(cwd, '.cuetake', 'looks'),
-  global: process.env.CUETAKE_LOOK_DIR || join(homedir(), '.local/share/cuetake/looks'),
-});
+/** Looks live in the Home; a project Home's Looks come before the user Home's, which serve every project. */
+const inProject = () => home() !== userHome();
+const scopes = () => ({ ...(inProject() && { project: join(home(), 'looks') }), user: join(userHome(), 'looks') });
+/** Where `look save` and `look rm` act: the user Home with --global, else the Home. */
+const scopeFor = global => !global && inProject() ? 'project' : 'user';
 const NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
 function checkName(name) {
   if (!NAME.test(name)) throw new Error('Use a short lowercase Look name, such as brand');
@@ -59,7 +59,7 @@ async function readSaved(dir, name) {
 }
 
 /**
- * A Look by name, local before global, or from a JSON file labeled by its `name` or file name. `dir` is
+ * A Look by name, the project's before the user's, or from a JSON file labeled by its `name` or file name. `dir` is
  * where its file refs resolve.
  */
 export async function loadLook(ref, cwd = process.cwd()) {
@@ -69,27 +69,26 @@ export async function loadLook(ref, cwd = process.cwd()) {
     return { name: String(name), dir: dirname(path), look };
   }
   checkName(ref);
-  for (const [scope, root] of Object.entries(scopes(cwd))) {
+  for (const [scope, root] of Object.entries(scopes())) {
     const saved = await readSaved(root, ref);
     if (saved) return { name: ref, scope, dir: saved.dir, look: saved.look };
   }
-  const { local, global } = scopes(cwd);
-  throw new Error(`No Look named '${ref}' in ${local} or ${global}`);
+  throw new Error(`No Look named '${ref}' in ${Object.values(scopes()).join(' or ')}`);
 }
 
 /** A Look's styling with its file refs made absolute, ready to merge with styling from elsewhere. */
 export const resolvedLook = ({ look, dir }) => absolute(look, dir);
 
-/** Every saved Look, with the code files it runs; a global Look hidden by a local one with the same name is marked shadowed. */
-export async function listLooks(cwd = process.cwd()) {
+/** Every saved Look, with the code files it runs; a user Look hidden by a project one with the same name is marked shadowed. */
+export async function listLooks() {
   const found = [];
-  for (const [scope, root] of Object.entries(scopes(cwd))) {
+  for (const [scope, root] of Object.entries(scopes())) {
     const entries = await fs.readdir(root, { withFileTypes: true }).catch(error => { if (error.code === 'ENOENT') return []; throw error; });
     const names = entries.flatMap(e => e.isDirectory() ? [e.name] : e.name.endsWith('.json') ? [basename(e.name, '.json')] : []).sort();
     for (const name of new Set(names)) {
       const saved = await readSaved(root, name).catch(error => ({ error }));
       if (!saved) continue;
-      const entry = { name, scope, shadowed: scope === 'global' && found.some(l => l.scope === 'local' && l.name === name), path: saved.path ?? join(root, name) };
+      const entry = { name, scope, shadowed: scope === 'user' && found.some(l => l.scope === 'project' && l.name === name), path: saved.path ?? join(root, name) };
       if (saved.error) found.push({ ...entry, summary: `invalid: ${saved.error.message}` });
       else found.push({ ...entry, summary: summarize(saved.look), code: codeRefs(absolute(saved.look, saved.dir)) });
     }
@@ -98,12 +97,14 @@ export async function listLooks(cwd = process.cwd()) {
 }
 
 /**
- * Saves a Look locally unless `global`, with its file refs resolved against `from`. A Look that names
- * files becomes a folder holding copies of them. An existing Look with the name is kept unless `replace`.
+ * Saves a Look in the Home, or the user Home when `global`, with its file refs resolved against `from`. A
+ * Look that names files becomes a folder holding copies of them. An existing Look with the name is kept
+ * unless `replace`.
  */
-export async function saveLook(name, look, { global = false, replace = false, cwd, from = cwd ?? process.cwd() } = {}) {
+export async function saveLook(name, look, { global = false, replace = false, from = process.cwd() } = {}) {
   checkName(name);
-  const scope = global ? 'global' : 'local', root = scopes(cwd)[scope];
+  const scope = scopeFor(global), root = scopes()[scope];
+  if (scope === 'project') await ensureHome();
   const existing = await readSaved(root, name);
   if (existing && !replace) throw new Error(`A ${scope} Look named '${name}' already exists at ${existing.path}; pass --replace to overwrite it`);
   await fs.rm(join(root, `${name}.json`), { force: true });
@@ -116,9 +117,9 @@ export async function saveLook(name, look, { global = false, replace = false, cw
   return { name, scope, path, summary: summarize(saved), code: codeRefs(absolute(saved, dir)) };
 }
 
-/** The file or folder of every global Look; other files in the folder are not CueTake's. */
-export async function globalLookFiles() {
-  const dir = scopes().global, paths = [];
+/** The file or folder of every Look in the user Home; other files in the folder are not CueTake's. */
+export async function userLookFiles() {
+  const dir = scopes().user, paths = [];
   const entries = await fs.readdir(dir, { withFileTypes: true }).catch(error => { if (error.code === 'ENOENT') return []; throw error; });
   for (const entry of entries) {
     const path = join(dir, entry.name);
@@ -128,9 +129,9 @@ export async function globalLookFiles() {
   return { dir, paths: paths.sort() };
 }
 
-export async function removeLook(name, { global = false, cwd } = {}) {
+export async function removeLook(name, { global = false } = {}) {
   checkName(name);
-  const scope = global ? 'global' : 'local', root = scopes(cwd)[scope];
+  const scope = scopeFor(global), root = scopes()[scope];
   const saved = await readSaved(root, name);
   if (!saved) throw new Error(`No ${scope} Look named '${name}' in ${root}`);
   const removed = saved.path === join(root, `${name}.json`) ? saved.path : saved.dir;

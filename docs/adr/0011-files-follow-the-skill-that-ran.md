@@ -13,5 +13,5 @@ The skill's `scripts/cuetake` knows its own path, so it derives the project from
 
 - A plugin's files sit in a shared cache whatever its scope, so a plugin always uses the user's Home.
 - When a project skill and a global one share a name, Claude Code runs the global one, so its files go to the user's Home; the setup guide tells users to install one way only, not to mix them.
-- Auth profiles hold live sessions and stay per user in `~/.local/share/cuetake/auth`, outside every Home.
+- Auth profiles hold live sessions and stay per user in `~/.local/share/cuetake/auth`, whichever Home a skill uses.
 - A project's Home gets a `.gitignore` for `takes/` when CueTake first creates it; the user may change it.

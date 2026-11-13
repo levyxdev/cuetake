@@ -1,10 +1,11 @@
 import { chromium } from 'playwright';
 import fs from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { userHome } from './home.js';
 import { setTimeout as sleep } from 'node:timers/promises';
-const root = () => process.env.CUETAKE_AUTH_DIR || join(homedir(), '.local/share/cuetake/auth');
+/** Auth profiles stay per user, in the user Home, whichever Home a skill uses (ADR 0011). */
+const root = () => process.env.CUETAKE_AUTH_DIR || join(userHome(), 'auth');
 const NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
 function profilePath(profile) {
   if (!NAME.test(profile)) throw new Error('Use a short lowercase profile name, such as product-demo');
