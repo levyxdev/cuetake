@@ -9,7 +9,7 @@ CueTake records product demos of web pages and desktop Apps for AI agents. Use t
 - Check git status first. Keep product-specific Scenarios, Takes and Auth profiles outside this repository. `origin` is the public repository, `levyxdev/cuetake`.
 - `main` is what users install, since the skill is installed from it, so it changes only in a release, run with `/release` when the user asks. Work lands on `dev`, committed directly or through a branch and a PR against `dev`. A commit that finishes an issue says `Closes #N`, otherwise `Part of #N`; the issue then swaps its triage label for `on-dev` (`docs/agents/triage-labels.md`).
 - Run `bun test tests/pipeline.test.js` for pipeline and Render changes. For Capture or Render changes, also record a short real Scenario and inspect the Final's frame metadata and cursor position.
-- Do not publish packages, push code, create releases, or start a website server unless requested.
+- Push each commit on `dev` (or its branch) to `origin` as soon as it is made. Publish packages, create releases, or start a website server only when requested.
 
 ## Agent skills
 
