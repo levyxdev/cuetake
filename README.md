@@ -21,7 +21,7 @@ https://github.com/user-attachments/assets/a4a56ac4-2ef4-476c-b9d7-de8142f98984
 
 If a user hands you this repository to set up CueTake:
 
-1. Install the skill with `npx skills add levyxdev/cuetake`. In Claude Code you can instead run `/plugin marketplace add levyxdev/cuetake`, then `/plugin install cuetake`.
+1. Install the skill with `npx skills add levyxdev/cuetake`. In Claude Code you can instead run `/plugin marketplace add levyxdev/cuetake`, then `/plugin install cuetake`. The skill loads only when you call it, with `/cuetake` in Claude Code, so it stays out of sessions that do not record demos.
 2. The skill's `scripts/cuetake` runs the pinned [`cuetake`](https://www.npmjs.com/package/cuetake) package with `npx`, so nothing else needs installing besides Node. To run a source checkout instead, export `CUETAKE_BIN="node /absolute/path/to/cuetake/src/cli.js"`.
 3. Follow the skill's [setup guide](skills/cuetake/setup.md): run `scripts/cuetake doctor`, and install Node or the browser only after the user agrees to the option they pick.
 4. Write a Scenario for the user's product with the [scenario API](skills/cuetake/scenarios.md), record it, and read the verification report it prints.

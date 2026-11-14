@@ -1,6 +1,7 @@
 ---
 name: cuetake
-description: Record product demo videos of web pages and macOS Apps with the CueTake CLI: writing and directing Scenarios, login, voice-over Narration and Subtitles, previewing and saving styling (Looks), and writing backgrounds, window chrome, cursors and click effects as shaders or drawing code.
+description: "Record product demo videos of web pages and macOS Apps with the CueTake CLI: writing and directing Scenarios, login, voice-over Narration and Subtitles, previewing and saving styling (Looks), and writing backgrounds, window chrome, cursors and click effects as shaders or drawing code."
+disable-model-invocation: true
 ---
 
 # CueTake agent operating manual

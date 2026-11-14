@@ -2,6 +2,8 @@
 name: release
 description: "Release dev: bump the version, publish to npm, move main to dev and tag it."
 disable-model-invocation: true
+metadata:
+  internal: true
 ---
 
 A release moves `main`, which users install the skill from, to `dev`. The skill pins `npx -y cuetake@<version>`, so the package must be on npm before `main` moves: a `main` that pins an unpublished version breaks every new install.
