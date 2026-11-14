@@ -1943,3 +1943,24 @@ test('a file is served to the render page in bounded parts, so a long Source or 
   expect(whole.status).toBe(200);
   expect(whole.body.equals(bytes)).toBe(true);
 });
+
+test('every skill has frontmatter that installers can parse, and only cuetake is offered to users', () => {
+  // The skills CLI skips a SKILL.md whose YAML does not parse, so an unquoted colon once hid cuetake
+  // and left only the maintainer's release skill to install.
+  const root = new URL('../', import.meta.url).pathname;
+  const files = ['skills/*/SKILL.md', '.agents/skills/*/SKILL.md'].flatMap((glob) => [...new Bun.Glob(glob).scanSync({ cwd: root, dot: true })]);
+  expect(files).toContain('.agents/skills/release/SKILL.md');
+  const skills = Object.fromEntries(files.map((file) => {
+    const front = readFileSync(root + file, 'utf8').match(/^---\n([\s\S]*?)\n---\n/);
+    expect(front, file).not.toBeNull();
+    const meta = Bun.YAML.parse(front[1]);
+    expect(typeof meta.name, file).toBe('string');
+    expect(typeof meta.description, file).toBe('string');
+    return [file, meta];
+  }));
+  const cuetake = skills['skills/cuetake/SKILL.md'];
+  expect(cuetake['disable-model-invocation']).toBe(true);
+  const openai = Bun.YAML.parse(readFileSync(root + 'skills/cuetake/agents/openai.yaml', 'utf8'));
+  expect(openai.policy.allow_implicit_invocation).toBe(false);
+  expect(skills['.agents/skills/release/SKILL.md'].metadata.internal).toBe(true);
+});

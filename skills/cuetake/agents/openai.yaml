@@ -1,0 +1,7 @@
+# ChatGPT and Codex: load CueTake only when the user calls it ($cuetake or @cuetake),
+# like disable-model-invocation in SKILL.md does for Claude Code.
+interface:
+  display_name: "CueTake"
+  short_description: "Record product demo videos of web pages and macOS Apps"
+policy:
+  allow_implicit_invocation: false
