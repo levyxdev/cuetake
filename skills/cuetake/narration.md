@@ -42,14 +42,28 @@ export async function run(d) {
 
 Record with `record <scenario> --narration narration.json`. The Narration and its audio are copied into the Take's `narration/` folder first. Each `d.say(id)` starts its Line and waits for its audio to end, and the Line's start seeds `edit.json`. To speak over an action, start it without awaiting the Line: `const intro = d.say('intro'); await d.click(...); await intro;`.
 
-Without `--narration`, `d.say(id, text)` only marks where a Line starts and does not wait. Use it for a first draft, then import audio for the same ids.
+To change the picture as the voice names something, wait for that word of the Line:
+
+```js
+const build = d.say('build');           // "First to-spec, then TDD."
+await d.focus(spec);
+await build.word('TDD');                // resolves as the voice starts "TDD"
+d.focus(tdd);
+await build;
+```
+
+`word(text)` finds `text` in the Line's `text`, ignoring case, in any language, a phrase as well as a word, and resolves when the voice starts it: by the Line's `words` when it has them, otherwise by spreading the Line over its characters, as Subtitles do. Each call looks after the previous one's match, so wait for words in the order they are spoken; a word said twice is two calls, and more of the text (`'then TDD'`) picks one occurrence. Text the Line does not say after the previous match fails the Take, naming the Line and its text.
+
+A focus marked on the word is framed as the word is spoken, since the camera starts moving before its targets. A click, scroll or typing takes its own time, so start it on an earlier word. When the Scenario reaches `word` after the voice already said it, `word` resolves at once, and `verify` warns about each word reached more than 0.2 s late.
+
+Without `--narration`, `d.say(id, text)` only marks where a Line starts and does not wait, and `word` resolves at once, still failing on text the Line does not say. Use it for a first draft, then import audio for the same ids.
 
 `record` reports the Lines that were never said and have no `start`; Render leaves them out.
 
 ## 3. Change Lines after recording
 
 - **New audio or text**: voice again, then `narrate import <take> narration.json`. It replaces the Take's Narration. Lines keep their start in `edit.json`, and a new Line takes the `start` the file gives it. The command reports each Line's start and duration, and any Line that overlaps the next one or runs past the end.
-- **Timing and volume**: `edit.json` holds `narration: { volume, lines: [{ id, start, volume }] }`. Change `start` (seconds) or `volume` (1 is as recorded), then `render`. You only need to record again when the picture must change to make room.
+- **Timing and volume**: `edit.json` holds `narration: { volume, lines: [{ id, start, volume }] }`. Change `start` (seconds) or `volume` (1 is as recorded), then `render`. You only need to record again when the picture must change to make room. Moving a Line leaves the actions that waited for its words where Capture recorded them, so keep the start of a Line the Scenario waited on with `word`.
 
 A Line that overlaps the next one, runs past the end of the Final or is spoken while the Final fast-forwards ([scenarios.md](scenarios.md)) stops `render` and `verify`, with an error naming the Line and the seconds involved. Move or shorten the Line; CueTake never moves Lines or stretches the picture.
 

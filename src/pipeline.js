@@ -284,7 +284,7 @@ export async function recordScenario(scenarioPath, outputDir, options = {}) {
   try {
     // The Narration is voiced before Capture, so d.say can hold each Line for its audio (ADR 0006).
     const imported = options.narration ? await intoTakeNarration(options.narration, dir) : null;
-    const voiced = imported && new Map(Object.entries(imported.durations));
+    const voiced = imported && new Map(imported.narration.lines.map(line => [line.id, { ...line, duration: imported.durations[line.id] }]));
     captured = config.app ? await captureApp(scenario, config, dir, { voiced, useRunning: options.useRunning }) : await capturePage(scenario, config, dir, { authState, headed: options.headed, voiced });
     const { timeline, notes: { focus, wide }, evidence } = captured;
     await writeJson(join(dir, 'timeline.json'), timeline);
@@ -478,7 +478,7 @@ export function captureWarnings(capture, scale, tab = null) {
 /**
  * Warns when input landed inside an iframe Capture could not place exactly: one rotated, skewed or
  * 3D-transformed, placed as if it were only scaled, or one it could not place at all, which the Cursor
- * and camera do not follow.
+ * and camera do not follow; and when the Scenario waited for a word of a Line after the voice said it.
  */
 export function timelineWarnings(timeline) {
   const { turned = [], unplaced = [] } = timeline.frameInput ?? {};
@@ -486,6 +486,8 @@ export function timelineWarnings(timeline) {
   return [
     turned.length && `Input at ${at(turned)} landed inside an iframe that is rotated, skewed or 3D-transformed, which Capture places as if it were only scaled, so the Cursor and camera there may sit off what the page shows. Check those moments with frame, and record again once the iframe is upright, after any opening animation.`,
     unplaced.length && `Input at ${at(unplaced)} landed inside an iframe Capture could not place, so the Cursor and camera do not follow it there. Check those moments with frame.`,
+    ...(timeline.events ?? []).filter(event => event.type === 'say').flatMap(line => (line.late ?? []).map(word =>
+      `Line '${line.id}' said '${word.text}' at ${word.t.toFixed(2)} s, but the Scenario waited for it ${word.by.toFixed(2)} s later, so what follows lands after the voice. Start the actions before that word sooner, or wait for an earlier word.`)),
   ].filter(Boolean);
 }
 

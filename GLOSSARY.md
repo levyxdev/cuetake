@@ -39,7 +39,7 @@ The unedited picture of one Tab produced by Capture, in device pixels; a Take ha
 _Avoid_: raw video, recording
 
 **Timeline**:
-Every interaction observed during Capture (pointer path, presses and releases, the cursor shape the page asked for or macOS showed, typing, Shortcuts, focus targets, each element an App focused, where each Line was said, the Fast-forwards the Scenario marked, each page load from a navigation or reload, which Tab is in front, the boxes of each element a Mask follows), timed from the start of Capture and positioned in the CSS pixels of the Tab it happened in.
+Every interaction observed during Capture (pointer path, presses and releases, the cursor shape the page asked for or macOS showed, typing, Shortcuts, focus targets, each element an App focused, where each Line was said and any of its words the Scenario waited for after the voice said it, the Fast-forwards the Scenario marked, each page load from a navigation or reload, which Tab is in front, the boxes of each element a Mask follows), timed from the start of Capture and positioned in the CSS pixels of the Tab it happened in.
 _Avoid_: event log, camera events
 
 **Shortcut**:

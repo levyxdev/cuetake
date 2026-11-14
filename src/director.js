@@ -2,6 +2,7 @@ import { ease, landing, pauseMs, random, reach, scrollMs, typingDelays } from '.
 import { boxOnPage, onPage, placeOf } from './frames.js';
 import { carried, seenBy, windowMaps } from './tabs.js';
 import { EFFECT_NAMES, MASK_EFFECTS } from './masks.js';
+import { wordInLine } from './narration.js';
 
 /** Milliseconds between the Director's checks of what a mask's locator matches, so a replaced element is followed. */
 const REWATCH_MS = 100;
@@ -119,6 +120,9 @@ function scrollPlan(target, { block, inline, point, margin }) {
   return { steps };
 }
 
+/** How long after the voice said a word the Scenario may wait for it before `verify` warns. */
+const LATE_WORD_S = 0.2;
+
 /** Options may be a bare number for the action's main timing; `focus: false` keeps the camera wide. */
 export const options = (value, key) => typeof value === 'number' ? { [key]: value } : value ?? {};
 
@@ -147,21 +151,42 @@ export function clockOf({ startedAt, voiced = null }, { focus: focusTargets, sai
     try { return await action(); }
     finally { forwarded.push({ t: state.forwarding.t, end: time(), rate }); state.forwarding = null; }
   }
-  /** Starts a Line. With a Narration it holds for the Line's audio, so the picture follows the voice. */
-  async function say(id, text) {
-    const t = time(), earlier = said.find(line => line.id === id);
-    if (earlier) throw new Error(`Line '${id}' was already said at ${earlier.t.toFixed(2)} s`);
-    if (state.forwarding) throw new Error(`Line '${id}' is said inside d.fastForward, which the Final plays faster than speech; say it before the wait`);
-    if (voiced) {
-      if (!voiced.has(id)) throw new Error(`The Narration has no Line '${id}'; its Lines are ${[...voiced.keys()].join(', ')}`);
-      said.push({ t, id });
-      await wait((t + voiced.get(id)) * 1000 - (Date.now() - startedAt));
-    } else {
-      if (typeof text !== 'string' || !text) throw new Error(`d.say('${id}') needs the Line's text when recording without --narration`);
-      said.push({ t, id, text });
+  const at = seconds => wait(seconds * 1000 - (Date.now() - startedAt));
+  /**
+   * Starts a Line. With a Narration it holds for the Line's audio, so the picture follows the voice.
+   * The promise's `word(text)` resolves when the voice reaches `text`, each looked for after the last.
+   */
+  function say(id, text) {
+    const t = time();
+    let line, entry, from = 0;
+    try {
+      const earlier = said.find(previous => previous.id === id);
+      if (earlier) throw new Error(`Line '${id}' was already said at ${earlier.t.toFixed(2)} s`);
+      if (state.forwarding) throw new Error(`Line '${id}' is said inside d.fastForward, which the Final plays faster than speech; say it before the wait`);
+      if (voiced) {
+        if (!voiced.has(id)) throw new Error(`The Narration has no Line '${id}'; its Lines are ${[...voiced.keys()].join(', ')}`);
+        said.push(entry = { t, id });
+        line = voiced.get(id);
+      } else {
+        if (typeof text !== 'string' || !text) throw new Error(`d.say('${id}') needs the Line's text when recording without --narration`);
+        said.push({ t, id, text });
+        line = { id, text, duration: 0 };
+      }
+    } catch (error) {
+      return Object.assign(Promise.reject(error), { word: () => Promise.reject(error) });
     }
+    async function word(phrase) {
+      if (typeof phrase !== 'string' || !phrase) throw new Error(`d.say('${id}').word() needs the text to wait for`);
+      const found = wordInLine(line, phrase, from);
+      from = found.next;
+      if (!voiced) return;
+      const spoken = t + found.at, late = time() - spoken;
+      if (late > LATE_WORD_S) (entry.late ??= []).push({ text: phrase, t: spoken, by: late });
+      await at(spoken);
+    }
+    return Object.assign(voiced ? at(t + line.duration) : Promise.resolve(), { word });
   }
-  return { state, wait, time, at: seconds => wait(seconds * 1000 - (Date.now() - startedAt)), focus, fastForward, say };
+  return { state, wait, time, at, focus, fastForward, say };
 }
 
 /**
@@ -171,7 +196,7 @@ export function clockOf({ startedAt, voiced = null }, { focus: focusTargets, sai
  * where each Line starts (`said`),
  * each fast-forwarded wait (`forwarded`) and the pointer path no Tab could see (`pointer`, as
  * [epoch ms, x, y, tab]), and each element masked (`elements`, { id, tab, name }) with its mask
- * (`masks`). `voiced` maps the Narration's Line ids to their audio's seconds, or is null
+ * (`masks`). `voiced` maps the Narration's Line ids to their Lines ({ id, text, duration, words? }), or is null
  * without one. `speed` scales every move, pause and typing delay it chooses; `seed` picks one of many
  * equally human ways to move. `signal` aborts once the Scenario has run, when masks stop following.
  */

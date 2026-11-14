@@ -16,7 +16,7 @@ import { bundle, codeRefs, forRender, BUILTIN_DIR } from '../src/styles.js';
 import { npxFolders, uninstall } from '../src/uninstall.js';
 import { ensureHome } from '../src/home.js';
 import { serveRange } from '../src/render.js';
-import { subtitleRows, subtitleCues, lineProblems, toSrt, toVtt } from '../src/narration.js';
+import { subtitleRows, subtitleCues, lineProblems, toSrt, toVtt, wordInLine } from '../src/narration.js';
 import { shortcutKeys, keycapShows, keycapTrack } from '../src/shortcuts.js';
 import { timeMap, fastForwardProblems, retimed, linesInFinal, badgeAt } from '../src/time-map.js';
 import { windowMaps, tabTrack, inWindow, carried, seenBy } from '../src/tabs.js';
@@ -198,6 +198,13 @@ test('warns about input Capture could not place exactly inside an iframe', () =>
   expect(turned).toContain('rotated');
   expect(unplaced).toContain('6.25 s');
   expect(timelineWarnings({ frameInput: { turned: [], unplaced: [3] } })).toHaveLength(1);
+});
+
+test('warns about each word the Scenario waited for after the voice had said it', () => {
+  const events = [{ type: 'say', t: 2, id: 'build', late: [{ text: 'TDD', t: 3.3, by: 0.45 }] }, { type: 'say', t: 6, id: 'ship' }];
+  expect(timelineWarnings({ events })).toEqual([
+    "Line 'build' said 'TDD' at 3.30 s, but the Scenario waited for it 0.45 s later, so what follows lands after the voice. Start the actions before that word sooner, or wait for an earlier word.",
+  ]);
 });
 
 test('tells a software renderer from a GPU by the name Chromium reports', () => {
@@ -1186,6 +1193,31 @@ test('cues share a Line by its spoken characters, or by its word timings when it
   expect(timed[1].start).toBeCloseTo(4, 6);
 });
 
+const build = { id: 'build', text: 'First to-spec, then TDD.', duration: 2 };
+const buildWords = [{ text: 'First', start: 0, end: 0.3 }, { text: 'to-spec,', start: 0.4, end: 0.9 }, { text: 'then', start: 1, end: 1.2 }, { text: 'TDD.', start: 1.3, end: 1.7 }];
+
+test('a word of a Line starts when its word timing says, or by its spoken characters without them', () => {
+  // 15 of the Line's 18 spoken characters come before "TDD".
+  expect(wordInLine(build, 'TDD').at).toBeCloseTo(2 * 15 / 18, 6);
+  expect(wordInLine({ ...build, words: buildWords }, 'tdd').at).toBeCloseTo(1.3, 6);
+  expect(wordInLine({ ...build, words: buildWords }, 'to-spec').at).toBeCloseTo(0.4, 6);
+  // 7 of the Line's 9 characters come before 工单.
+  expect(wordInLine({ id: 'plan', text: '先写规格，再拆成工单。', duration: 1.8 }, '工单').at).toBeCloseTo(1.4, 6);
+});
+
+test('each word of a Line is looked for after the one before, and a word the Line does not say fails naming the Line', () => {
+  const twice = { id: 'twice', text: 'TDD first, then TDD again.', duration: 2.2 };
+  const first = wordInLine(twice, 'TDD'), second = wordInLine(twice, 'TDD', first.next);
+  expect(first.at).toBe(0);
+  // 12 of the Line's 20 spoken characters come before the second "TDD".
+  expect(second.at).toBeCloseTo(2.2 * 12 / 20, 6);
+  expect(() => wordInLine(twice, 'TDD', second.next)).toThrow(`Line 'twice' does not say 'TDD' after the word before; its text is "TDD first, then TDD again."`);
+  expect(() => wordInLine(build, 'tickets')).toThrow(`Line 'build' does not say 'tickets'; its text is "First to-spec, then TDD."`);
+  // İ lowercases to two characters; the match still counts the Line's own characters.
+  const istanbul = { id: 'city', text: 'İstanbul, then Ankara.', duration: 1.9 };
+  expect(wordInLine(istanbul, 'ankara').at).toBeCloseTo(1.9 * 12 / 18, 6);
+});
+
 test('Chinese Lines break at about 16 characters and two rows make a cue', () => {
   const cues = subtitleCues([{ id: 'a', text: '先打开编辑器然后给标题选一个颜色再点击保存按钮就能看到效果', start: 0, duration: 6 }], { language: 'zh-CN' });
   expect(cues[0].rows).toHaveLength(2);
@@ -1483,6 +1515,60 @@ test('the Director of a Take of Apps keeps time, says Lines, fast-forwards and f
   expect(notes.focus).toEqual([{ t: 1, box: { x: 10, y: 20, width: 300, height: 40 }, tab: 0 }]);
   expect(notes.said).toMatchObject([{ id: 'open', text: 'Open a document' }]);
   expect(notes.forwarded).toMatchObject([{ rate: 3 }]);
+});
+
+const quickBuild = { ...build, duration: 0.5, words: [{ text: 'First', start: 0, end: 0.05 }, { text: 'to-spec,', start: 0.1, end: 0.2 }, { text: 'then', start: 0.22, end: 0.27 }, { text: 'TDD.', start: 0.3, end: 0.4 }] };
+
+test('a voiced Line resolves each of its words as the voice reaches it, and still ends with the Line', async () => {
+  const notes = { focus: [], wide: [], said: [], forwarded: [], pointer: [], events: [] };
+  const d = createAppDirector({ startedAt: Date.now(), helper: fakeHelper(textEdit()), voiced: new Map([['build', quickBuild]]) }, notes);
+  const line = d.say('build');
+  await line.word('to-spec');
+  expect(d.time()).toBeCloseTo(0.1, 1);
+  await line.word('TDD');
+  d.focus({ x: 10, y: 20, width: 300, height: 40 });
+  await line;
+  expect(notes.focus[0].t).toBeGreaterThanOrEqual(0.3);
+  expect(notes.focus[0].t).toBeLessThan(0.35);
+  expect(d.time()).toBeGreaterThanOrEqual(0.5);
+  expect(notes.said).toEqual([{ t: expect.any(Number), id: 'build' }]);
+});
+
+test('a voiced Line without word timings resolves a word by its spoken characters', async () => {
+  const notes = { focus: [], wide: [], said: [], forwarded: [], pointer: [], events: [] };
+  const d = createAppDirector({ startedAt: Date.now(), helper: fakeHelper(textEdit()), voiced: new Map([['build', { ...build, duration: 0.36 }]]) }, notes);
+  const line = d.say('build');
+  await line.word('TDD');
+  d.focus({ x: 10, y: 20, width: 300, height: 40 });
+  // 15 of the Line's 18 spoken characters come before "TDD": 0.3 s into 0.36 s.
+  expect(notes.focus[0].t).toBeGreaterThanOrEqual(0.3);
+  expect(notes.focus[0].t).toBeLessThan(0.35);
+  await line;
+});
+
+test('without a Narration a word resolves at once, but one the Line does not say still fails', async () => {
+  const notes = { focus: [], wide: [], said: [], forwarded: [], pointer: [], events: [] };
+  const d = createAppDirector({ startedAt: Date.now(), helper: fakeHelper(textEdit()) }, notes);
+  const line = d.say('build', build.text);
+  await line.word('TDD');
+  expect(d.time()).toBeLessThan(0.05);
+  await expect(line.word('tickets')).rejects.toThrow(`Line 'build' does not say 'tickets' after the word before; its text is "First to-spec, then TDD."`);
+});
+
+test('a word the Scenario waits for after the voice said it resolves at once and is noted as late', async () => {
+  const notes = { focus: [], wide: [], said: [], forwarded: [], pointer: [], events: [] };
+  const d = createAppDirector({ startedAt: Date.now(), helper: fakeHelper(textEdit()), voiced: new Map([['build', quickBuild]]) }, notes);
+  const line = d.say('build');
+  await line.word('First');
+  await d.wait(350);
+  await line.word('to-spec');
+  expect(d.time()).toBeLessThan(0.4);
+  // "TDD" is under 0.2 s late by now, which is not worth a warning.
+  await line.word('TDD');
+  await line;
+  expect(notes.said[0].late).toEqual([{ text: 'to-spec', t: expect.closeTo(0.1, 1), by: expect.closeTo(0.25, 1) }]);
+  const timeline = desktopTimelineOf({ apps: [{ path: 'com.apple.TextEdit', args: [] }], viewport: desktopViewport, scale: 2 }, { duration: 1, windows: sidecarWindows }, notes);
+  expect(timelineWarnings(timeline)).toEqual([expect.stringContaining("Line 'build' said 'to-spec' at 0.1")]);
 });
 
 test('the Timeline of a Take of Apps has one Tab, its Desktop, with the windows the helper saw and what the Director noted', () => {

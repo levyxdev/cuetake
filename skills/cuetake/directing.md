@@ -65,6 +65,8 @@ await d.click(send);
 await line;
 ```
 
+Inside a Line, move the picture on the words the voice names, with `line.word(text)` ([narration.md](narration.md)) rather than timed waits, which drift from the voice: a Line listing three steps moves the camera as each step is named.
+
 The opening still waits about a second before the first Line, and the ending keeps its 2 s after the last.
 
 ## Example

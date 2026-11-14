@@ -83,6 +83,20 @@ function clock(line) {
 }
 
 /**
+ * Where `text` is said in `line`, a case-insensitive substring of its text found at or after
+ * character `from`: `at` is seconds from the start of the Line's audio, by the clock Subtitles use,
+ * and `next` is where to look for the next word.
+ */
+export function wordInLine(line, text, from = 0) {
+  // A case-insensitive match on the text itself, so indices stay those of the text in every language.
+  const pattern = new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu');
+  pattern.lastIndex = from;
+  const match = pattern.exec(line.text), index = match?.index ?? -1;
+  if (index < 0) throw new Error(`Line '${line.id}' does not say '${text}'${from ? ' after the word before' : ''}; its text is "${line.text}"`);
+  return { at: clock(line).start(spoken(line.text.slice(0, index))), next: index + match[0].length };
+}
+
+/**
  * Subtitle cues for placed Lines: each Line's rows, `maxRows` to a cue (a cue also ends after a
  * sentence), shown while they are spoken. A cue shorter than `minDuration` takes time from the next
  * cue of its Line, or from the silence after its Line, up to `end`, the end of the Final.
