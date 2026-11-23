@@ -171,6 +171,13 @@ function probe(contentOf) {
 const collectors = new WeakMap(), script = `(${probe})(${contentOf})`;
 
 /**
+ * The page's frames that hold a document now. One that has not loaded one yet, such as a lazy iframe
+ * the page has not scrolled near, would keep an evaluate in it waiting until it does, which may be
+ * never; the init script reaches it when it loads.
+ */
+const loadedFrames = page => page.frames().filter(frame => frame.url() !== '');
+
+/**
  * Installs the probe in every frame of the page, now and in frames that load later, and starts
  * collecting what it sends. Calling it again on the same page starts the collection over.
  */
@@ -209,7 +216,7 @@ export async function installProbe(page) {
   records.push({ kind: 'top', frame: idOf(page.mainFrame()) });
   Object.assign(collector, { idOf, link, records });
   // Parents first (frames() lists them in tree order), so each child finds its parent's probe to link to.
-  for (const frame of page.frames()) await frame.evaluate(script).catch(() => {});
+  for (const frame of loadedFrames(page)) await frame.evaluate(script).catch(() => {});
 }
 
 /** The entry of `list`, sorted by `ms`, last at or before `ms`, or its first. */
@@ -315,7 +322,7 @@ export async function collectTimeline(page, startedAtMs) {
   const collector = collectors.get(page);
   if (!collector) throw new Error('The Timeline probe was never installed on this page');
   // Records a frame sent before this call arrive before its answer to an evaluate.
-  await Promise.all(page.frames().map(frame => frame.evaluate(() => 0).catch(() => {})));
+  await Promise.all(loadedFrames(page).map(frame => frame.evaluate(() => 0).catch(() => {})));
   while (collector.pending.size) await Promise.all(collector.pending);
   const raw = placeRecords(collector.records);
   const t = ms => Math.round(ms - startedAtMs) / 1000;
