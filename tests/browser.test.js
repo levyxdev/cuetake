@@ -222,6 +222,35 @@ test('probe follows input inside cross-origin, nested, late and removed iframes,
   } finally { await browser.close(); server.close(); }
 }, 30_000);
 
+test('probe starts beside a lazy iframe that has not loaded, and follows input in it once it does', async () => {
+  // Far below the fold, a lazy iframe holds no document until the page scrolls near it, so an evaluate
+  // in it would wait until then.
+  const server = await sites({
+    '/': '<body style="margin:0"><div style="height:20000px"></div><iframe id="lazy" loading="lazy" src="http://localhost:PORT/form" style="border:0;width:300px;height:100px"></iframe><div style="height:600px"></div></body>',
+    '/form': '<body style="margin:0"><button id="go" style="margin:20px;width:100px;height:30px">Go</button></body>',
+  });
+  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
+  try {
+    const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+    await page.goto(`http://127.0.0.1:${server.port}/`);
+    expect(page.frames().map(frame => frame.url())).toContain('');
+    const startedAtMs = Date.now();
+    const timedOut = () => new Promise((_, reject) => setTimeout(() => reject(new Error('waited on a frame with no document')), 5_000));
+    await Promise.race([installProbe(page), timedOut()]);
+    // The Timeline collects while the iframe has still not loaded.
+    expect((await Promise.race([collectTimeline(page, startedAtMs), timedOut()])).events).toEqual([]);
+    await page.locator('#lazy').scrollIntoViewIfNeeded();
+    const go = page.frameLocator('#lazy').locator('#go');
+    await go.waitFor();
+    const box = await go.boundingBox();
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    const clicks = (await collectTimeline(page, startedAtMs)).events.filter(e => e.type === 'click');
+    expect(clicks).toHaveLength(1);
+    expect(clicks[0].x).toBeCloseTo(box.x + box.width / 2, 0);
+    expect(clicks[0].y).toBeCloseTo(box.y + box.height / 2, 0);
+  } finally { await browser.close(); server.close(); }
+}, 30_000);
+
 test('probe scales input inside a scaled iframe, and notes one that is rotated', async () => {
   const form = '<body style="margin:0"><button id="go" style="margin:40px;width:100px;height:40px">Go</button></body>';
   const server = await sites({
