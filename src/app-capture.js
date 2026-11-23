@@ -106,10 +106,15 @@ export async function startDesktop({ apps, desktop, fps, source, poster, useRunn
     ready: await ready,
     async start() { const started = reply('started'); send({ start: true }); return (await started).epochMs; },
     async stop() { const stopped = reply('stopped'); send({ stop: true }); return stopped; },
-    request(message) {
-      if (ended) return Promise.reject(ended);
-      const id = ++next;
-      return new Promise((resolve, reject) => { requests.set(id, { resolve, reject }); send({ id, ...message }); });
+    async request(message) {
+      try {
+        if (ended) throw ended;
+        const id = ++next;
+        return await new Promise((resolve, reject) => { requests.set(id, { resolve, reject }); send({ id, ...message }); });
+      } catch (error) {
+        // A fresh error, made here after the await, carries the Scenario's call on its stack, which the helper's reply cannot.
+        throw new Error(error.message, { cause: error });
+      }
     },
     kill() { if (child.exitCode === null) child.stdin.end(); },
   };

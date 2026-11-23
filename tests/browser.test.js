@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
+import { spawnSync } from 'node:child_process';
 import { saveAuthState, resolveAuthProfile } from '../src/auth.js';
 import { installProbe, collectTimeline } from '../src/probe.js';
 import { createDirector } from '../src/director.js';
@@ -593,16 +594,82 @@ test('the Director fails a scroll that moves nothing, and one that cannot bring 
     await page.setContent(`<body style="margin:0"><div style="height:3000px"><h2 id="far" style="margin-top:2000px">Far</h2></div>
       <script>addEventListener('wheel', e => e.preventDefault(), { passive: false })</script></body>`);
     const d = createDirector(followTabs(page), { startedAt: Date.now(), fps: 60, speed: 4 }, { focus: [], wide: [], said: [], forwarded: [], pointer: [] });
-    await expect(d.scroll('#far')).rejects.toThrow('Scroll moved nothing: a wheel at (0, 0) did not scroll the page');
+    const stuck = await d.scroll('#far').catch(e => e);
+    expect(stuck.message).toMatch(/^d\.scroll\(locator\('#far'\)\) at \d+\.\d s moved nothing: a wheel at \(0, 0\) did not scroll the page/);
     // Closed, so Chromium does not throttle the next page as one behind it.
     await page.close();
     const framed = await browser.newPage({ viewport: { width: 640, height: 480 } });
     await framed.setContent(`<body style="margin:0"><div style="height:2000px"></div><iframe srcdoc="<p id=deep>Deep</p>" style="height:100px;border:0"></iframe></body>`);
     const e = createDirector(followTabs(framed), { startedAt: Date.now(), fps: 60, speed: 4 }, { focus: [], wide: [], said: [], forwarded: [], pointer: [] });
-    await expect(e.scroll(e.page.frameLocator('iframe').locator('#deep'))).rejects.toThrow('Scroll could not bring the target into view');
+    const hidden = await e.scroll(e.page.frameLocator('iframe').locator('#deep')).catch(e => e);
+    expect(hidden.message).toMatch(/^d\.scroll\(locator\('iframe'\)\.contentFrame\(\)\.locator\('#deep'\)\) at \d+\.\d s could not bring the target into view: /);
+    expect(hidden.message).toContain('640×480 viewport');
+    expect(hidden.message).toContain('nothing scrolled. The target is inside an iframe');
+    expect(hidden.message).toContain("scroll the iframe into view first with d.scroll(d.page.locator('iframe'))");
     await e.scroll(e.page.locator('iframe'));
     expect((await e.scroll(e.page.frameLocator('iframe').locator('#deep'))).y).toBeLessThan(480);
   } finally { await browser.close(); }
+}, 30_000);
+
+test('the Director says why a scroll could not bring its target into view: the layout moved it, the page moved its own scroll position, or neither', async () => {
+  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
+  const director = page => createDirector(followTabs(page), { startedAt: Date.now(), fps: 60, speed: 4 }, { focus: [], wide: [], said: [], forwarded: [], pointer: [] });
+  try {
+    // A list above the target grows while the page scrolls, as a filter still settling does.
+    let page = await browser.newPage({ viewport: { width: 640, height: 480 } });
+    await page.setContent(`<body style="margin:0;overflow-anchor:none"><div id="list" style="height:1500px"></div><h2 id="far" style="margin:0;height:40px">Far</h2><div style="height:20000px"></div>
+      <script>addEventListener('wheel', () => { list.style.height = list.offsetHeight + 60 + 'px'; }, { passive: true })</script></body>`);
+    let error = await director(page).scroll('#far').catch(e => e);
+    expect(error.message).toMatch(/^d\.scroll\(locator\('#far'\)\) at \d+\.\d s could not bring the target into view: /);
+    expect(error.message).toMatch(/the page scrolled from \(0, 0\) to \(0, \d+\)/);
+    const moved = Number(/layout moved the target (\d+) px/.exec(error.message)?.[1]);
+    expect(moved).toBeGreaterThan(1000);
+    expect(error.message).not.toContain('iframe');
+    await page.close();
+    // The page moves its own scroll position against the wheel, as scroll anchoring does when content is added above the view.
+    page = await browser.newPage({ viewport: { width: 640, height: 480 } });
+    await page.setContent(`<body style="margin:0"><h1 id="top" style="margin:0;height:40px">Top</h1><div style="height:40000px"></div>
+      <script>scrollTo(0, 3000); addEventListener('wheel', e => { if (e.deltaY < 0) setTimeout(() => scrollBy(0, -2 * e.deltaY)); }, { passive: true })</script></body>`);
+    error = await director(page).scroll('#top').catch(e => e);
+    const jumped = Number(/page moved its own scroll position (-?\d+) px past where the wheel took it/.exec(error.message)?.[1]);
+    expect(jumped).toBeGreaterThan(1000);
+    expect(error.message).not.toContain("layout moved the target");
+    await page.close();
+    // A target clipped where nothing scrolls to it gets the facts and no guess.
+    page = await browser.newPage({ viewport: { width: 640, height: 480 } });
+    await page.setContent(`<body style="margin:0"><div style="width:300px;height:100px;overflow:hidden;position:relative"><span id="clipped" style="position:absolute;left:900px;width:40px">Clipped</span></div></body>`);
+    error = await director(page).scroll('#clipped').catch(e => e);
+    expect(error.message).toMatch(/^d\.scroll\(locator\('#clipped'\)\) at \d+\.\d s could not bring the target into view: its box on the page was \(900, 0\) 40×\d+ at the start and \(900, 0\) 40×\d+ at the end, in the 640×480 viewport, and nothing scrolled\.?$/);
+  } finally { await browser.close(); }
+}, 30_000);
+
+test('on Node, a Director failure keeps the line of the Scenario that called it on its stack', async () => {
+  // Bun keeps no async frames across these awaits; users run CueTake on Node, which does.
+  const dir = await fs.mkdtemp(join(tmpdir(), 'cuetake-stack-'));
+  try {
+    const src = new URL('../src/', import.meta.url).href, playwright = import.meta.resolve('playwright');
+    await fs.writeFile(join(dir, 'scenario.mjs'), `import { chromium } from '${playwright}';
+import { createDirector } from '${src}director.js';
+import { followTabs } from '${src}follow-tabs.js';
+import { atScenario } from '${src}pipeline.js';
+async function run(d) {
+  await d.scroll('#far');
+}
+const browser = await chromium.launch({ headless: true, channel: 'chromium' });
+const page = await browser.newPage({ viewport: { width: 640, height: 480 } });
+await page.setContent('<body style="margin:0"><div style="height:3000px"><h2 id="far" style="margin-top:2000px">Far</h2></div><script>addEventListener("wheel", e => e.preventDefault(), { passive: false })</script></body>');
+const error = await run(createDirector(followTabs(page), { startedAt: Date.now(), fps: 60, speed: 4 }, { focus: [], wide: [], said: [], forwarded: [], pointer: [] })).catch(e => e);
+await browser.close();
+console.log(error.stack);
+console.log(atScenario(error, ${JSON.stringify(join(dir, 'scenario.mjs'))}).message);
+`);
+    const node = spawnSync('node', [join(dir, 'scenario.mjs')], { encoding: 'utf8' });
+    expect(node.stderr).toBe('');
+    expect(node.stdout).toContain('moved nothing');
+    expect(node.stdout).toContain(`at async run (file://${join(await fs.realpath(dir), 'scenario.mjs')}:6:`);
+    // The Take's error names that line by the path the Scenario was given as, though Node shows its real path.
+    expect(node.stdout).toContain(`did not scroll the page; the page may take the wheel itself, or something lies over it (at ${join(dir, 'scenario.mjs')}:6)`);
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
 }, 30_000);
 
 test('the Director masks every element a locator matches, following it as the page scrolls, inside iframes and when it is replaced', async () => {

@@ -1,7 +1,8 @@
 import { test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import pkg from '../package.json' with { type: 'json' };
-import { scenarioSchema, summarizeFrames, captureWarnings, timelineWarnings, captureScale, narrationSchema, timelineOf, desktopTimelineOf, appReport, recordScenario } from '../src/pipeline.js';
+import { scenarioSchema, summarizeFrames, captureWarnings, timelineWarnings, captureScale, narrationSchema, timelineOf, desktopTimelineOf, appReport, recordScenario, atScenario } from '../src/pipeline.js';
 import { placeRecords } from '../src/probe.js';
 import { captureSeconds } from '../src/tab-capture.js';
 import { drawsWithGpu } from '../src/environment.js';
@@ -1915,6 +1916,23 @@ test('record reports the Apps it left running, and refuses --use-running for a p
   const dir = await tmp('cuetake-use-running-');
   await fs.writeFile(join(dir, 'page.mjs'), "export const config = { name: 'page', url: 'https://example.test/' };\nexport async function run() {}\n");
   await expect(recordScenario(join(dir, 'page.mjs'), join(dir, 'take'), { useRunning: true })).rejects.toThrow('--use-running is for Apps');
+});
+
+test('a failure names the line of the Scenario it came from, and nothing when the Scenario is not on its stack', async () => {
+  const dir = await tmp('cuetake-at-scenario-');
+  const path = join(dir, 'demo.mjs');
+  await fs.writeFile(path, "export async function run(d) {\n  await d.wait(10);\n  await d.scroll('#far');\n}\n");
+  const scenario = await import(pathToFileURL(path).href);
+  const director = { wait: ms => new Promise(r => setTimeout(r, ms)), async scroll() { await new Promise(r => setTimeout(r, 5)); throw new Error('Scroll failed'); } };
+  const error = await scenario.run(director).catch(e => e);
+  expect(atScenario(error, path).message).toBe(`Scroll failed (at ${path}:3)`);
+  // A message of several lines, such as Playwright's with its call log, names the line at the end of its first.
+  const timedOut = await scenario.run({ wait: async () => {}, async scroll() { await new Promise(r => setTimeout(r, 5)); throw new Error('locator.textContent: Timeout 300ms exceeded.\nCall log:\n  - waiting for locator(\'#far\')'); } }).catch(e => e);
+  expect(atScenario(timedOut, path).message).toBe(`locator.textContent: Timeout 300ms exceeded. (at ${path}:3)\nCall log:\n  - waiting for locator('#far')`);
+  // An error from outside the Scenario, such as a timer it started, is left as it is.
+  const loose = new Error('Page crashed');
+  expect(atScenario(loose, path).message).toBe('Page crashed');
+  expect(atScenario('not an error', path)).toBe('not an error');
 });
 
 test('a file is served to the render page in bounded parts, so a long Source or Final never crosses Playwright at once', async () => {

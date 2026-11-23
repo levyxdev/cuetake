@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import { dirname, extname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { doctor } from './environment.js';
@@ -251,6 +252,27 @@ export function appReport({ unquit, running }) {
   return { ...(unquit.length && { quit: false, unquit }), ...(running.length && { running }), note: notes.join(' ') };
 }
 
+const realPath = path => { try { return realpathSync(path); } catch { return path; } };
+
+/**
+ * Names the line of the Scenario at `scenarioPath` that `error` came from, the innermost one on its
+ * stack, at the end of its message's first line, so a failed Take says which call failed. An error whose stack
+ * does not pass through the Scenario, such as one from a timer it started, is left as it is.
+ */
+export function atScenario(error, scenarioPath) {
+  if (!(error instanceof Error) || typeof error.stack !== 'string') return error;
+  // Node names an imported module by its real path, with any symlink, such as macOS's /var, resolved.
+  const files = [...new Set([resolve(scenarioPath), realPath(resolve(scenarioPath))])];
+  const names = files.flatMap(file => [pathToFileURL(file).href, file]);
+  for (const frame of error.stack.split('\n').filter(line => /^\s+at /.test(line))) {
+    for (const name of names) {
+      const line = frame.includes(`${name}:`) && /^:(\d+)/.exec(frame.slice(frame.indexOf(`${name}:`) + name.length))?.[1];
+      if (line) { error.message = error.message.replace(/^[^\n]*/, first => `${first} (at ${scenarioPath}:${line})`); return error; }
+    }
+  }
+  return error;
+}
+
 /** New take directories are exclusive: reruns never overwrite a previous take. */
 export async function recordScenario(scenarioPath, outputDir, options = {}) {
   const scenario = await import(pathToFileURL(resolve(scenarioPath)).href);
@@ -295,6 +317,7 @@ export async function recordScenario(scenarioPath, outputDir, options = {}) {
     project = { ...project, status: 'captured', duration: timeline.duration, evidence: evidence ?? null };
     await writeJson(join(dir, 'project.json'), project);
   } catch (error) {
+    atScenario(error, scenarioPath);
     await writeJson(join(dir, 'project.json'), { ...project, status: 'failed', error: error.message });
     throw error;
   }

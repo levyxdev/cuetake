@@ -89,7 +89,8 @@ await d.scroll(d.page.getByRole('cell', { name: 'Total' }), { block: 'center', i
 
 - A target already where it was asked to be scrolls nothing. A container that cannot go farther stops at its end, and the call returns normally.
 - A page that moves its layout while it scrolls, such as images loading above the target, gets one short second scroll to correct it, only when it is off by more than 4 CSS px.
-- A scroll fails the Take when the wheel moves nothing (the page takes the wheel itself, or something lies over the container), when no part of a container the wheel would reach shows, and when the target still is not in view at the end.
+- A scroll fails the Take when the wheel moves nothing (the page takes the wheel itself, or something lies over the container), when no part of a container the wheel would reach shows, and when the target still is not in view at the end. The error names the locator and the Source second the scroll started at; when the target ends out of view, it also gives the target's box at the start and the end and what each container scrolled from and to, and says when the page's layout moved the target or the page moved its own scroll position during the scroll.
+- Scroll once the page has settled. A list still filtering after typing, or content added above the view (which Chromium's scroll anchoring answers by moving the scroll position), moves the target while the wheel turns: wait for the result first, such as `await results.first().waitFor()`.
 - A target inside an iframe scrolls only within the iframe's own document; scroll to the iframe first with `d.scroll(d.page.locator('iframe'))`.
 - Each scroll is recorded in the Timeline as a `scroll` event and copied into `edit.json` as `camera.scrolls: [{ "start": 8.1, "end": 9.9 }]` (Source seconds): the camera is back wide `response` before a scroll starts and stays wide until it ends ([directing.md](directing.md), Camera). Remove a span there to keep a zoom through that scroll. Wheel input sent through Playwright directly is not recorded, and the camera ignores it.
 
@@ -138,7 +139,7 @@ Which Tab is in front follows the browser: a new Tab comes in front when it open
 
 In the Final, a Tab the size of the viewport replaces the page in the same window, with a cut by default, and the camera cuts to wide. Any other Tab is a popup window over the Tab that opened it, which keeps playing behind it; the camera frames it as it opens. The Cursor stays one pointer across Tabs, where it was on the window. Each Tab's input is in its own CSS pixels in `timeline.json`, and each event names its `tab`.
 
-Use actual locators for clicks. Canvas drags often require coordinates; derive or validate them for the configured viewport. Keep setup outside capture and assert meaningful application changes. An exception marks the take failed and closes the isolated browser.
+Use actual locators for clicks. Canvas drags often require coordinates; derive or validate them for the configured viewport. Keep setup outside capture and assert meaningful application changes. An exception marks the take failed and closes the isolated browser; the first line of its message, printed by `record` and kept in the Take's `project.json` as `error`, ends with the line of the scenario it came from, such as `(at demo.mjs:42)`.
 
 ## Apps
 

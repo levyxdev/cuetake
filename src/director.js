@@ -37,8 +37,10 @@ export function followMask({ id, tab, name, t, effect, params }, notes, { watch,
 const ALIGNS = ['start', 'center', 'end', 'nearest'];
 // A scroll lands its target this share of the scrolled view from its edge, so it is not flush against it.
 const SCROLL_MARGIN = 0.1;
-// A container already scrolled once is scrolled again only to correct a target this far off, such as after images loaded above it.
+// A container already scrolled once is scrolled again only to correct a target this far off, such as after images loaded above it;
+// a scroll that fails names a move of the layout, or of a scroll position past where the wheel took it, this large as the reason.
 const CORRECTION_PX = 4;
+const SETTLE = 'wait until the page settles before d.scroll';
 
 /**
  * Runs in the target's frame: how a person would scroll to `target`, outermost container first. Each
@@ -115,9 +117,41 @@ function scrollPlan(target, { block, inline, point, margin }) {
       aim = spots.find(spot => reaches(spot.x, spot.y, container, axis)) ?? false;
     }
     const name = container === page ? 'the page' : `<${container.localName}${container.id ? `#${container.id}` : ''}>`;
-    return { index, delta, aim, at, name };
+    return { index, delta, aim, at, name, page: container === page };
   });
   return { steps };
+}
+
+const at = ({ x, y }) => `(${Math.round(x)}, ${Math.round(y)})`;
+const boxText = box => box ? `${at(box)} ${Math.round(box.width)}×${Math.round(box.height)}` : 'gone';
+
+/**
+ * What `d.scroll` saw when its target ended out of view, and why when it can tell. `startBox` and `box`
+ * are the target's box at the start and the end, in top-level CSS px, with `startMap` and `map` placing
+ * its frame on the page then (placeOf). `containers` are those that scrolled or that the wheel turned,
+ * outermost first, each with its scroll position `from` and `to` in its frame's CSS px and what the wheel
+ * `sent` it, or null. The reasons: the layout moved the target, a container moved past where the wheel
+ * took it, and the target is in an iframe.
+ */
+function outOfView({ startBox, box, startMap, map, viewport, framed, containers }) {
+  const facts = `its box on the page was ${boxText(startBox)} at the start and ${boxText(box)} at the end, in the ${viewport.width}×${viewport.height} viewport`;
+  const scrolled = containers.length ? `, and ${containers.map(c => `${c.name} scrolled from ${at(c.from)} to ${at(c.to)}`).join(', ')}` : ', and nothing scrolled';
+  const why = [];
+  // In its frame's CSS px, a target the layout leaves alone moves exactly as far as what scrolls it moves the other way.
+  if (startBox && box) {
+    const drift = (axis, size) => (box[axis] - map[axis]) / map[size] - (startBox[axis] - startMap[axis]) / startMap[size] + containers.reduce((sum, c) => sum + c.to[axis] - c.from[axis], 0);
+    const moved = Math.round(Math.max(Math.abs(drift('x', 'sx')), Math.abs(drift('y', 'sy'))));
+    if (moved > CORRECTION_PX) why.push(`the page's layout moved the target ${moved} px while it scrolled, as a list still filtering or loading does; ${SETTLE}`);
+  }
+  // A container short of where the wheel took it reached its end; one past it was moved by the page.
+  const pushed = containers.filter(c => c.sent).map(c => {
+    const axis = Math.abs(c.to.y - c.from.y - c.sent.y) >= Math.abs(c.to.x - c.from.x - c.sent.x) ? 'y' : 'x', moved = c.to[axis] - c.from[axis];
+    const atEnd = moved * c.sent[axis] >= 0 && Math.abs(moved) <= Math.abs(c.sent[axis]);
+    return { name: c.name, extra: atEnd ? 0 : Math.round(moved - c.sent[axis]) };
+  }).find(c => Math.abs(c.extra) > CORRECTION_PX);
+  if (pushed) why.push(`${pushed.name} moved its own scroll position ${pushed.extra} px past where the wheel took it, as when scroll anchoring answers content added above the view, or the page grows shorter under it; ${SETTLE}`);
+  if (framed) why.push("the target is inside an iframe, and d.scroll scrolls only within the iframe's page: scroll the iframe into view first with d.scroll(d.page.locator('iframe'))");
+  return `${facts}${scrolled}.${why.map(w => ` ${w[0].toUpperCase()}${w.slice(1)}.`).join('')}`;
 }
 
 /** How long after the voice said a word the Scenario may wait for it before `verify` warns. */
@@ -362,15 +396,19 @@ export function createDirector(tabs, { startedAt, fps, voiced = null, speed = 1,
     // The page may replace the element, or navigate; watching again follows what the locator matches now.
     return followMask({ id, tab: tab.id, name: String(target), t, effect, params }, notes, { watch, skip: () => target.page().isClosed(), signal, time });
   }
-  /** The Director's plan to scroll to `target` (scrollPlan), with where the target's frame shows on the page. */
+  /**
+   * The Director's plan to scroll to `target` (scrollPlan), with where the target's frame shows on the
+   * page and whether that frame is an iframe; null when the target has no visible box.
+   */
   async function scrollSteps(target, block, inline) {
     const handle = await target.elementHandle();
     try {
-      const map = await placeOf(await handle.ownerFrame());
+      const frame = await handle.ownerFrame(), map = await placeOf(frame), framed = Boolean(frame.parentFrame());
       const point = { x: (cursor.x - map.x) / map.sx, y: (cursor.y - map.y) / map.sy };
       const plan = await handle.evaluate(scrollPlan, { block, inline, point, margin: SCROLL_MARGIN });
-      if (!plan) throw new Error('Scroll target has no visible bounding box');
-      return { map, steps: plan.steps };
+      if (!plan) return null;
+      if (framed) for (const step of plan.steps) if (step.page) step.name = "the iframe's page";
+      return { map, framed, steps: plan.steps };
     } finally { await handle.dispose(); }
   }
   /** Turns the wheel by `delta` CSS px over `duration` ms, a little each frame, starting fast and settling long. */
@@ -395,24 +433,33 @@ export function createDirector(tabs, { startedAt, fps, voiced = null, speed = 1,
   async function scroll(locator, opts) {
     const { duration, block = 'start', inline = 'nearest' } = options(opts, 'duration');
     for (const [name, value] of [['block', block], ['inline', inline]]) if (!ALIGNS.includes(value)) throw new Error(`d.scroll needs ${name} ${ALIGNS.map(a => `'${a}'`).join(', ')}, not '${value}'`);
-    const target = await located(locator, 'Scroll'), times = new Map(), start = time();
-    let first = true;
+    const target = await located(locator, 'Scroll'), times = new Map(), sent = new Map(), start = time();
+    // Each failure names the call, so a Scenario with many scrolls says which one failed and when.
+    const fail = text => new Error(`d.scroll(${target}) at ${start.toFixed(1)} s ${text}`);
+    const startBox = await boxOnPage(target);
+    let first = true, plan = await scrollSteps(target, block, inline);
+    if (!plan) throw fail('found no visible box for its target; wait until it shows, such as with await locator.waitFor()');
+    const begun = plan;
     for (;;) {
-      const { map, steps } = await scrollSteps(target, block, inline);
+      const { map, steps } = plan;
       const step = steps.find(({ index, delta }) => {
         const far = Math.max(Math.abs(delta.x), Math.abs(delta.y)), done = times.get(index) ?? 0;
         return far >= 1 && (done === 0 || (done === 1 && far > CORRECTION_PX));
       });
       if (!step) break;
       const { page } = await inFront();
-      if (step.aim === false) throw new Error(`Scroll cannot reach ${step.name}: no part of it a wheel would scroll shows`);
+      if (step.aim === false) throw fail(`cannot reach ${step.name}: no part of it a wheel would scroll shows`);
       if (step.aim) await glide(onPage(map, { ...step.aim, width: 0, height: 0 }));
       await wheel(page, step.delta, first && duration !== undefined ? duration : scrollMs(Math.hypot(step.delta.x, step.delta.y), { speed }));
       first = false;
       times.set(step.index, (times.get(step.index) ?? 0) + 1);
-      const after = (await scrollSteps(target, block, inline)).steps[step.index];
+      const total = sent.get(step.index) ?? { x: 0, y: 0 };
+      sent.set(step.index, { x: total.x + step.delta.x, y: total.y + step.delta.y });
+      plan = await scrollSteps(target, block, inline);
+      if (!plan) throw fail(`lost its target: it no longer has a visible box, as when the page replaces or hides it; ${SETTLE}`);
+      const after = plan.steps[step.index];
       if (after?.at.x === step.at.x && after?.at.y === step.at.y) {
-        throw new Error(`Scroll moved nothing: a wheel at (${Math.round(cursor.x)}, ${Math.round(cursor.y)}) did not scroll ${step.name}; the page may take the wheel itself, or something lies over it`);
+        throw fail(`moved nothing: a wheel at (${Math.round(cursor.x)}, ${Math.round(cursor.y)}) did not scroll ${step.name}; the page may take the wheel itself, or something lies over it`);
       }
     }
     if (!first) {
@@ -422,7 +469,12 @@ export function createDirector(tabs, { startedAt, fps, voiced = null, speed = 1,
     }
     const box = await boxOnPage(target), { viewport } = tabs.front;
     if (!box || box.x + box.width <= 0 || box.y + box.height <= 0 || box.x >= viewport.width || box.y >= viewport.height) {
-      throw new Error('Scroll could not bring the target into view; if it is inside an iframe, scroll the iframe into view first with d.scroll(d.page.locator(\'iframe\'))');
+      // Where everything ended, read with the box: the page may have moved during the pause after the wheel.
+      const end = await scrollSteps(target, block, inline) ?? plan;
+      const containers = begun.steps.map(step => ({ step, last: end.steps[step.index] }))
+        .filter(({ step, last }) => last?.name === step.name && (sent.has(step.index) || last.at.x !== step.at.x || last.at.y !== step.at.y))
+        .map(({ step, last }) => ({ name: step.name, from: step.at, to: last.at, sent: sent.get(step.index) ?? null }));
+      throw fail(`could not bring the target into view: ${outOfView({ startBox, box, startMap: begun.map, map: end.map, viewport, framed: end.framed, containers })}`);
     }
     return box;
   }
