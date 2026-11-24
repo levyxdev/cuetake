@@ -1754,6 +1754,22 @@ test('the App Director glides the real pointer at the capture rate, presses wher
   expect(notes.wide.length).toBe(1);
 });
 
+test('the App Director types over what a field holds after Select All, which is not a Shortcut, and refuses a target that is not a field', async () => {
+  const helper = fakeHelper(textEdit()), notes = { focus: [], wide: [], said: [], forwarded: [], pointer: [], events: [] };
+  const d = appDirector(helper, notes);
+  const typed = () => helper.posted.filter(p => p.text || p.key).map(p => p.text ?? p.key);
+  await d.type(d.page.getByRole('textbox'), 'Yo', { replace: true, msPerChar: 5 });
+  expect(typed()).toEqual([{ keyCode: 0, modifiers: ['command'], down: true }, { keyCode: 0, modifiers: ['command'], down: false }, 'Y', 'o']);
+  // With no text, it empties the field.
+  helper.posted.length = 0;
+  await d.type(d.page.getByRole('textbox'), '', { replace: true });
+  expect(typed()).toEqual([{ keyCode: 0, modifiers: ['command'], down: true }, { keyCode: 0, modifiers: ['command'], down: false }, { keyCode: 51, modifiers: [], down: true }, { keyCode: 51, modifiers: [], down: false }]);
+  expect(notes.events.filter(e => e.type === 'shortcut')).toEqual([]);
+  expect(notes.events.filter(e => e.type === 'type').length).toBe(2);
+  const onButton = appDirector(fakeHelper(textEdit(), { focused: { role: 'AXButton' } }));
+  await expect(onButton.type(onButton.page.getByRole('button', { name: 'Bold' }), 'x', { replace: true })).rejects.toThrow("d.type(d.page.getByRole('button', { name: 'Bold' }), { replace: true }) needs a text field, but after the click AXButton has focus");
+});
+
 test('an App\'s Mask follows every element its locator matches, as the helper reads their frames, and the first Edit masks it', async () => {
   const windows = textEdit(), helper = fakeHelper(windows), ran = new AbortController();
   const notes = { focus: [], wide: [], said: [], forwarded: [], pointer: [], events: [] };

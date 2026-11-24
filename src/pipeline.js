@@ -14,6 +14,7 @@ import { appLocators } from './app-locators.js';
 import { startDesktop } from './app-capture.js';
 import { desktopWarnings } from './desktop.js';
 import { collectTimeline } from './probe.js';
+import { isSelectAll } from './shortcuts.js';
 import { createEdit, evenSize, merge, withDefaults } from './edit.js';
 import { loadLook, resolvedLook, applyLook, lookFromEdit, saveLook, summarize } from './look.js';
 import { ensureHome } from './home.js';
@@ -111,6 +112,9 @@ export function captureScale(chosen, gpu) {
   return gpu?.accelerated === false ? { resolutionScale: 1, lowered: true } : { resolutionScale: 2, lowered: false };
 }
 
+/** Seconds the page's clock may differ from the Director's when both time one key press. */
+const CLOCK_SLACK_S = 0.05;
+
 /**
  * The Timeline from `take` (its url, viewport and scale), what Capture observed in each Tab (`observed`,
  * the probe's by Tab id), what the Director noted and what the recorder saw: every input and page load carries the Tab it happened in,
@@ -124,12 +128,15 @@ export function timelineOf(take, stopped, observed, notes, startedAtMs) {
   const frameInput = { turned: [...observed.values()].flatMap(seen => seen.turned).sort((a, b) => a - b), unplaced: [...observed.values()].flatMap(seen => seen.unplaced).sort((a, b) => a - b) };
   // Each element a mask follows, with the boxes the probe in its Tab saw it at.
   const elements = (notes.elements ?? []).map(element => ({ ...element, boxes: observed.get(element.tab)?.watched?.find(watched => watched.id === element.id)?.boxes ?? [] }));
+  // The Select All d.type pressed to replace a field's text is typing, not a Shortcut. The page timed it by its own clock.
+  const selectedAll = event => event.type === 'shortcut' && isSelectAll(event.keys)
+    && (notes.replaced ?? []).some(({ t, end, tab }) => tab === event.tab && event.t >= t - CLOCK_SLACK_S && event.t <= end + CLOCK_SLACK_S);
   return {
     schemaVersion: SCHEMA_VERSION, ...take, duration: stopped.durationSeconds,
     tabs: stopped.tabs.map(({ id, opener, opened, closed, viewport, url, start }) => ({ id, opener, opened, closed, viewport, url, start })),
     pointer: pointer.sort((a, b) => a[0] - b[0]), shapes, ...((frameInput.turned.length || frameInput.unplaced.length) && { frameInput }), ...(elements.length && { elements }),
     events: [
-      ...[...observed].flatMap(([tab, seen]) => inTab(seen.events, tab)),
+      ...[...observed].flatMap(([tab, seen]) => inTab(seen.events, tab)).filter(event => !selectedAll(event)),
       ...notes.focus.map(f => ({ type: 'focus', ...f })), ...notes.said.map(line => ({ type: 'say', ...line })), ...notes.forwarded.map(span => ({ type: 'fastForward', ...span })), ...(notes.masks ?? []).map(mask => ({ type: 'mask', ...mask })),
       ...(notes.scrolls ?? []).map(span => ({ type: 'scroll', ...span })),
       ...stopped.tabs.flatMap(tab => inTab(tab.navigations.map(load => ({ type: 'navigate', ...load })), tab.id)),

@@ -43,7 +43,7 @@ Every interaction observed during Capture (pointer path, presses and releases, t
 _Avoid_: event log, camera events
 
 **Shortcut**:
-A key or combination pressed outside a text field, or with Control, Alt or Meta held inside one, which the Final shows as keycaps, a key pressed alone only when the Edit asks; typing into a field is not one, since the page already shows it.
+A key or combination pressed outside a text field, or with Control, Alt or Meta held inside one, which the Final shows as keycaps, a key pressed alone only when the Edit asks; typing into a field is not one, since the page already shows it, nor is the Select All that typing over a field's text begins with.
 _Avoid_: hotkey, keystroke, key event
 
 **Home**:

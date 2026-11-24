@@ -9,6 +9,7 @@ import { saveAuthState, resolveAuthProfile } from '../src/auth.js';
 import { installProbe, collectTimeline } from '../src/probe.js';
 import { createDirector } from '../src/director.js';
 import { followTabs } from '../src/follow-tabs.js';
+import { timelineOf } from '../src/pipeline.js';
 import { renderFinal, inspectFinal, extractFrame, composePreview } from '../src/render.js';
 import { merge, withDefaults } from '../src/edit.js';
 import { layout, previewSheet, outputSize } from '../src/stage.js';
@@ -613,6 +614,37 @@ test('the Director scrolls the page to a container, moves onto it and scrolls it
     expect(corner.x + corner.width / 2).toBeCloseTo(both.x + both.width / 2, 0);
     const diagonal = (await page.evaluate(() => wheels)).slice(before).filter(([, , , id]) => id === 'corner' || id === 'both');
     expect(diagonal.some(([, dx, dy]) => dx > 0 && dy > 0)).toBe(true);
+  } finally { await browser.close(); }
+}, 30_000);
+
+test('the Director types over what a field holds, never emptying it, and its Select All shows no keycaps', async () => {
+  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
+  try {
+    const page = await browser.newPage({ viewport: { width: 640, height: 480 } });
+    await page.setContent(`<input id="q" value="seatbelt" style="position:fixed;left:100px;top:100px;width:200px;height:30px">
+      <div id="plain" style="position:fixed;left:100px;top:200px;width:200px;height:30px">Plain</div>
+      <script>window.seen = []; q.addEventListener('input', () => seen.push(q.value))</script>`);
+    const startedAtMs = Date.now(), notes = { focus: [], wide: [], said: [], forwarded: [], pointer: [] };
+    await installProbe(page);
+    const d = createDirector(followTabs(page), { startedAt: startedAtMs, fps: 60, speed: 4 }, notes);
+    await d.type('#q', 'café', { replace: true, focus: false });
+    expect(await page.inputValue('#q')).toBe('café');
+    // The first character replaces the selection, so the field never shows empty, as a search box would show everything.
+    expect(await page.evaluate(() => window.seen)).not.toContain('');
+    expect(notes.wide.length).toBeGreaterThan(0);
+    // Without replace, d.type still types after what the field holds.
+    await d.type('#q', '!');
+    expect(await page.inputValue('#q')).toBe('café!');
+    // A Select All the Scenario presses itself is a Shortcut.
+    await d.press('ControlOrMeta+A');
+    await d.type('#q', '', { replace: true });
+    expect(await page.inputValue('#q')).toBe('');
+    const plain = await d.type('#plain', 'x', { replace: true }).catch(e => e);
+    expect(plain.message).toBe("d.type(locator('#plain'), { replace: true }) needs a text field, but after the click <body> has focus");
+    const stopped = { durationSeconds: 10, fronts: [], tabs: [{ id: 0, opener: null, opened: 0, closed: null, viewport: { width: 640, height: 480 }, url: 'about:blank', start: 0, navigations: [] }] };
+    const timeline = timelineOf({ url: 'about:blank', viewport: { width: 640, height: 480 }, scale: 1 }, stopped, new Map([[0, await collectTimeline(page, startedAtMs)]]), notes, startedAtMs);
+    const meta = process.platform === 'darwin' ? 'Meta' : 'Control';
+    expect(timeline.events.filter(e => e.type === 'shortcut').map(e => e.keys)).toEqual([[meta, 'A']]);
   } finally { await browser.close(); }
 }, 30_000);
 

@@ -14,10 +14,10 @@ import { contentOf } from './frames.js';
  * positioning, translation and scaling are all followed. A rotated, skewed or 3D-transformed iframe is
  * placed as if it were only scaled, and noted. Each document also measures the elements a mask follows
  * (`watch`), once per animation frame, and sends their boxes whenever they change.
- * Times are epoch milliseconds until collectTimeline rebases them. `contentOf` is frames.js's, passed
- * in because the probe runs as page source.
+ * Times are epoch milliseconds until collectTimeline rebases them. `contentOf` is frames.js's and
+ * `textField` this module's, passed in because the probe runs as page source.
  */
-function probe(contentOf) {
+function probe(contentOf, textField) {
   window.__cuetakeProbe?.dispose();
   const abort = new AbortController();
   const send = record => { try { window.__cuetakeRecord?.(record)?.catch?.(() => {}); } catch {} };
@@ -39,8 +39,6 @@ function probe(contentOf) {
     for (let inner; element?.shadowRoot && (inner = element.shadowRoot.elementFromPoint(x, y)) && inner !== element;) element = inner;
     return element;
   };
-  const editable = element => element.isContentEditable
-    || element.matches('textarea:not(:disabled), input:not(:disabled):not([type=button],[type=submit],[type=reset],[type=checkbox],[type=radio],[type=range],[type=color],[type=file],[type=image])');
   const overText = (element, x, y) => {
     const caret = document.caretPositionFromPoint?.(x, y), node = caret?.offsetNode;
     const parent = node?.nodeType === Node.TEXT_NODE && node.data.trim() && element.contains(node) && node.parentElement;
@@ -53,7 +51,7 @@ function probe(contentOf) {
     const element = deepest(x, y);
     if (!element) return 'default';
     const keyword = getComputedStyle(element).cursor.match(/([a-z-]+)\s*$/)?.[1] ?? 'auto';
-    return keyword !== 'auto' ? keyword : editable(element) || overText(element, x, y) ? 'text' : 'default';
+    return keyword !== 'auto' ? keyword : textField(element) || overText(element, x, y) ? 'text' : 'default';
   };
   // Read after the page's own handlers have run, since they often set the cursor themselves. A move
   // carries the shape it found, since the pointer may have left this frame and come back to the same
@@ -92,7 +90,7 @@ function probe(contentOf) {
   on('keydown', e => {
     const element = focused();
     const { key, code, ctrlKey, altKey, shiftKey, metaKey, repeat } = e;
-    send({ kind: 'key', ms: at(e), box: box(element), key, code, ctrlKey, altKey, shiftKey, metaKey, repeat, field: Boolean(element && editable(element)) });
+    send({ kind: 'key', ms: at(e), box: box(element), key, code, ctrlKey, altKey, shiftKey, metaKey, repeat, field: Boolean(element && textField(element)) });
     sampleShape(at(e));
   });
   on('keyup', e => sampleShape(at(e)));
@@ -168,7 +166,13 @@ function probe(contentOf) {
   send({ kind: 'hello' });
 }
 
-const collectors = new WeakMap(), script = `(${probe})(${contentOf})`;
+/** Whether an element takes typed text: an enabled text input or textarea, or editable content. It runs in the page. */
+export function textField(element) {
+  return element.isContentEditable
+    || element.matches('textarea:not(:disabled), input:not(:disabled):not([type=button],[type=submit],[type=reset],[type=checkbox],[type=radio],[type=range],[type=color],[type=file],[type=image])');
+}
+
+const collectors = new WeakMap(), script = `(${probe})(${contentOf}, ${textField})`;
 
 /**
  * The page's frames that hold a document now. One that has not loaded one yet, such as a lazy iframe

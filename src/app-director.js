@@ -7,6 +7,7 @@ import { shortcutKeys } from './shortcuts.js';
 
 // The AX roles of an element that takes typing, where a key pressed alone is typing, not a Shortcut.
 const FIELDS = new Set(['AXTextField', 'AXTextArea', 'AXComboBox', 'AXSearchField']);
+const isField = ({ role, subrole } = {}) => FIELDS.has(role) || FIELDS.has(subrole);
 // Characters typed as their key, since a text field takes them as a key press, not as text.
 const TYPED_AS_KEYS = { '\n': 'Enter', '\t': 'Tab' };
 // How long a window clicked into may take to come in front, and how often the Director looks.
@@ -140,9 +141,9 @@ export function createAppDirector({ startedAt, fps = 60, voiced = null, speed = 
     return act(options(opts), async () => {
       const { down: keydown } = macKeys(keys);
       await pause('beforeKey');
-      const { role, subrole } = await helper.request({ focused: {} }) ?? {}, t = now();
+      const focused = await helper.request({ focused: {} }) ?? {}, t = now();
       await key(keys, pauseMs('press', speed, rand));
-      const shown = shortcutKeys({ ...keydown, field: FIELDS.has(role) || FIELDS.has(subrole) });
+      const shown = shortcutKeys({ ...keydown, field: isField(focused) });
       if (shown) notes.events.push({ type: 'shortcut', t, keys: shown });
       await pause('afterKey');
     });
@@ -152,11 +153,25 @@ export function createAppDirector({ startedAt, fps = 60, voiced = null, speed = 
     const { duration, ...rest } = options(opts, 'duration');
     await act(rest, () => approach(target, duration, 'hover'));
   }
+  /**
+   * Clicks a field and types into it. `replace: true` first selects what the field holds with Select All,
+   * as on a page, so the first character replaces it; with no text, it empties the field. That Select All
+   * is typing, so it notes no Shortcut.
+   */
   function type(target, text, opts) {
-    const { msPerChar = 70 / speed, ...rest } = options(opts, 'msPerChar');
+    const { msPerChar = 70 / speed, replace = false, ...rest } = options(opts, 'msPerChar');
     return act(rest, async () => {
       await click(target, rest);
-      const { box } = notes.events.at(-1), chars = [...text], delays = typingDelays(text, msPerChar, rand), t = now();
+      const { box } = notes.events.at(-1), chars = [...text], delays = typingDelays(text, msPerChar, rand);
+      if (replace) {
+        const focused = await helper.request({ focused: {} }) ?? {};
+        if (!isField(focused)) throw new Error(`d.type(${isAppLocator(target) ? target : `{ x: ${target.x}, y: ${target.y} }`}, { replace: true }) needs a text field, but after the click ${focused.role ?? 'nothing'} has focus`);
+        await pause('beforeKey');
+        await key('Meta+A', pauseMs('press', speed, rand));
+        await pause('afterKey');
+        if (!chars.length) await key('Backspace', 0);
+      }
+      const t = now();
       for (let i = 0; i < chars.length; i++) {
         if (i) await wait(delays[i - 1]);
         if (TYPED_AS_KEYS[chars[i]]) await key(TYPED_AS_KEYS[chars[i]], 0);

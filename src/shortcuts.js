@@ -32,6 +32,9 @@ export function shortcutKeys(down) {
   return [...MODIFIERS.filter(([flag]) => down[flag]).map(([, name]) => name), key];
 }
 
+/** Whether a Shortcut's keys are Select All, as Control+A or Meta+A. */
+export const isSelectAll = keys => keys.length === 2 && ['Control', 'Meta'].includes(keys[0]) && keys[1] === 'A';
+
 const sameKeys = (a, b) => a.length === b.length && a.every((key, i) => key === b[i]);
 
 /**

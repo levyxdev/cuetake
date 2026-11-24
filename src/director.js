@@ -1,5 +1,6 @@
 import { ease, landing, pauseMs, random, reach, scrollMs, typingDelays } from './motion.js';
 import { boxOnPage, onPage, placeOf } from './frames.js';
+import { textField } from './probe.js';
 import { carried, seenBy, windowMaps } from './tabs.js';
 import { EFFECT_NAMES, MASK_EFFECTS } from './masks.js';
 import { wordInLine } from './narration.js';
@@ -154,6 +155,16 @@ function outOfView({ startBox, box, startMap, map, viewport, framed, containers 
   return `${facts}${scrolled}.${why.map(w => ` ${w[0].toUpperCase()}${w.slice(1)}.`).join('')}`;
 }
 
+/** What has focus in a target's document, through shadow roots, when it is not a text field; null when it is one. It runs in the page. */
+function focusedNotField(element, isTextField) {
+  let active = element.ownerDocument.activeElement;
+  while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+  if (!active) return 'nothing';
+  return isTextField(active) ? null : `<${active.localName}${active.id ? `#${active.id}` : ''}>`;
+}
+// Built from source, so Playwright sends the page probe.js's textField with it.
+const focusedNotTextField = new Function('element', `return (${focusedNotField})(element, ${textField});`);
+
 /** How long after the voice said a word the Scenario may wait for it before `verify` warns. */
 const LATE_WORD_S = 0.2;
 
@@ -227,6 +238,7 @@ export function clockOf({ startedAt, voiced = null }, { focus: focusTargets, sai
  * Timed, viewport-aligned interactions shared by all scenarios, moving like a person (see motion.js).
  * `tabs` are the Tabs Capture follows (follow-tabs.js); the Director acts only on the one in front.
  * `notes` collects the camera's focus targets and `wide` windows, each scroll (`scrolls`, { t, end }),
+ * each Select All `type` pressed to replace a field's text (`replaced`, { t, end, tab }),
  * where each Line starts (`said`),
  * each fast-forwarded wait (`forwarded`) and the pointer path no Tab could see (`pointer`, as
  * [epoch ms, x, y, tab]), and each element masked (`elements`, { id, tab, name }) with its mask
@@ -235,8 +247,8 @@ export function clockOf({ startedAt, voiced = null }, { focus: focusTargets, sai
  * equally human ways to move. `signal` aborts once the Scenario has run, when masks stop following.
  */
 export function createDirector(tabs, { startedAt, fps, voiced = null, speed = 1, seed = 1, signal }, notes) {
-  const { wide: wideWindows, pointer, elements = [], masks = [], scrolls = [] } = notes;
-  Object.assign(notes, { elements, masks, scrolls });
+  const { wide: wideWindows, pointer, elements = [], masks = [], scrolls = [], replaced = [] } = notes;
+  Object.assign(notes, { elements, masks, scrolls, replaced });
   let cursor = { x: 0, y: 0, tab: tabs.front.id };
   const rand = random(seed);
   const clock = clockOf({ startedAt, voiced }, notes, () => tabs.front.id), { wait, time, focus, fastForward, say } = clock;
@@ -351,11 +363,26 @@ export function createDirector(tabs, { startedAt, fps, voiced = null, speed = 1,
     const { duration } = options(opts, 'duration');
     await approach(locator, duration, 'Hover');
   }
+  /**
+   * Clicks a field and types into it. `replace: true` first selects what the field holds, as a person
+   * does with Select All, so the first character replaces it and the field never shows empty; with no
+   * text, it empties the field. That Select All is typing, not a Shortcut (`replaced`).
+   */
   function type(locator, text, opts) {
-    const { msPerChar = 70 / speed, ...rest } = options(opts, 'msPerChar');
+    const { msPerChar = 70 / speed, replace = false, ...rest } = options(opts, 'msPerChar');
     return act(rest, async () => {
       await click(locator, rest);
       const { page } = await inFront(), chars = [...text], delays = typingDelays(text, msPerChar, rand);
+      if (replace) {
+        const target = await located(locator, 'Type'), focused = await target.evaluate(focusedNotTextField);
+        if (focused) throw new Error(`d.type(${target}, { replace: true }) needs a text field, but after the click ${focused} has focus`);
+        await pause('beforeKey');
+        const start = time();
+        await page.keyboard.press('ControlOrMeta+A', { delay: pauseMs('press', speed, rand) });
+        replaced.push({ t: start, end: time(), tab: tabs.front.id });
+        await pause('afterKey');
+        if (!chars.length) await page.keyboard.press('Backspace');
+      }
       for (let i = 0; i < chars.length; i++) {
         if (i) await wait(delays[i - 1]);
         await page.keyboard.type(chars[i]);
