@@ -1178,6 +1178,18 @@ test('subtitle rows break at sentence and clause ends, then between words, withi
   for (const row of subtitleRows('A very long sentence that keeps going without any punctuation at all for quite a while', 42)) expect(row.length).toBeLessThanOrEqual(42);
 });
 
+test('Chinese subtitle rows break between words, never inside one', () => {
+  expect(subtitleRows('健康上，全是低成本高回报的保命操作。比如绝大部分人坐后排都不系安全带，这其实最危险。', 16))
+    .toEqual(['健康上，全是低成本高回报的保命', '操作。比如绝大部分人坐后排', '都不系安全带，这其实最危险。']);
+  // 32 characters do not fit two rows between words, so they take three even ones, not 15, 15 and 2.
+  const rows = subtitleRows('点击Preview按钮就能看到效果然后再点击保存按钮完成整个流程', 16).map(row => Array.from(row).length);
+  expect(rows).toHaveLength(3);
+  for (const width of rows) { expect(width).toBeGreaterThanOrEqual(8); expect(width).toBeLessThanOrEqual(16); }
+  // A lone character joins one word, not a run of them, and an opening quote joins what it opens.
+  for (const row of subtitleRows('我'.repeat(32), 16)) expect(Array.from(row).length).toBeLessThanOrEqual(16);
+  expect(subtitleRows('今天我们要给大家详细介绍一下「智能助手」的全部新功能', 16).join('/')).not.toContain('「/');
+});
+
 const sentences = 'Open the editor from the dashboard menu. Then pick a color and press save.';
 const wordsOf = (text, from, to) => { const list = text.split(' '), step = (to - from) / list.length; return list.map((word, i) => ({ text: word, start: from + i * step, end: from + (i + 1) * step })); };
 

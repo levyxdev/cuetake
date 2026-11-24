@@ -6,11 +6,16 @@
  * start of the Line's audio. Subtitle cues are `{ id, start, end, rows }`, `id` naming their Line.
  */
 
-const CJK = /[⺀-鿿豈-﫿＀-￯]/u;
+const CJK_CHARS = '⺀-鿿豈-﫿＀-￯';
+const CJK = new RegExp(`[${CJK_CHARS}]`, 'u');
+/** Spaces, a run of CJK text, or a run of other non-space characters. */
+const RUNS = new RegExp(`\\s+|[${CJK_CHARS}]+|[^\\s${CJK_CHARS}]+`, 'gu');
 const SENTENCE_END = /[.!?。！？…]["'”’）)]*$/u;
 const CLAUSE_END = /[,;:，、；：—–]["'”’）)]*$/u;
 // Closing punctuation never starts a row; it joins what it follows.
 const CLOSING = /^[.,;:!?)\]}'"”’。，、；：！？）》」』…]/u;
+// Opening punctuation never ends a row; what follows it joins it.
+const OPENING = /[(\[{“‘（《「『【〈]$/u;
 /** The characters that are spoken, which word timings count: no spaces or punctuation. */
 const spoken = text => Array.from(text.replace(/[\s\p{P}\p{S}]/gu, '')).length;
 const length = text => Array.from(text).length;
@@ -18,21 +23,37 @@ const length = text => Array.from(text).length;
 /** Whether `text` (or a language tag such as zh-CN) is written without spaces between words. */
 export const isCjk = (text, language) => /^(zh|ja|ko)\b/i.test(language ?? '') || CJK.test(text);
 
+let segmenter;
+/** A run of CJK text as its words, by the dictionary of `Intl.Segmenter`, made once on first use. */
+const cjkWords = run => Array.from((segmenter ??= new Intl.Segmenter('zh', { granularity: 'word' })).segment(run), s => s.segment);
+
 /**
- * The text broken into atoms that rows never split: a CJK character or a run of other non-space
- * characters, with any closing punctuation after it. `space` marks a space before the atom.
+ * Whether `piece` belongs to the atom before it: closing punctuation, what an opening quote opens,
+ * or a lone CJK character after a word that has not taken one yet. The dictionary leaves many a
+ * word's character on its own (保|命, 安全|带) and a row should not start with a lone 的; taking one
+ * character at most keeps a run of lone characters from becoming one atom wider than a row.
+ */
+const joinsLast = (last, piece) => CLOSING.test(piece) || OPENING.test(last.text)
+  || (last.cjk && !last.joined && /^\p{L}$/u.test(piece) && /\p{L}$/u.test(last.text));
+
+/**
+ * The text broken into atoms that rows never split: a CJK word or a run of other non-space
+ * characters, with any punctuation that clings to it. `space` marks a space before the atom.
  */
 function atoms(text) {
   const list = [];
-  for (const [piece] of text.trim().matchAll(/\s+|[⺀-鿿豈-﫿＀-￯]|[^\s⺀-鿿豈-﫿＀-￯]+/gu)) {
-    if (/^\s+$/u.test(piece)) { if (list.length) list.at(-1).spaceAfter = true; continue; }
-    const last = list.at(-1);
-    if (last && !last.spaceAfter && CLOSING.test(piece)) last.text += piece;
-    else list.push({ text: piece, space: Boolean(last?.spaceAfter) });
+  for (const [run] of text.trim().matchAll(RUNS)) {
+    if (/^\s+$/u.test(run)) { if (list.length) list.at(-1).spaceAfter = true; continue; }
+    const cjk = CJK.test(run);
+    for (const piece of cjk ? cjkWords(run) : [run]) {
+      const last = list.at(-1);
+      if (last && !last.spaceAfter && joinsLast(last, piece)) { last.text += piece; last.joined = true; }
+      else list.push({ text: piece, space: Boolean(last?.spaceAfter), cjk });
+    }
   }
   return list;
 }
-/** How good a break after `atom` is: sentence end, clause end, between words, inside CJK text. */
+/** How good a break after `atom` is: sentence end, clause end, between spaced words, between CJK words. */
 const breakScore = (atom, next) => SENTENCE_END.test(atom.text) ? 3 : CLAUSE_END.test(atom.text) ? 2 : next?.space ? 1 : 0.5;
 const join = list => list.map((atom, i) => (i && atom.space ? ' ' : '') + atom.text).join('');
 
@@ -40,21 +61,33 @@ const join = list => list.map((atom, i) => (i && atom.space ? ' ' : '') + atom.t
  * The text as subtitle rows of at most `maxChars` characters, broken at the best place: a sentence
  * end after the first third of an even row, then a clause end after its first half, then the word
  * boundary nearest an even width, so a Line one word too long does not leave that word alone on a
- * row. A single word longer than a row gets a row of its own.
+ * row. Rows that do not fit their count between words take one more row, all of them even again. A
+ * single word longer than a row gets a row of its own.
  */
 export function subtitleRows(text, maxChars) {
-  const total = length(text.trim()), even = Math.min(maxChars, Math.ceil(total / Math.ceil(total / maxChars)));
+  const list = atoms(text), total = length(text.trim());
+  for (let count = Math.ceil(total / maxChars); ; count++) {
+    const rows = rowsOf(list, maxChars, Math.min(maxChars, Math.ceil(total / count)));
+    if (rows.length <= count) return rows;
+  }
+}
+
+/**
+ * Atoms as rows of at most `maxChars` characters, each broken as near `even` as its best break
+ * allows, at the fuller row of two equally near, so the Line keeps to fewer rows.
+ */
+function rowsOf(list, maxChars, even) {
   const least = { 3: even * 0.3, 2: even * 0.5 };
   const rows = [];
   let row = [];
-  for (const atom of atoms(text)) {
+  for (const atom of list) {
     row.push(atom);
     if (row.length < 2 || length(join(row)) <= maxChars) continue;
     let cut = row.length - 1, best = -1, distance = Infinity;
     for (let i = 0; i < row.length - 1; i++) {
       const score = breakScore(row[i], row[i + 1]), prefix = length(join(row.slice(0, i + 1)));
       if (prefix < (least[score] ?? 0)) continue;
-      if (score > best || (score === best && Math.abs(prefix - even) < distance)) { best = score; distance = Math.abs(prefix - even); cut = i + 1; }
+      if (score > best || (score === best && Math.abs(prefix - even) <= distance)) { best = score; distance = Math.abs(prefix - even); cut = i + 1; }
     }
     rows.push(join(row.slice(0, cut)));
     row = row.slice(cut);
