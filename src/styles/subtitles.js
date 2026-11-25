@@ -2,7 +2,8 @@
 // and a light shadow, so they read over any page without a band.
 // Parameters: fontSize, weight, color, stroke (outline color, '' for none), strokeWidth (outline width
 // outside the letters), shadow (#rrggbbaa, '' for none), shadowBlur, shadowOffset (downward),
-// band (#rrggbbaa, '' for none: a rounded band behind the rows), bottom (gap below the rows), padding.
+// band (#rrggbbaa, '' for none: a rounded band behind the rows), bottom (gap below the band, whether drawn
+// or not), padding (space between the band's edge and the rows).
 // Drawn in 1080p pixels over the whole Final, outside the camera; a `font` in files replaces the system font.
 export function draw(ctx, { width, height, rows, params, files }) {
   const {
@@ -27,7 +28,7 @@ export function draw(ctx, { width, height, rows, params, files }) {
   };
   if (outlined) {
     // A stroke is centered on the letters' edge; the fill drawn over it hides the inner half.
-    Object.assign(ctx, { strokeStyle: stroke, lineWidth: 2 * strokeWidth, lineJoin: 'round', miterLimit: 2 });
+    Object.assign(ctx, { strokeStyle: stroke, lineWidth: 2 * strokeWidth, lineJoin: 'round' });
     shadowed(() => rows.forEach((row, i) => ctx.strokeText(row, width / 2, at(i))));
   }
   ctx.fillStyle = color;
