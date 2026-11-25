@@ -122,8 +122,8 @@ function forPage(timeline, sources, files) {
 
 /**
  * Composes the Final from each Tab's Source (`sources`, paths by Tab id), the Timeline and the Edit;
- * `files` serves the Edit's styling files (styles.js forRender). `narration` ({ language, volume, lines })
- * adds its Lines' audio and Subtitles.
+ * `files` serves the Edit's styling files (styles.js forRender). `narration` ({ volume, lines })
+ * adds its Lines' audio and Subtitles, each Line with the `rows` it is shown in (narration.js withRows).
  */
 export async function renderFinal({ sources, finalPath, timeline, edit, files = {}, narration = null }) {
   const handle = await fs.open(finalPath, 'w');
@@ -137,12 +137,15 @@ export async function renderFinal({ sources, finalPath, timeline, edit, files = 
   } finally { await handle.close(); }
 }
 
-/** A Preview PNG of `tiles` ([{ name, edit }]) at `at` seconds, or at the end with the camera wide. No Final is touched. */
-export async function composePreview({ sources, timeline, tiles, at, files = {}, narration = null }) {
+/**
+ * A Preview PNG of `tiles` ([{ name, edit, narration? }]) at `at` seconds, or at the end with the camera
+ * wide, each tile with its own Narration as renderFinal takes one. No Final is touched.
+ */
+export async function composePreview({ sources, timeline, tiles, at, files = {} }) {
   const served = { ...files };
-  const spoken = narration && { ...narration, lines: servedLines(narration.lines, served) };
+  const spoken = tiles.map(tile => ({ ...tile, narration: tile.narration && { ...tile.narration, lines: servedLines(tile.narration.lines, served) } }));
   const take = forPage(timeline, sources, served);
-  const png = await withRenderPage({ files: served }, page => page.evaluate(options => window.cuetakePreview(options), { ...take, tiles, at: at ?? null, narration: spoken }));
+  const png = await withRenderPage({ files: served }, page => page.evaluate(options => window.cuetakePreview(options), { ...take, tiles: spoken, at: at ?? null }));
   return Buffer.from(png, 'base64');
 }
 

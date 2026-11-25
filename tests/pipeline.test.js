@@ -17,7 +17,7 @@ import { bundle, codeRefs, forRender, BUILTIN_DIR } from '../src/styles.js';
 import { npxFolders, uninstall } from '../src/uninstall.js';
 import { ensureHome } from '../src/home.js';
 import { serveRange } from '../src/render.js';
-import { subtitleRows, subtitleCues, lineProblems, toSrt, toVtt, wordInLine } from '../src/narration.js';
+import { subtitleRows, subtitleCues, withRows, lineProblems, toSrt, toVtt, wordInLine } from '../src/narration.js';
 import { shortcutKeys, keycapShows, keycapTrack } from '../src/shortcuts.js';
 import { timeMap, fastForwardProblems, retimed, linesInFinal, badgeAt } from '../src/time-map.js';
 import { windowMaps, tabTrack, inWindow, carried, seenBy } from '../src/tabs.js';
@@ -1190,17 +1190,22 @@ test('Chinese subtitle rows break between words, never inside one', () => {
   expect(subtitleRows('今天我们要给大家详细介绍一下「智能助手」的全部新功能', 16).join('/')).not.toContain('「/');
 });
 
+test('cues show the rows a Line was broken into before Render, so the burned-in Subtitles and the files agree', () => {
+  const [cue] = subtitleCues([{ id: 'a', text: '先打开编辑器然后保存', rows: ['先打开编辑器', '然后保存'], start: 0, duration: 2 }]);
+  expect(cue.rows).toEqual(['先打开编辑器', '然后保存']);
+});
+
 const sentences = 'Open the editor from the dashboard menu. Then pick a color and press save.';
 const wordsOf = (text, from, to) => { const list = text.split(' '), step = (to - from) / list.length; return list.map((word, i) => ({ text: word, start: from + i * step, end: from + (i + 1) * step })); };
 
 test('cues share a Line by its spoken characters, or by its word timings when it has them', () => {
   const line = { id: 'intro', text: sentences, start: 2, duration: 4 };
-  const even = subtitleCues([line]);
+  const even = subtitleCues(withRows([line]));
   expect(even.map(c => c.rows)).toEqual([['Open the editor from the dashboard menu.'], ['Then pick a color and press save.']]);
   expect(even[0]).toMatchObject({ id: 'intro', start: 2, end: expect.closeTo(2 + 4 * 33 / 59, 6) });
   expect(even[1].end).toBe(6);
   const words = [...wordsOf('Open the editor from the dashboard menu', 0.1, 1.5), ...wordsOf('Then pick a color and press save', 2, 3.2)];
-  const timed = subtitleCues([{ ...line, words }]);
+  const timed = subtitleCues(withRows([{ ...line, words }]));
   expect(timed[0].start).toBeCloseTo(2.1, 6);
   expect(timed[0].end).toBeCloseTo(3.5, 6);
   expect(timed[1].start).toBeCloseTo(4, 6);
@@ -1232,17 +1237,17 @@ test('each word of a Line is looked for after the one before, and a word the Lin
 });
 
 test('Chinese Lines break at about 16 characters and two rows make a cue', () => {
-  const cues = subtitleCues([{ id: 'a', text: '先打开编辑器然后给标题选一个颜色再点击保存按钮就能看到效果', start: 0, duration: 6 }], { language: 'zh-CN' });
+  const cues = subtitleCues(withRows([{ id: 'a', text: '先打开编辑器然后给标题选一个颜色再点击保存按钮就能看到效果', start: 0, duration: 6 }], 'zh-CN'));
   expect(cues[0].rows).toHaveLength(2);
   for (const row of cues.flatMap(c => c.rows)) expect(Array.from(row).length).toBeLessThanOrEqual(16);
 });
 
 test('a short cue stays at least a second, taking time from the next cue or the silence after', () => {
   const words = [...wordsOf('Open the editor from the dashboard menu', 0, 0.5), ...wordsOf('Then pick a color and press save', 0.5, 3)];
-  const [first, second] = subtitleCues([{ id: 'a', text: sentences, start: 0, duration: 3, words }]);
+  const [first, second] = subtitleCues(withRows([{ id: 'a', text: sentences, start: 0, duration: 3, words }]));
   expect(first.end).toBeCloseTo(1, 6);
   expect(second.start).toBeCloseTo(1, 6);
-  const [alone] = subtitleCues([{ id: 'a', text: 'Hi.', start: 0, duration: 0.3 }, { id: 'b', text: 'Next.', start: 0.8, duration: 1 }]);
+  const [alone] = subtitleCues(withRows([{ id: 'a', text: 'Hi.', start: 0, duration: 0.3 }, { id: 'b', text: 'Next.', start: 0.8, duration: 1 }]));
   expect(alone.end).toBe(0.8);
 });
 
@@ -1285,7 +1290,7 @@ test('Render and Looks read the built-in Subtitles with their parameters, and bu
   try {
     await fs.writeFile(join(dir, 'brand.woff2'), 'font');
     const { edit } = forRender(withDefaults({ subtitles: { fontSize: 50, files: { font: 'brand.woff2' } } }), dir);
-    expect(edit.subtitles).toMatchObject({ kind: 'draw', ref: 'subtitles', fontSize: 50, band: '#000000b3', url: expect.stringMatching(/^\/files\//) });
+    expect(edit.subtitles).toMatchObject({ kind: 'draw', ref: 'subtitles', fontSize: 50, stroke: '#000000', band: '', url: expect.stringMatching(/^\/files\//) });
     expect(edit.subtitles.files.font).toMatch(/^\/files\/style-\d+\.woff2$/);
     const take = join(dir, 'take');
     expect((await bundle({ subtitles: { draw: 'subtitles', files: { font: 'brand.woff2' } } }, dir, join(take, 'styles'), 'styles/')).subtitles.files.font).toBe('styles/brand.woff2');

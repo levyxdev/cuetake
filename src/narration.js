@@ -1,9 +1,11 @@
 /**
  * Narration timing and Subtitles, shared by Node and the render page. Pure functions, no imports.
  *
- * A placed Line is `{ id, text, start, duration, words? }`: `start` is seconds of Source time,
- * `duration` is measured from its audio, and each word is `{ text, start, end }` in seconds from the
- * start of the Line's audio. Subtitle cues are `{ id, start, end, rows }`, `id` naming their Line.
+ * A placed Line is `{ id, text, start, duration, words?, rows }`: `start` is seconds of Source time,
+ * `duration` is measured from its audio, each word is `{ text, start, end }` in seconds from the
+ * start of the Line's audio, and `rows` is its text as subtitle rows. Node breaks the rows once
+ * (`withRows`) and hands them to the render page, since where rows break depends on the runtime's
+ * dictionary. Subtitle cues are `{ id, start, end, rows }`, `id` naming their Line.
  */
 
 const CJK_CHARS = '⺀-鿿豈-﫿＀-￯';
@@ -129,17 +131,20 @@ export function wordInLine(line, text, from = 0) {
   return { at: clock(line).start(spoken(line.text.slice(0, index))), next: index + match[0].length };
 }
 
+/** Lines with their text broken into subtitle rows of `maxChars`, by default about 16 characters in CJK text and 42 otherwise. */
+export const withRows = (lines, language, maxChars) =>
+  lines.map(line => ({ ...line, rows: subtitleRows(line.text, maxChars ?? (isCjk(line.text, language) ? 16 : 42)) }));
+
 /**
- * Subtitle cues for placed Lines: each Line's rows, `maxRows` to a cue (a cue also ends after a
+ * Subtitle cues for placed Lines: each Line's `rows`, `maxRows` to a cue (a cue also ends after a
  * sentence), shown while they are spoken. A cue shorter than `minDuration` takes time from the next
  * cue of its Line, or from the silence after its Line, up to `end`, the end of the Final.
  */
-export function subtitleCues(lines, { language, maxChars, maxRows = 2, minDuration = 1, end = Infinity } = {}) {
+export function subtitleCues(lines, { maxRows = 2, minDuration = 1, end = Infinity } = {}) {
   const cues = [];
   for (const line of [...lines].sort((a, b) => a.start - b.start)) {
-    const width = maxChars ?? (isCjk(line.text, language) ? 16 : 42), said = clock(line);
-    const groups = [];
-    for (const row of subtitleRows(line.text, width)) {
+    const said = clock(line), groups = [];
+    for (const row of line.rows) {
       const last = groups.at(-1);
       if (last && last.length < maxRows && !SENTENCE_END.test(last.at(-1))) last.push(row); else groups.push([row]);
     }
@@ -164,8 +169,8 @@ export function subtitleCues(lines, { language, maxChars, maxRows = 2, minDurati
 /** Whether the Edit's `subtitles` item draws them into the Final; otherwise they go only to the subtitle files. */
 export const burnsIn = subtitles => Boolean(subtitles) && subtitles.burn !== false;
 
-/** The cues of placed Lines as the Edit's `subtitles` item lays them out, ending by `end`. */
-export const cuesFor = (lines, language, subtitles, end) => subtitleCues(lines, { language, maxChars: subtitles?.maxChars, maxRows: subtitles?.maxRows, minDuration: subtitles?.minDuration, end });
+/** The cues of placed Lines as the Edit's `subtitles` item lays them out, ending by `end`; its `maxChars` already broke their rows. */
+export const cuesFor = (lines, subtitles, end) => subtitleCues(lines, { maxRows: subtitles?.maxRows, minDuration: subtitles?.minDuration, end });
 
 /**
  * What stops Lines from playing as placed: a Line overlapping the next one, starting before the

@@ -563,7 +563,7 @@ async function prepareNarration(narration, subtitles, seconds, map) {
   const { lines: placed, problems: forwarded } = linesInFinal(narration.lines.map((line, i) => ({ ...line, duration: buffers[i].duration })), map);
   const problems = [...forwarded, ...lineProblems(placed, seconds)];
   if (problems.length) throw new Error(`The Narration does not fit: ${problems.join('; ')}`);
-  return { placed, buffers, cues: cuesFor(placed, narration.language, subtitles, seconds) };
+  return { placed, buffers, cues: cuesFor(placed, subtitles, seconds) };
 }
 
 /** The Lines mixed into one mono track `seconds` long, each at its start and volume. */
@@ -1081,7 +1081,7 @@ window.cuetakeMeasure = async lines => {
  * A Preview as a base64 PNG: each tile's Edit composed by the same scene as Render, over the Sources at
  * `at` seconds with the Final's camera, or (`at` null) over the last moment with the camera wide.
  */
-window.cuetakePreview = async ({ sources: sourceUrls, duration, viewport, pointer, shapes, events, tabs, elements, windows, tiles, at, narration }) => {
+window.cuetakePreview = async ({ sources: sourceUrls, duration, viewport, pointer, shapes, events, tabs, elements, windows, tiles, at }) => {
   const map = timeMap(tiles[0]?.edit.fastForward, duration), t = at ?? map.duration, source = map.sourceAt(t);
   // Each Tab's first frame, and its frame at `t`, the latest at or before it or else its first.
   const frames = new Map(), samples = [];
@@ -1102,7 +1102,7 @@ window.cuetakePreview = async ({ sources: sourceUrls, duration, viewport, pointe
     ctx.fillStyle = '#111114'; ctx.fillRect(0, 0, sheet.width, sheet.height);
     ctx.imageSmoothingQuality = 'high';
     ctx.font = '600 22px system-ui, -apple-system, sans-serif'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#e5e7eb';
-    for (const [i, { name, edit }] of tiles.entries()) {
+    for (const [i, { name, edit, narration }] of tiles.entries()) {
       const voice = await prepareNarration(narration, edit.subtitles, Math.round(map.duration * edit.output.fps) / edit.output.fps, map);
       const scene = await createScene(edit, viewport, { pointer, shapes, events, tabs: recorded, elements, windows }, sizes, frames.get(recorded[0].id).first, voice?.cues ?? [], map);
       // At `at` the camera moves as in the Final, blurred the same way; otherwise it is wide and still.

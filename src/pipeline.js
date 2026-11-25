@@ -19,7 +19,7 @@ import { createEdit, evenSize, merge, withDefaults } from './edit.js';
 import { loadLook, resolvedLook, applyLook, lookFromEdit, saveLook, summarize } from './look.js';
 import { ensureHome } from './home.js';
 import { absolute, bundle, forRender } from './styles.js';
-import { burnsIn, cuesFor, isCjk, lineProblems, toSrt, toVtt } from './narration.js';
+import { burnsIn, cuesFor, isCjk, lineProblems, toSrt, toVtt, withRows } from './narration.js';
 import { linesInFinal, timeMap } from './time-map.js';
 import { maskWarnings } from './masks.js';
 import pkg from '../package.json' with { type: 'json' };
@@ -371,7 +371,8 @@ async function loadTake(dir) {
 }
 
 /**
- * The Narration as Render takes it, or null for a Take without Lines or without a Narration yet (a
+ * The Narration as Render takes it, its Lines broken into subtitle rows here so the render page and
+ * verify use the same rows, or null for a Take without Lines or without a Narration yet (a
  * draft whose Lines `d.say` placed before any audio existed). Burned-in Chinese, Japanese or Korean
  * Subtitles drawn by the built-in need a font: macOS has PingFang SC; elsewhere the Edit or Look names one.
  */
@@ -382,7 +383,7 @@ function narrationForRender(edit, narration, dir) {
   if (builtin && process.platform !== 'darwin' && lines.some(line => isCjk(line.text, narration.language))) {
     throw new Error('Burned-in Subtitles in this language need a font outside macOS: add one to the Edit or Look as subtitles.files.font (a .woff2, .ttf or .otf file), or set subtitles.burn to false');
   }
-  return { language: narration.language, volume: edit.narration.volume, lines };
+  return { volume: edit.narration.volume, lines: withRows(lines, narration.language, subtitles?.maxChars) };
 }
 
 /**
@@ -398,8 +399,9 @@ export async function previewTake(directory, refs = [], { at } = {}) {
   const host = config.url && new URL(config.url).host;
   const looks = await Promise.all(refs.map(ref => loadLook(ref)));
   const tiles = [{ name: 'current', edit }, ...looks.map(look => ({ name: look.name, edit: applyLook(edit, resolvedLook(look), host) }))];
-  const files = {}, shown = tiles.map(({ name, edit }) => ({ name, edit: forRender(atShortSide(edit, 1080), dir, files).edit }));
-  const png = await composePreview({ sources: sourcesOf(dir, timeline), timeline, at, tiles: shown, files, narration: narrationForRender(edit, narration, dir) });
+  // Each tile's own Narration, so its rows follow that tile's subtitles.maxChars.
+  const files = {}, shown = tiles.map(({ name, edit }) => ({ name, edit: forRender(atShortSide(edit, 1080), dir, files).edit, narration: narrationForRender(edit, narration, dir) }));
+  const png = await composePreview({ sources: sourcesOf(dir, timeline), timeline, at, tiles: shown, files });
   const preview = join(dir, 'preview.png');
   await fs.writeFile(preview, png);
   return { preview, at: at ?? 'end, camera wide', tiles: tiles.map(({ name, edit }) => ({ name, summary: summarize(lookFromEdit(edit)) })) };
@@ -461,7 +463,7 @@ async function narrationProblems(dir, edit, narration, media, map, end) {
   const inFinal = linesInFinal(narration.lines.map(line => ({ ...line, duration: measured.get(line.id).duration })), map), { lines } = inFinal;
   problems.push(...inFinal.problems, ...lineProblems(lines, end));
   if (problems.length) return problems;
-  const cues = cuesFor(lines, narration.language, edit.subtitles, end);
+  const cues = cuesFor(lines, edit.subtitles, end);
   for (const [name, format] of SUBTITLE_FILES) {
     const text = await fs.readFile(join(dir, name), 'utf8').catch(() => null);
     if (text !== format(cues)) problems.push(`${name} ${text === null ? 'is missing' : 'does not match the Lines'}; render again`);

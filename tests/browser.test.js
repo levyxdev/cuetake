@@ -14,6 +14,7 @@ import { renderFinal, inspectFinal, extractFrame, composePreview } from '../src/
 import { merge, withDefaults } from '../src/edit.js';
 import { layout, previewSheet, outputSize } from '../src/stage.js';
 import { forRender } from '../src/styles.js';
+import { withRows } from '../src/narration.js';
 import { startRecording, getRecordingPage, beginCapture, stopRecording, cleanup } from '../src/recorder.js';
 
 /** Preview tiles as composePreview takes them: Edits with their files served from `dir`. */
@@ -1180,10 +1181,10 @@ test('Render mixes each Line in at its start, as long as the video, and burns in
     await fs.writeFile(sourcePath, await syntheticSource(browser, 0.6));
     await fs.writeFile(join(dir, 'a.wav'), toneWav(0.5));
     await fs.writeFile(join(dir, 'b.wav'), toneWav(0.4));
-    const narration = { language: 'en', volume: 1, lines: [
+    const narration = { volume: 1, lines: withRows([
       { id: 'a', start: 0.3, text: 'Open the editor.', path: join(dir, 'a.wav') },
       { id: 'b', start: 1.4, text: 'Done.', volume: 0.5, path: join(dir, 'b.wav') },
-    ] };
+    ], 'en') };
     // An opaque red band shows where the built-in draws; zoomed in, it must stay put.
     const edit = bare({ subtitles: { band: '#ff0000' }, camera: { maxZoom: 2, padding: 0, lead: 0.1, response: 0.1, hold: 2, endWide: 0, follow: false, targets: [{ t: 0.2, box: { x: 240, y: 100, width: 20, height: 20 } }] } });
     const render = await renderFinal({ sources: [sourcePath], finalPath: outputPath, timeline: { viewport: { width: 320, height: 240 }, duration: 2 }, ...forRender(edit, dir), narration });
@@ -1223,7 +1224,7 @@ test('Render refuses Lines that overlap or run past the end, naming them, and au
     await fs.writeFile(sourcePath, await syntheticSource(browser, 0.6));
     await fs.writeFile(join(dir, 'a.wav'), toneWav(0.8));
     await fs.writeFile(join(dir, 'bad.wav'), 'not audio');
-    const render = lines => renderFinal({ sources: [sourcePath], finalPath: join(dir, 'final.mp4'), timeline: { viewport: { width: 320, height: 240 }, duration: 1 }, ...forRender(bare(), dir), narration: { language: 'en', lines } });
+    const render = lines => renderFinal({ sources: [sourcePath], finalPath: join(dir, 'final.mp4'), timeline: { viewport: { width: 320, height: 240 }, duration: 1 }, ...forRender(bare(), dir), narration: { lines } });
     const line = (id, start, file = 'a.wav') => ({ id, start, text: 'Hello.', path: join(dir, file) });
     await expect(render([line('a', 0), line('b', 0.5)])).rejects.toThrow("Line 'a' overlaps 'b' by 0.30 s; Line 'b' runs 0.30 s past the end of the Final");
     await expect(render([line('a', 0, 'bad.wav')])).rejects.toThrow("Line 'a': its audio bad.wav is not a format the browser decodes");

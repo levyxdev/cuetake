@@ -1,8 +1,14 @@
-// Subtitles: centered rows of text on a rounded band near the bottom of the Final.
-// Parameters: fontSize, weight, color, band (#rrggbbaa, '' for none), bottom (gap below the band), padding.
+// Subtitles: centered rows of text near the bottom of the Final, by default white with a black outline
+// and a light shadow, so they read over any page without a band.
+// Parameters: fontSize, weight, color, stroke (outline color, '' for none), strokeWidth (outline width
+// outside the letters), shadow (#rrggbbaa, '' for none), shadowBlur, shadowOffset (downward),
+// band (#rrggbbaa, '' for none: a rounded band behind the rows), bottom (gap below the rows), padding.
 // Drawn in 1080p pixels over the whole Final, outside the camera; a `font` in files replaces the system font.
 export function draw(ctx, { width, height, rows, params, files }) {
-  const { fontSize: size = 40, weight = 600, color = '#ffffff', band = '#000000b3', bottom = 72, padding = 14 } = params;
+  const {
+    fontSize: size = 40, weight = 600, color = '#ffffff', stroke = '#000000', strokeWidth = 4,
+    shadow = '#00000066', shadowBlur = 8, shadowOffset = 2, band = '', bottom = 72, padding = 14,
+  } = params;
   const family = files.font ? `"${files.font}"` : '-apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif';
   ctx.font = `${weight} ${size}px ${family}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -12,6 +18,19 @@ export function draw(ctx, { width, height, rows, params, files }) {
     ctx.fillStyle = band;
     ctx.beginPath(); ctx.roundRect((width - w) / 2, y, w, h, Math.min(12, h / 2)); ctx.fill();
   }
+  const at = i => y + padding + line * (i + 0.5), outlined = Boolean(stroke) && strokeWidth > 0;
+  // The shadow falls from the outermost pass only, so the outline and the letters do not cast it twice.
+  const shadowed = paint => {
+    if (shadow) Object.assign(ctx, { shadowColor: shadow, shadowBlur, shadowOffsetX: 0, shadowOffsetY: shadowOffset });
+    paint();
+    Object.assign(ctx, { shadowColor: 'transparent', shadowBlur: 0, shadowOffsetY: 0 });
+  };
+  if (outlined) {
+    // A stroke is centered on the letters' edge; the fill drawn over it hides the inner half.
+    Object.assign(ctx, { strokeStyle: stroke, lineWidth: 2 * strokeWidth, lineJoin: 'round', miterLimit: 2 });
+    shadowed(() => rows.forEach((row, i) => ctx.strokeText(row, width / 2, at(i))));
+  }
   ctx.fillStyle = color;
-  rows.forEach((row, i) => ctx.fillText(row, width / 2, y + padding + line * (i + 0.5)));
+  const fill = () => rows.forEach((row, i) => ctx.fillText(row, width / 2, at(i)));
+  if (outlined) fill(); else shadowed(fill);
 }
