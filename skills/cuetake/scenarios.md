@@ -11,7 +11,7 @@ export const config = {
   director: { speed: 1, seed: 1 },
   // Styling seeds the first Edit; see styling.md. File paths are relative to this file.
   output: { width: 3840, height: 2160, quality: 22 },
-  frame: { padding: 0.08, chrome: { draw: 'browser' }, background: [{ shader: 'fluted' }] },
+  frame: { padding: 0.05, chrome: { draw: 'browser' }, background: [{ shader: 'fluted' }] },
   camera: {
     maxZoom: 2,
     minZoom: 1.2,

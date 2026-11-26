@@ -1001,15 +1001,15 @@ test('Render shows keycaps for each Shortcut outside the camera, fading in and o
     await fs.writeFile(sourcePath, await syntheticSource(browser, 0.6));
     // An opaque red cap shows where the built-in draws; zoomed in, it must stay put.
     const edit = bare({
-      keycaps: { cap: '#ff0000', edge: '#ff0000', bottom: 300 }, shortcuts: [{ t: 0.5, keys: ['Meta', 'K'] }],
+      frame: { padding: [0, 0, 0.5, 0] }, keycaps: { cap: '#ff0000', edge: '#ff0000' }, shortcuts: [{ t: 0.5, keys: ['Meta', 'K'] }],
       camera: { maxZoom: 2, padding: 0, lead: 0.1, response: 0.1, hold: 2, endWide: 0, follow: false, targets: [{ t: 0.2, box: { x: 240, y: 100, width: 20, height: 20 } }] },
     });
     const render = await renderFinal({ sources: [sourcePath], finalPath: outputPath, timeline: { viewport: { width: 320, height: 240 }, duration: 2.4 }, ...forRender(edit, dir) });
     expect(render.keycaps).toEqual([{ t: 0.5, keys: ['Meta', 'K'], presses: 1, frames: [15, 59] }]);
     // On a 320×240 Final a 1080p pixel is 2/9 of an output pixel: the row ends 80 from the right, so the ⌘ cap
-    // spans about 271 to 286 px across and 159 to 173 px down, 300 above the bottom; this point is inside it,
-    // left of the symbol.
-    const cap = [273, 168];
+    // spans about 271 to 286 px across and, centered in the 120 px below the window, 173 to 187 px down; this
+    // point is inside it, left of the symbol.
+    const cap = [273, 180];
     const red = rgb => rgb[0] > 180 && rgb[1] < 80;
     expect(red((await pixelsAt(browser, await extractFrame(outputPath, 0.4), [cap]))[0])).toBe(false);
     expect(red((await pixelsAt(browser, await extractFrame(outputPath, 1), [cap]))[0])).toBe(true);
@@ -1185,8 +1185,8 @@ test('Render mixes each Line in at its start, as long as the video, and burns in
       { id: 'a', start: 0.3, text: 'Open the editor.', path: join(dir, 'a.wav') },
       { id: 'b', start: 1.4, text: 'Done.', volume: 0.5, path: join(dir, 'b.wav') },
     ], 'en') };
-    // An opaque red band shows where the built-in draws; zoomed in, it must stay put.
-    const edit = bare({ subtitles: { band: '#ff0000' }, camera: { maxZoom: 2, padding: 0, lead: 0.1, response: 0.1, hold: 2, endWide: 0, follow: false, targets: [{ t: 0.2, box: { x: 240, y: 100, width: 20, height: 20 } }] } });
+    // An opaque red band shows where the built-in draws; zoomed in, it must stay put. Its room adds to the bottom padding.
+    const edit = bare({ frame: { padding: [0, 0, 0.1, 0] }, subtitles: { band: '#ff0000', padding: 60, room: 0.4 }, camera: { maxZoom: 2, padding: 0, lead: 0.1, response: 0.1, hold: 2, endWide: 0, follow: false, targets: [{ t: 0.2, box: { x: 240, y: 100, width: 20, height: 20 } }] } });
     const render = await renderFinal({ sources: [sourcePath], finalPath: outputPath, timeline: { viewport: { width: 320, height: 240 }, duration: 2 }, ...forRender(edit, dir), narration });
     expect(render.lines).toEqual([{ id: 'a', start: 0.3, duration: 0.5 }, { id: 'b', start: 1.4, duration: 0.4 }]);
     expect(render.subtitles.map(({ id, start, end, rows, frames }) => ({ id, start, end, rows, frames }))).toEqual([
@@ -1208,7 +1208,9 @@ test('Render mixes each Line in at its start, as long as the video, and burns in
     expect(first).toBeGreaterThan(0.25);
     expect(gap).toBeLessThan(0.01);
     expect(second).toBeGreaterThan(0.1); expect(second).toBeLessThan(first * 0.7);
-    const band = [160, 207]; // the band's top padding, above the text
+    // A 1080p pixel is 2/9 of an output pixel: the 0.5 × 240 = 120 px below the window center the band, 40 px
+    // tall, at 180 px down; this point is in its top padding, above the text. Without the room it would be page.
+    const band = [160, 165];
     const [during] = await pixelsAt(browser, await extractFrame(outputPath, 0.6), [band]);
     const [before] = await pixelsAt(browser, await extractFrame(outputPath, 0.1), [band]);
     expect(during[0]).toBeGreaterThan(200); expect(during[1]).toBeLessThan(60);

@@ -140,7 +140,7 @@ export const withRows = (lines, language, maxChars) =>
  * sentence), shown while they are spoken. A cue shorter than `minDuration` takes time from the next
  * cue of its Line, or from the silence after its Line, up to `end`, the end of the Final.
  */
-export function subtitleCues(lines, { maxRows = 2, minDuration = 1, end = Infinity } = {}) {
+export function subtitleCues(lines, { maxRows = 1, minDuration = 1, end = Infinity } = {}) {
   const cues = [];
   for (const line of [...lines].sort((a, b) => a.start - b.start)) {
     const said = clock(line), groups = [];

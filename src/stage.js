@@ -16,19 +16,21 @@ export function atShortSide(edit, short) {
 
 /**
  * Where the window, its chrome and the page sit on the stage, in stage pixels. `chrome` is the chrome
- * bar's height in CSS pixels; `scale` is stage px per CSS px. The window is as large as fits inside the
- * padding and centered in it.
+ * bar's height in CSS pixels; `scale` is stage px per CSS px; `room` (a fraction of the short side)
+ * adds to the bottom padding, for Subtitles. The window is as large as fits inside the padding and
+ * centered in it; `below` is the space under it, where Subtitles and keycaps sit.
  */
-export function layout(edit, viewport, chrome = 0) {
+export function layout(edit, viewport, chrome = 0, room = 0) {
   const { width, height } = outputSize(edit), short = Math.min(width, height);
   const padding = [edit.frame.padding ?? 0].flat();
-  const [top, right, bottom, left] = (padding.length === 4 ? padding : [padding[0], padding[0], padding[0], padding[0]]).map(p => p * short);
+  const [top, right, padded, left] = (padding.length === 4 ? padding : [padding[0], padding[0], padding[0], padding[0]]).map(p => p * short);
+  const bottom = padded + room * short;
   const scale = Math.min((width - left - right) / viewport.width, (height - top - bottom) / (viewport.height + chrome));
   const w = viewport.width * scale, h = (viewport.height + chrome) * scale;
   const window = { x: left + (width - left - right - w) / 2, y: top + (height - top - bottom - h) / 2, w, h };
   return {
     width, height, scale, chrome: chrome * scale, radius: (edit.frame.radius ?? 0) * short / 1080,
-    window, page: { x: window.x, y: window.y + chrome * scale, w, h: h - chrome * scale },
+    window, below: height - window.y - h, page: { x: window.x, y: window.y + chrome * scale, w, h: h - chrome * scale },
   };
 }
 

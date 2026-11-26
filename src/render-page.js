@@ -169,7 +169,7 @@ void main() { color = texture(uSprite, uv) * uAlpha; }`;
 
 // Item keys CueTake reads itself; every other key is a parameter for the item's shader or drawing code.
 const OWN_KEYS = new Set(['shader', 'draw', 'image', 'files', 'ref', 'kind', 'url']);
-const SLOT_KEYS = new Set(['size', 'hotspot', 'press', 'duration', 'singleKeys', 'reach', 'height', 'burn', 'maxChars', 'maxRows', 'minDuration']);
+const SLOT_KEYS = new Set(['size', 'hotspot', 'press', 'duration', 'singleKeys', 'reach', 'height', 'burn', 'room', 'maxChars', 'maxRows', 'minDuration']);
 const paramsOf = item => Object.fromEntries(Object.entries(item).filter(([key]) => !OWN_KEYS.has(key) && (item.kind === 'shader' || !SLOT_KEYS.has(key))));
 const fail = (item, error) => new Error(`${item.ref}: ${error?.message ?? error}`);
 
@@ -523,16 +523,18 @@ async function loadClickEffect(item, cursor) {
 
 /**
  * Drawing code over the whole Final in 1080p pixels, outside the camera, such as Subtitles and keycaps:
- * `draw(ctx, { width, height, ...what, params, files })`. `canvas(width, height, what)` rasterizes it at output size.
+ * `draw(ctx, { width, height, below, ...what, params, files })`. `below` is the space under the window
+ * with the camera wide, given here in stage pixels and to the drawing in 1080p pixels.
+ * `canvas(width, height, what)` rasterizes it at output size.
  */
-async function loadScreenDrawing(item, name) {
+async function loadScreenDrawing(item, name, below) {
   if (item.kind !== 'draw') throw fail(item, `${name} are drawing code`);
   const module = await loadModule(item), files = await loadFiles(item), params = paramsOf(item);
   return {
     canvas(width, height, what) {
       const unit = Math.min(width, height) / 1080, ctx = canvas2d(width, height);
       ctx.scale(unit, unit);
-      try { module.draw(ctx, { width: width / unit, height: height / unit, ...what, params, files }); } catch (error) { throw fail(item, error); }
+      try { module.draw(ctx, { width: width / unit, height: height / unit, below: below / unit, ...what, params, files }); } catch (error) { throw fail(item, error); }
       return ctx.canvas;
     },
   };
@@ -704,7 +706,9 @@ async function createScene(edit, viewport, { pointer, shapes, events, tabs, elem
   if (maskIssues.length) throw new Error(`The masks cannot be drawn: ${maskIssues.join('; ')}`);
   const masks = maskTrack(edit.masks, elements, map);
   const chrome = frame.chrome ? await loadChrome(frame.chrome, viewport.width) : null;
-  const stage = layout(edit, viewport, chrome?.height ?? 0);
+  // Burned-in Subtitles take their room below the window, 0.04 of the short side unless the item says.
+  const subtitled = burnsIn(subtitles) && cues.length > 0;
+  const stage = layout(edit, viewport, chrome?.height ?? 0, subtitled ? subtitles.room ?? 0.04 : 0);
   const compositor = createCompositor(stage, brandOf(firstFrame));
   const pages = new Map();
   const upload = (tab, videoFrame) => {
@@ -781,9 +785,9 @@ async function createScene(edit, viewport, { pointer, shapes, events, tabs, elem
   const drawn = new Set(Object.keys(cursorSprites)), track = cursor && cursorTrack({ pointer: placed.pointer, shapes, events: placed.events }, cursor);
   const effect = clickEffect ? await loadClickEffect(clickEffect, cursor ? Object.fromEntries(Object.entries(cursor).filter(([key]) => !['ref', 'kind', 'url', 'files'].includes(key))) : {}) : null;
   const pressList = presses(placed.events);
-  const subtitleDrawing = burnsIn(subtitles) && cues.length ? await loadScreenDrawing(subtitles, 'Subtitles') : null;
-  const keys = keycapTrack(retimed(shortcuts, map), keycaps), keycapDrawing = keys.shows.length ? await loadScreenDrawing(keycaps, 'Keycaps') : null;
-  const badgeDrawing = fastForwardBadge && map.spans.length ? await loadScreenDrawing(fastForwardBadge, 'Fast-forward badges') : null;
+  const subtitleDrawing = subtitled ? await loadScreenDrawing(subtitles, 'Subtitles', stage.below) : null;
+  const keys = keycapTrack(retimed(shortcuts, map), keycaps), keycapDrawing = keys.shows.length ? await loadScreenDrawing(keycaps, 'Keycaps', stage.below) : null;
+  const badgeDrawing = fastForwardBadge && map.spans.length ? await loadScreenDrawing(fastForwardBadge, 'Fast-forward badges', stage.below) : null;
   const unit = Math.min(stage.width, stage.height) / 1080, spacing = 2 * unit; // on-screen pixels between the moments a frame averages
   /** Where stage point `p` shows on screen, in output pixels, under the camera `view`. */
   const onScreen = (p, view) => [(p[0] - view.x) * view.zoom + stage.width / 2, (p[1] - view.y) * view.zoom + stage.height / 2];

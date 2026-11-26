@@ -19,8 +19,8 @@ export const BUILTINS = {
   'arrow-thin': { file: 'arrow.js', params: { thin: true } },
   dot: { file: 'dot.js', params: {} },
   spark: { file: 'spark.js', params: { radius: 32, length: 16, count: 8 } },
-  keycaps: { file: 'keycaps.js', params: { symbols: true, fontSize: 34, color: '#ffffff', cap: '#1f1f23e6', edge: '#ffffff40', right: 80, bottom: 80 } },
-  subtitles: { file: 'subtitles.js', params: { fontSize: 40, weight: 600, color: '#ffffff', stroke: '#000000', strokeWidth: 4, shadow: '#00000066', shadowBlur: 8, shadowOffset: 2, band: '', bottom: 72, padding: 14 } },
+  keycaps: { file: 'keycaps.js', params: { symbols: true, fontSize: 34, color: '#ffffff', cap: '#1f1f23e6', edge: '#ffffff40', right: 80 } },
+  subtitles: { file: 'subtitles.js', params: { fontSize: 48, weight: 600, color: '#ffffff', stroke: '#000000', strokeWidth: 4, shadow: '#00000066', shadowBlur: 8, shadowOffset: 2, band: '', padding: 14 } },
   'fast-forward': { file: 'fast-forward.js', params: { fontSize: 44, color: '#ffffff', band: '#000000a6', x: 0.5, y: 0.5 } },
 };
 export const KINDS = ['shader', 'draw', 'image'];

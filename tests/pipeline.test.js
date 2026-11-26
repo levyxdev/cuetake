@@ -860,6 +860,18 @@ test('the window sits centered inside the padding with its chrome above the page
   expect(layout(framed({ padding: 0 }, { width: 2880, height: 1800 }), pageViewport).page).toEqual({ x: 0, y: 0, w: 2880, h: 1800 });
 });
 
+test('room for Subtitles adds to the bottom padding, and the stage reports the space below the window', () => {
+  const plain = layout(framed({ padding: 0.05 }), pageViewport), roomy = layout(framed({ padding: 0.05 }), pageViewport, 0, 0.04);
+  expect(plain.below).toBeCloseTo(2160 * 0.05, 6);
+  expect(roomy.below).toBeCloseTo(2160 * 0.09, 6);
+  expect(roomy.window.y).toBeCloseTo(2160 * 0.05, 6);
+  expect(roomy.window.h).toBeLessThan(plain.window.h);
+  // A window too wide to reach the padding above and below it leaves the same space on both sides beyond it, which counts too.
+  const wide = layout(framed({ padding: 0.05 }), { width: 1440, height: 300 }, 0, 0.04);
+  expect(wide.below).toBeGreaterThan(2160 * 0.09);
+  expect(wide.below - 2160 * 0.09).toBeCloseTo(wide.window.y - 2160 * 0.05, 6);
+});
+
 test('at zoom 1 the camera shows the whole stage; zoomed views stay inside it', () => {
   const stage = layout(framed(), pageViewport, 44);
   expect(cameraView({ x: 0, y: 0, w: 1440, h: 900 }, stage, pageViewport)).toEqual({ x: 1920, y: 1080, zoom: 1 });
@@ -961,7 +973,7 @@ test('fields the Scenario config names win over a Look', () => {
   const config = scenarioSchema.parse(merged);
   expect(config.frame).toMatchObject({ chrome: { draw: 'macos' }, radius: 4 });
   expect(config.cursor.size).toBe(32);
-  expect(withDefaults({ frame: { chrome: false } }).frame).toMatchObject({ chrome: false, padding: 0.08 });
+  expect(withDefaults({ frame: { chrome: false } }).frame).toMatchObject({ chrome: false, padding: 0.05 });
 });
 
 test('summaries name the chrome, Background layers and output size', () => {
@@ -1191,7 +1203,7 @@ test('Chinese subtitle rows break between words, never inside one', () => {
 });
 
 test('cues show the rows a Line was broken into before Render, so the burned-in Subtitles and the files agree', () => {
-  const [cue] = subtitleCues([{ id: 'a', text: '先打开编辑器然后保存', rows: ['先打开编辑器', '然后保存'], start: 0, duration: 2 }]);
+  const [cue] = subtitleCues([{ id: 'a', text: '先打开编辑器然后保存', rows: ['先打开编辑器', '然后保存'], start: 0, duration: 2 }], { maxRows: 2 });
   expect(cue.rows).toEqual(['先打开编辑器', '然后保存']);
 });
 
@@ -1236,10 +1248,13 @@ test('each word of a Line is looked for after the one before, and a word the Lin
   expect(wordInLine(istanbul, 'ankara').at).toBeCloseTo(1.9 * 12 / 18, 6);
 });
 
-test('Chinese Lines break at about 16 characters and two rows make a cue', () => {
-  const cues = subtitleCues(withRows([{ id: 'a', text: '先打开编辑器然后给标题选一个颜色再点击保存按钮就能看到效果', start: 0, duration: 6 }], 'zh-CN'));
-  expect(cues[0].rows).toHaveLength(2);
+test('Chinese Lines break at about 16 characters, one row to a cue unless maxRows asks for more', () => {
+  const lines = withRows([{ id: 'a', text: '先打开编辑器然后给标题选一个颜色再点击保存按钮就能看到效果', start: 0, duration: 6 }], 'zh-CN');
+  const cues = subtitleCues(lines);
+  expect(cues).toHaveLength(2);
+  expect(cues.map(c => c.rows.length)).toEqual([1, 1]);
   for (const row of cues.flatMap(c => c.rows)) expect(Array.from(row).length).toBeLessThanOrEqual(16);
+  expect(subtitleCues(lines, { maxRows: 2 })[0].rows).toHaveLength(2);
 });
 
 test('a short cue stays at least a second, taking time from the next cue or the silence after', () => {
