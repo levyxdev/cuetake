@@ -4,6 +4,7 @@ import { textField } from './probe.js';
 import { carried, seenBy, windowMaps } from './tabs.js';
 import { EFFECT_NAMES, MASK_EFFECTS } from './masks.js';
 import { wordInLine } from './narration.js';
+import { isAppLocator } from './app-locators.js';
 
 /** Milliseconds between the Director's checks of what a mask's locator matches, so a replaced element is followed. */
 const REWATCH_MS = 100;
@@ -168,6 +169,17 @@ const focusedNotTextField = new Function('element', `return (${focusedNotField})
 /** How long after the voice said a word the Scenario may wait for it before `verify` warns. */
 const LATE_WORD_S = 0.2;
 
+const BOX_KEYS = ['x', 'y', 'width', 'height'];
+const isBox = box => box !== null && typeof box === 'object' && !isAppLocator(box) && BOX_KEYS.every(key => Number.isFinite(box[key]));
+/** What d.focus got instead of a box, and how to pass one. An App's locator is checked first: reading other properties of it throws. */
+function notBox(value) {
+  if (isAppLocator(value)) return `the locator ${value}; an App's locator has no box to read, so pass the element's frame in Desktop points, as scripts/cuetake tree lists it`;
+  if (typeof value?.boundingBox === 'function') return `the locator ${value}; pass its box in CSS pixels, as d.focus(await locator.boundingBox()), or d.focus(await d.scroll(locator)) to scroll it into view first`;
+  if (value === null) return 'null, as boundingBox() gives for an element that is hidden or gone';
+  if (typeof value === 'object') return `{ ${BOX_KEYS.map(key => `${key}: ${value[key]}`).join(', ')} }`;
+  return typeof value === 'string' ? `'${value}'` : String(value);
+}
+
 /** Options may be a bare number for the action's main timing; `focus: false` keeps the camera wide. */
 export const options = (value, key) => typeof value === 'number' ? { [key]: value } : value ?? {};
 
@@ -181,7 +193,12 @@ export function clockOf({ startedAt, voiced = null }, { focus: focusTargets, sai
   // Node's clock, not a page's, since the page in front may close mid-wait.
   const wait = ms => { state.waited = true; return new Promise(resolve => setTimeout(resolve, Math.max(0, ms))); };
   const time = () => (Date.now() - startedAt) / 1000;
-  const focus = (box, t = time()) => focusTargets.push({ t, box, tab: front() });
+  /** Adds a camera target, refusing at the call what the camera could not frame, such as a locator. */
+  function focus(box, t = time()) {
+    if (!isBox(box)) throw new Error(`d.focus needs a box { x, y, width, height } of finite numbers, but got ${notBox(box)}`);
+    if (!Number.isFinite(t)) throw new Error(`d.focus needs its time in seconds as a finite number, not ${typeof t === 'string' ? `'${t}'` : t}`);
+    focusTargets.push({ t, box: { x: box.x, y: box.y, width: box.width, height: box.height }, tab: front() });
+  }
   /**
    * Runs `action`, a wait the viewer need not sit through, such as `() => reply.waitFor()`;
    * the Final plays it `rate` times faster. Speech cannot speed up with it, so no Line is said inside.

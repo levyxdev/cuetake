@@ -1556,6 +1556,18 @@ test('the Director of a Take of Apps keeps time, says Lines, fast-forwards and f
   expect(notes.forwarded).toMatchObject([{ rate: 3 }]);
 });
 
+test('the Director of a Take of Apps refuses a focus on anything but a box of finite numbers, at the call', () => {
+  const notes = { focus: [], wide: [], said: [], forwarded: [], pointer: [], events: [] };
+  const d = createAppDirector({ startedAt: Date.now(), helper: fakeHelper(textEdit()) }, notes);
+  const save = d.page.getByRole('button', { name: 'Save' });
+  expect(() => d.focus(save)).toThrow(`d.focus needs a box { x, y, width, height } of finite numbers, but got the locator ${save}; an App's locator has no box to read, so pass the element's frame in Desktop points, as scripts/cuetake tree lists it`);
+  expect(() => d.focus({ x: 10, y: 20, width: 300 })).toThrow('d.focus needs a box { x, y, width, height } of finite numbers, but got { x: 10, y: 20, width: 300, height: undefined }');
+  expect(() => d.focus({ x: 10, y: NaN, width: 300, height: 40 })).toThrow('but got { x: 10, y: NaN, width: 300, height: 40 }');
+  expect(() => d.focus(null)).toThrow('d.focus needs a box { x, y, width, height } of finite numbers, but got null');
+  expect(() => d.focus({ x: 10, y: 20, width: 300, height: 40 }, '1')).toThrow("d.focus needs its time in seconds as a finite number, not '1'");
+  expect(notes.focus).toEqual([]);
+});
+
 const quickBuild = { ...build, duration: 0.5, words: [{ text: 'First', start: 0, end: 0.05 }, { text: 'to-spec,', start: 0.1, end: 0.2 }, { text: 'then', start: 0.22, end: 0.27 }, { text: 'TDD.', start: 0.3, end: 0.4 }] };
 
 test('a voiced Line resolves each of its words as the voice reaches it, and still ends with the Line', async () => {

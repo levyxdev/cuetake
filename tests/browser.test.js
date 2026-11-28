@@ -705,6 +705,22 @@ test('the Director says why a scroll could not bring its target into view: the l
   } finally { await browser.close(); }
 }, 30_000);
 
+test('the Director refuses a focus on a locator at the call, saying how to pass its box', async () => {
+  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
+  try {
+    const page = await browser.newPage({ viewport: { width: 640, height: 480 } });
+    await page.setContent('<button>Save</button><p id="gone" hidden>Gone</p>');
+    const notes = { focus: [], wide: [], said: [], forwarded: [], pointer: [] };
+    const d = createDirector(followTabs(page), { startedAt: Date.now(), fps: 60, speed: 4 }, notes);
+    const save = d.page.getByRole('button', { name: 'Save' });
+    expect(() => d.focus(save)).toThrow("d.focus needs a box { x, y, width, height } of finite numbers, but got the locator getByRole('button', { name: 'Save' }); pass its box in CSS pixels, as d.focus(await locator.boundingBox()), or d.focus(await d.scroll(locator)) to scroll it into view first");
+    // A hidden element has no box, so boundingBox() gives null.
+    expect(() => d.focus(null)).toThrow('d.focus needs a box { x, y, width, height } of finite numbers, but got null, as boundingBox() gives for an element that is hidden or gone');
+    d.focus(await save.boundingBox());
+    expect(notes.focus).toMatchObject([{ box: { x: expect.any(Number), y: expect.any(Number), width: expect.any(Number), height: expect.any(Number) }, tab: 0 }]);
+  } finally { await browser.close(); }
+}, 30_000);
+
 test('on Node, a Director failure keeps the line of the Scenario that called it on its stack', async () => {
   // Bun keeps no async frames across these awaits; users run CueTake on Node, which does.
   const dir = await fs.mkdtemp(join(tmpdir(), 'cuetake-stack-'));
