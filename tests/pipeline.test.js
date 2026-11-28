@@ -1218,12 +1218,12 @@ test('cues show the rows a Line was broken into before Render, so the burned-in 
   expect(cue.rows).toEqual(['先打开编辑器', '然后保存']);
 });
 
-test('cue rows leave out the clause and sentence punctuation they end on, and keep the rest', () => {
-  const rows = ['先打开编辑器，', '然后保存。', '真的吗？', '他说「好」。', '点击「保存」', 'Wait...', 'Hmm...。', 'and so on.'];
-  const [first, ...rest] = subtitleCues([{ id: 'a', text: rows.join(''), rows, start: 0, duration: 14 }], { maxRows: 2 });
+test('Chinese cue rows drop commas and full stops, a space standing for one inside a row, and other rows keep their punctuation', () => {
+  const rows = ['先打开编辑器，然后保存。', '再看效果；就好了。', '真的吗？', '他说「好。」', '买了苹果、香蕉、', '点击「保存」', '等一下……', 'Wait...', 'Open it, then save.'];
+  const [first, ...rest] = subtitleCues([{ id: 'a', text: rows.join(''), rows, start: 0, duration: 18 }], { maxRows: 2 });
   // The cue still ends after the sentence, as if its full stop were there.
-  expect(first.rows).toEqual(['先打开编辑器', '然后保存']);
-  expect(rest.flatMap(cue => cue.rows)).toEqual(['真的吗？', '他说「好」', '点击「保存」', 'Wait...', 'Hmm...', 'and so on']);
+  expect(first.rows).toEqual(['先打开编辑器 然后保存']);
+  expect(rest.flatMap(cue => cue.rows)).toEqual(['再看效果 就好了', '真的吗？', '他说「好」', '买了苹果、香蕉', '点击「保存」', '等一下……', 'Wait...', 'Open it, then save.']);
 });
 
 const sentences = 'Open the editor from the dashboard menu. Then pick a color and press save.';
@@ -1232,7 +1232,7 @@ const wordsOf = (text, from, to) => { const list = text.split(' '), step = (to -
 test('cues share a Line by its spoken characters, or by its word timings when it has them', () => {
   const line = { id: 'intro', text: sentences, start: 2, duration: 4 };
   const even = subtitleCues(withRows([line]));
-  expect(even.map(c => c.rows)).toEqual([['Open the editor from the dashboard menu'], ['Then pick a color and press save']]);
+  expect(even.map(c => c.rows)).toEqual([['Open the editor from the dashboard menu.'], ['Then pick a color and press save.']]);
   expect(even[0]).toMatchObject({ id: 'intro', start: 2, end: expect.closeTo(2 + 4 * 33 / 59, 6) });
   expect(even[1].end).toBe(6);
   const words = [...wordsOf('Open the editor from the dashboard menu', 0.1, 1.5), ...wordsOf('Then pick a color and press save', 2, 3.2)];

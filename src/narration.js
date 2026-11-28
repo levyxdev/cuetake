@@ -22,8 +22,14 @@ const OPENING = /[(\[{“‘（《「『【〈]$/u;
 /** The characters that are spoken, which word timings count: no spaces or punctuation. */
 const spoken = text => Array.from(text.replace(/[\s\p{P}\p{S}]/gu, '')).length;
 const length = text => Array.from(text).length;
-/** A row without the clause or sentence punctuation it ends on; `?`, `!`, an ellipsis and closing quotes stay. */
-const trimRowEnd = row => row.replace(/(\.{2,})?[，。、；：,.;:]*$/u, (marks, dots, at) => at && marks ? (dots ?? '') : marks);
+/**
+ * A row as subtitles in its script show it. A CJK row drops its commas, full stops and semicolons,
+ * leaving a space inside the row and nothing before a closing quote or at its end, and an
+ * enumeration comma or colon it ends on; question marks, exclamation marks and ellipses stay. Other
+ * rows keep their punctuation.
+ */
+const asShown = row => !CJK.test(row) ? row : row
+  .replace(/[，。；]+(?=[」』”’）》]|$)/gu, '').replace(/[，。；]+/gu, ' ').replace(/[、：]+$/u, '') || row;
 
 /** Whether `text` (or a language tag such as zh-CN) is written without spaces between words. */
 export const isCjk = (text, language) => /^(zh|ja|ko)\b/i.test(language ?? '') || CJK.test(text);
@@ -147,9 +153,9 @@ export const withRows = (lines, language, maxChars) =>
 
 /**
  * Subtitle cues for placed Lines: each Line's `rows`, `maxRows` to a cue (a cue also ends after a
- * sentence), shown while they are spoken, each row without the clause or sentence punctuation it
- * ends on. A cue shorter than `minDuration` takes time from the next cue of its Line, or from the
- * silence after its Line, up to `end`, the end of the Final.
+ * sentence), shown while they are spoken, each row punctuated as subtitles in its script are. A
+ * cue shorter than `minDuration` takes time from the next cue of its Line, or from the silence after
+ * its Line, up to `end`, the end of the Final.
  */
 export function subtitleCues(lines, { maxRows = 1, minDuration = 1, end = Infinity } = {}) {
   const cues = [];
@@ -162,7 +168,7 @@ export function subtitleCues(lines, { maxRows = 1, minDuration = 1, end = Infini
     let k = 0;
     const own = groups.map(rows => {
       const n = rows.reduce((sum, row) => sum + spoken(row), 0);
-      const cue = { id: line.id, start: line.start + said.start(k), end: line.start + (k + n >= spoken(line.text) ? line.duration : said.end(k + n)), rows: rows.map(trimRowEnd) };
+      const cue = { id: line.id, start: line.start + said.start(k), end: line.start + (k + n >= spoken(line.text) ? line.duration : said.end(k + n)), rows: rows.map(asShown) };
       k += n;
       return cue;
     });

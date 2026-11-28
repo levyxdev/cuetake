@@ -74,7 +74,7 @@ A Line that overlaps the next one, runs past the end of the Final or is spoken w
 
 ## Subtitles
 
-`render` always writes `subtitles.srt` and `subtitles.vtt` into the Take. By default it also burns them into the Final, drawn outside the camera so they keep their size while it zooms. Rows hold about 16 characters in Chinese, Japanese and Korean and about 42 otherwise. They break at a sentence or clause end where one is near, otherwise at the end of one of the Line's `phrases`, then at a space, and only then between two Chinese or Japanese characters. A row leaves out the `，。、；：,.;:` it ends on and keeps `？！?!…` and closing quotes. By default each cue shows one row, below the window, and stays on screen at least a second.
+`render` always writes `subtitles.srt` and `subtitles.vtt` into the Take. By default it also burns them into the Final, drawn outside the camera so they keep their size while it zooms. Rows hold about 16 characters in Chinese, Japanese and Korean and about 42 otherwise. They break at a sentence or clause end where one is near, otherwise at the end of one of the Line's `phrases`, then at a space, and only then between two Chinese or Japanese characters. Rows in Chinese or Japanese characters follow Chinese subtitle custom: `，。；` become a space inside a row and go at its end, a `、` or `：` at its end goes, and `？！…` stay. Other rows keep their punctuation. By default each cue shows one row, below the window, and stays on screen at least a second.
 
 Subtitles are an item in the Edit, and a Look can save them like the cursor: see [styling.md](styling.md). Set `"subtitles": { "burn": false }` to keep them to the files.
 
