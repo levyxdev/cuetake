@@ -1218,12 +1218,21 @@ test('cues show the rows a Line was broken into before Render, so the burned-in 
   expect(cue.rows).toEqual(['先打开编辑器', '然后保存']);
 });
 
-test('Chinese cue rows drop commas and full stops, a space standing for one inside a row, and other rows keep their punctuation', () => {
-  const rows = ['先打开编辑器，然后保存。', '再看效果；就好了。', '真的吗？', '他说「好。」', '买了苹果、香蕉、', '点击「保存」', '等一下……', 'Wait...', 'Open it, then save.'];
-  const [first, ...rest] = subtitleCues([{ id: 'a', text: rows.join(''), rows, start: 0, duration: 18 }], { maxRows: 2 });
-  // The cue still ends after the sentence, as if its full stop were there.
-  expect(first.rows).toEqual(['先打开编辑器 然后保存']);
-  expect(rest.flatMap(cue => cue.rows)).toEqual(['再看效果 就好了', '真的吗？', '他说「好」', '买了苹果、香蕉', '点击「保存」', '等一下……', 'Wait...', 'Open it, then save.']);
+test('cue rows are punctuated as subtitles in the Narration language are, and keep their sentence breaks', () => {
+  const shown = (language, rows, maxRows) => subtitleCues(withRows([{ id: 'a', text: rows.join(''), start: 0, duration: 20 }], language).map(line => ({ ...line, rows })), { maxRows }).flatMap(cue => cue.rows);
+  // Simplified Chinese uses no commas or full stops: a space inside a row, nothing at its end.
+  expect(shown('zh-CN', ['先打开编辑器，然后保存。', '再看效果；就好了', '他说「好。」', '买了苹果、香蕉、', '真的吗？', '等一下……', 'Open it, then save.']))
+    .toEqual(['先打开编辑器 然后保存', '再看效果 就好了', '他说「好」', '买了苹果、香蕉', '真的吗？', '等一下……', 'Open it, then save.']);
+  // Traditional Chinese keeps commas inside a row but no full stops, and nothing at a row's end.
+  expect(shown('zh-TW', ['先打開編輯器，然後儲存。', '好了。再看', '蘋果、香蕉，'])).toEqual(['先打開編輯器，然後儲存', '好了 再看', '蘋果、香蕉']);
+  // Japanese: a half-width space for 、, a full-width one for 。 and after ？ or ！ that a sentence follows.
+  expect(shown('ja', ['今日は、晴れです。明日も', 'まさか？そんな！', '「はい。」'])).toEqual(['今日は 晴れです　明日も', 'まさか？　そんな！', '「はい」']);
+  // Korean: a comma between two sentences of a row, and no comma or full stop at its end.
+  expect(shown('ko', ['사랑해. 그게 내가', '하고 싶은 말이었어.', '그래...'])).toEqual(['사랑해, 그게 내가', '하고 싶은 말이었어', '그래...']);
+  expect(shown('en', ['Open it, then save.', 'e.g. this one.'])).toEqual(['Open it, then save.', 'e.g. this one.']);
+  // A cue still ends after a sentence, as if its full stop were there.
+  expect(subtitleCues(withRows([{ id: 'a', text: '先打开。然后保存', start: 0, duration: 2 }], 'zh-CN').map(line => ({ ...line, rows: ['先打开。', '然后保存'] })), { maxRows: 2 }).map(cue => cue.rows))
+    .toEqual([['先打开'], ['然后保存']]);
 });
 
 const sentences = 'Open the editor from the dashboard menu. Then pick a color and press save.';

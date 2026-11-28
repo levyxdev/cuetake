@@ -1,11 +1,12 @@
 /**
  * Narration timing and Subtitles, shared by Node and the render page. Pure functions, no imports.
  *
- * A placed Line is `{ id, text, start, duration, words?, phrases?, rows }`: `start` is seconds of
- * Source time, `duration` is measured from its audio, each word is `{ text, start, end }` in seconds
- * from the start of the Line's audio, `phrases` are its text cut where the agent lets a row break,
- * and `rows` is its text as subtitle rows. Node breaks the rows once (`withRows`) and hands them to
- * the render page, so the burned-in Subtitles and the subtitle files agree. Subtitle cues are
+ * A placed Line is `{ id, text, start, duration, words?, phrases?, language, rows }`: `start` is
+ * seconds of Source time, `duration` is measured from its audio, each word is `{ text, start, end }`
+ * in seconds from the start of the Line's audio, `phrases` are its text cut where the agent lets a
+ * row break, `language` is its Narration's, and `rows` is its text as subtitle rows. Node breaks the
+ * rows once (`withRows`) and hands them to the render page, so the burned-in Subtitles and the
+ * subtitle files agree. Subtitle cues are
  * `{ id, start, end, rows }`, `id` naming their Line.
  */
 
@@ -22,14 +23,25 @@ const OPENING = /[(\[{“‘（《「『【〈]$/u;
 /** The characters that are spoken, which word timings count: no spaces or punctuation. */
 const spoken = text => Array.from(text.replace(/[\s\p{P}\p{S}]/gu, '')).length;
 const length = text => Array.from(text).length;
+// Punctuation a row drops before a closing quote, as at its end.
+const BEFORE_CLOSE = '(?=[」』”’）》]|$)';
 /**
- * A row as subtitles in its script show it. A CJK row drops its commas, full stops and semicolons,
- * leaving a space inside the row and nothing before a closing quote or at its end, and an
- * enumeration comma or colon it ends on; question marks, exclamation marks and ellipses stay. Other
- * rows keep their punctuation.
+ * How subtitles in each language punctuate a row, as Netflix's timed text style guides say: each
+ * pair replaces a pattern. Simplified Chinese uses no commas or full stops, a space standing for one
+ * inside a row; Traditional Chinese keeps commas inside a row but no full stops; Japanese has a
+ * half-width space for 、 and a full-width one for 。 and after a ？ or ！ that a sentence follows;
+ * Korean has a comma between two sentences of a row. None ends a row on a comma or full stop. Other
+ * languages keep their punctuation.
  */
-const asShown = row => !CJK.test(row) ? row : row
-  .replace(/[，。；]+(?=[」』”’）》]|$)/gu, '').replace(/[，。；]+/gu, ' ').replace(/[、：]+$/u, '') || row;
+const PUNCTUATION = [
+  [/^zh-(hant|tw|hk|mo)\b/i, [[new RegExp(`。+${BEFORE_CLOSE}`, 'gu'), ''], [/。+/gu, ' '], [/[，、；：]+$/u, '']]],
+  [/^zh\b/i, [[new RegExp(`[，。；]+${BEFORE_CLOSE}`, 'gu'), ''], [/[，。；]+/gu, ' '], [/[、：]+$/u, '']]],
+  [/^ja\b/i, [[new RegExp(`[、。]+${BEFORE_CLOSE}`, 'gu'), ''], [/。+/gu, '　'], [/、+/gu, ' '], [/([？！])(?=[^\s？！」』”’）》])/gu, '$1　']]],
+  [/^ko\b/i, [[/(?<!\.)\.(?=\s)/gu, ','], [/(?<!\.)[.,]$/u, '']]],
+];
+/** A row punctuated as subtitles in `language` are; a row that would be left empty stays as it is. */
+const asShown = (row, language) => (PUNCTUATION.find(([tag]) => tag.test(language ?? ''))?.[1] ?? [])
+  .reduce((text, [pattern, by]) => text.replace(pattern, by), row) || row;
 
 /** Whether `text` (or a language tag such as zh-CN) is written without spaces between words. */
 export const isCjk = (text, language) => /^(zh|ja|ko)\b/i.test(language ?? '') || CJK.test(text);
@@ -147,14 +159,17 @@ export function wordInLine(line, text, from = 0) {
   return { at: clock(line).start(spoken(line.text.slice(0, index))), next: index + match[0].length };
 }
 
-/** Lines with their text broken at their Phrases into subtitle rows of `maxChars`, by default about 16 characters in CJK text and 42 otherwise. */
+/**
+ * Lines with their text broken at their Phrases into subtitle rows of `maxChars`, by default about 16
+ * characters in CJK text and 42 otherwise, each with the Narration's `language` its cues punctuate by.
+ */
 export const withRows = (lines, language, maxChars) =>
-  lines.map(line => ({ ...line, rows: subtitleRows(line.text, maxChars ?? (isCjk(line.text, language) ? 16 : 42), line.phrases) }));
+  lines.map(line => ({ ...line, language, rows: subtitleRows(line.text, maxChars ?? (isCjk(line.text, language) ? 16 : 42), line.phrases) }));
 
 /**
  * Subtitle cues for placed Lines: each Line's `rows`, `maxRows` to a cue (a cue also ends after a
- * sentence), shown while they are spoken, each row punctuated as subtitles in its script are. A
- * cue shorter than `minDuration` takes time from the next cue of its Line, or from the silence after
+ * sentence), shown while they are spoken, each row punctuated as subtitles in its Line's language
+ * are. A cue shorter than `minDuration` takes time from the next cue of its Line, or from the silence after
  * its Line, up to `end`, the end of the Final.
  */
 export function subtitleCues(lines, { maxRows = 1, minDuration = 1, end = Infinity } = {}) {
@@ -168,7 +183,7 @@ export function subtitleCues(lines, { maxRows = 1, minDuration = 1, end = Infini
     let k = 0;
     const own = groups.map(rows => {
       const n = rows.reduce((sum, row) => sum + spoken(row), 0);
-      const cue = { id: line.id, start: line.start + said.start(k), end: line.start + (k + n >= spoken(line.text) ? line.duration : said.end(k + n)), rows: rows.map(asShown) };
+      const cue = { id: line.id, start: line.start + said.start(k), end: line.start + (k + n >= spoken(line.text) ? line.duration : said.end(k + n)), rows: rows.map(row => asShown(row, line.language)) };
       k += n;
       return cue;
     });
