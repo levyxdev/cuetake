@@ -1,6 +1,6 @@
-// Keycaps: one rounded cap per key of a Shortcut, in a row at the bottom right of the Final, centered in the
-// space below the window, level with the Subtitles.
-// Parameters: symbols (macOS symbols such as ⌘ ⇧ ⌥ ⌃, or words such as Ctrl), fontSize, color, cap, edge, right.
+// Keycaps: one rounded cap per key of a Shortcut, in a row at the bottom right of the Final, `bottom` above
+// its bottom edge like the Subtitles.
+// Parameters: symbols (macOS symbols such as ⌘ ⇧ ⌥ ⌃, or words such as Ctrl), fontSize, color, cap, edge, right, bottom.
 // Drawn in 1080p pixels over the whole Final, outside the camera; `count` is how many times the keys were pressed.
 const SYMBOLS = {
   Meta: '⌘', Control: '⌃', Alt: '⌥', Shift: '⇧', Enter: '↩', Escape: 'esc', Backspace: '⌫', Delete: '⌦', Tab: '⇥', CapsLock: '⇪',
@@ -11,8 +11,8 @@ const WORDS = {
   ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→', PageUp: 'PgUp', PageDown: 'PgDn', Space: 'Space',
 };
 
-export function draw(ctx, { width, height, below, keys, count, params, files }) {
-  const { symbols = true, fontSize: size = 34, color = '#ffffff', cap = '#1f1f23e6', edge = '#ffffff40', right = 80 } = params;
+export function draw(ctx, { width, height, keys, count, params, files }) {
+  const { symbols = true, fontSize: size = 34, color = '#ffffff', cap = '#1f1f23e6', edge = '#ffffff40', right = 80, bottom = 40 } = params;
   const family = files.font ? `"${files.font}"` : '-apple-system, "SF Pro Text", "Helvetica Neue", "DejaVu Sans", system-ui, sans-serif';
   const labels = keys.map(key => (symbols ? SYMBOLS : WORDS)[key] ?? key);
   ctx.font = `600 ${size}px ${family}`;
@@ -22,7 +22,7 @@ export function draw(ctx, { width, height, below, keys, count, params, files }) 
   const times = count > 1 ? `×${count}` : '';
   const total = widths.reduce((sum, w) => sum + w, 0) + gap * (labels.length - 1) + (times ? gap + ctx.measureText(times).width : 0);
   let x = width - right - total;
-  const y = height - (below + h) / 2;
+  const y = height - bottom - h;
   labels.forEach((label, i) => {
     ctx.beginPath(); ctx.roundRect(x, y, widths[i], h, size * 0.35);
     ctx.shadowColor = '#00000059'; ctx.shadowBlur = size * 0.5; ctx.shadowOffsetY = size * 0.1;

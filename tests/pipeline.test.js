@@ -10,7 +10,7 @@ import { fitZoom, cropAround, zoomSegments, cameraTrack } from '../src/camera.js
 import { cameraTargets, createEdit, DEFAULT_STYLE, withDefaults, addressBar, addressOf, merge } from '../src/edit.js';
 import { pointerAt, presses, sparksAt, heldSpans, pressScale, shapeAt, drawnShape, cursorTrack } from '../src/cursor.js';
 import { random, reachMs, reach, landing, pauseMs, typingDelays, scrollMs } from '../src/motion.js';
-import { atShortSide, layout, cameraView, brandHue, brandColor, previewSheet } from '../src/stage.js';
+import { atShortSide, layout, cameraView, cueOnTop, brandHue, brandColor, previewSheet } from '../src/stage.js';
 import { exposure, moments, cropAt, shutterOf } from '../src/shutter.js';
 import { lookFromEdit, applyLook, mergeLook, summarize, saveLook, loadLook, listLooks, removeLook, resolvedLook } from '../src/look.js';
 import { bundle, codeRefs, forRender, BUILTIN_DIR } from '../src/styles.js';
@@ -860,16 +860,28 @@ test('the window sits centered inside the padding with its chrome above the page
   expect(layout(framed({ padding: 0 }, { width: 2880, height: 1800 }), pageViewport).page).toEqual({ x: 0, y: 0, w: 2880, h: 1800 });
 });
 
-test('room for Subtitles adds to the bottom padding, and the stage reports the space below the window', () => {
-  const plain = layout(framed({ padding: 0.05 }), pageViewport), roomy = layout(framed({ padding: 0.05 }), pageViewport, 0, 0.04);
-  expect(plain.below).toBeCloseTo(2160 * 0.05, 6);
-  expect(roomy.below).toBeCloseTo(2160 * 0.09, 6);
-  expect(roomy.window.y).toBeCloseTo(2160 * 0.05, 6);
-  expect(roomy.window.h).toBeLessThan(plain.window.h);
-  // A window too wide to reach the padding above and below it leaves the same space on both sides beyond it, which counts too.
-  const wide = layout(framed({ padding: 0.05 }), { width: 1440, height: 300 }, 0, 0.04);
-  expect(wide.below).toBeGreaterThan(2160 * 0.09);
-  expect(wide.below - 2160 * 0.09).toBeCloseTo(wide.window.y - 2160 * 0.05, 6);
+test('a cue moves to the top when a target the camera frames while it shows lands under it, and not at the top', () => {
+  const stage = layout(framed({ padding: 0.03 }), pageViewport);
+  const wide = { x: 0, y: 0, w: 1440, h: 900 }, zoomedTop = { x: 0, y: 0, w: 720, h: 450 };
+  const camera = crop => ({ stage, viewport: pageViewport, cropAt: () => crop, fps: 60, lead: 0.6, hold: 1.5 });
+  // The Subtitles cover the bottom 300 output pixels; the cue shows from 2 s to 4 s.
+  const area = [0, 1860, 3840, 300], cue = { start: 2, end: 4 };
+  const at = (t, y, until) => ({ t, box: { x: 700, y, width: 40, height: 30 }, ...(until === undefined ? {} : { until }) });
+  expect(cueOnTop(cue, [at(3, 860)], area, camera(wide))).toBe(true);
+  expect(cueOnTop(cue, [at(3, 20)], area, camera(wide))).toBe(false);
+  // Framed from `lead` before its action to `hold` after it ends, so a target just outside the cue still counts.
+  expect(cueOnTop(cue, [at(4.5, 860)], area, camera(wide))).toBe(true);
+  expect(cueOnTop(cue, [at(0.2, 860)], area, camera(wide))).toBe(false);
+  expect(cueOnTop(cue, [at(0, 860, 1)], area, camera(wide))).toBe(true);
+  // Where the target lands depends on the camera: zoomed on the top of the page, its middle reaches the bottom.
+  expect(cueOnTop(cue, [at(3, 430)], area, camera(wide))).toBe(false);
+  expect(cueOnTop(cue, [at(3, 430)], area, camera(zoomedTop))).toBe(true);
+  // Moving up must uncover it: not when a target shows at the top too. A box taller than the view is covered
+  // either way, so it neither moves the cue nor holds it, while the point a click lands on can.
+  const huge = { t: 3, box: { x: 0, y: -900, width: 1440, height: 2700 } }, point = { t: 3, box: { x: 700, y: 880, width: 0, height: 0 } };
+  expect(cueOnTop(cue, [at(3, 860), at(3, 5)], area, camera(wide))).toBe(false);
+  expect(cueOnTop(cue, [huge], area, camera(wide))).toBe(false);
+  expect(cueOnTop(cue, [huge, point], area, camera(wide))).toBe(true);
 });
 
 test('at zoom 1 the camera shows the whole stage; zoomed views stay inside it', () => {
@@ -973,7 +985,7 @@ test('fields the Scenario config names win over a Look', () => {
   const config = scenarioSchema.parse(merged);
   expect(config.frame).toMatchObject({ chrome: { draw: 'macos' }, radius: 4 });
   expect(config.cursor.size).toBe(32);
-  expect(withDefaults({ frame: { chrome: false } }).frame).toMatchObject({ chrome: false, padding: 0.05 });
+  expect(withDefaults({ frame: { chrome: false } }).frame).toMatchObject({ chrome: false, padding: 0.03 });
 });
 
 test('summaries name the chrome, Background layers and output size', () => {

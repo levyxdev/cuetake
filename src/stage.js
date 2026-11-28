@@ -16,23 +16,24 @@ export function atShortSide(edit, short) {
 
 /**
  * Where the window, its chrome and the page sit on the stage, in stage pixels. `chrome` is the chrome
- * bar's height in CSS pixels; `scale` is stage px per CSS px; `room` (a fraction of the short side)
- * adds to the bottom padding, for Subtitles. The window is as large as fits inside the padding and
- * centered in it; `below` is the space under it, where Subtitles and keycaps sit.
+ * bar's height in CSS pixels; `scale` is stage px per CSS px. The window is as large as fits inside the
+ * padding and centered in it.
  */
-export function layout(edit, viewport, chrome = 0, room = 0) {
+export function layout(edit, viewport, chrome = 0) {
   const { width, height } = outputSize(edit), short = Math.min(width, height);
   const padding = [edit.frame.padding ?? 0].flat();
-  const [top, right, padded, left] = (padding.length === 4 ? padding : [padding[0], padding[0], padding[0], padding[0]]).map(p => p * short);
-  const bottom = padded + room * short;
+  const [top, right, bottom, left] = (padding.length === 4 ? padding : [padding[0], padding[0], padding[0], padding[0]]).map(p => p * short);
   const scale = Math.min((width - left - right) / viewport.width, (height - top - bottom) / (viewport.height + chrome));
   const w = viewport.width * scale, h = (viewport.height + chrome) * scale;
   const window = { x: left + (width - left - right - w) / 2, y: top + (height - top - bottom - h) / 2, w, h };
   return {
     width, height, scale, chrome: chrome * scale, radius: (edit.frame.radius ?? 0) * short / 1080,
-    window, below: height - window.y - h, page: { x: window.x, y: window.y + chrome * scale, w, h: h - chrome * scale },
+    window, page: { x: window.x, y: window.y + chrome * scale, w, h: h - chrome * scale },
   };
 }
+
+/** Where stage point `p` shows in the Final, in output pixels, under the camera `view`. */
+export const onScreen = (p, view, stage) => [(p[0] - view.x) * view.zoom + stage.width / 2, (p[1] - view.y) * view.zoom + stage.height / 2];
 
 /**
  * The camera for a viewport crop: the stage point at the Final's center and the zoom. Zoom 1 shows
@@ -47,6 +48,35 @@ export function cameraView(crop, stage, viewport) {
     y: clamp(stage.page.y + (crop.y + crop.h / 2) * stage.scale, half.y, stage.height - half.y),
     zoom,
   };
+}
+
+/**
+ * Whether a cue's Subtitles move to the top of the Final: at the bottom, where they cover `area`
+ * ([x, y, w, h] output pixels), they would cover a target while the cue shows that they would not cover
+ * as far from the top, and there they would cover none they do not cover at the bottom. A target counts
+ * while the camera frames it, from `lead` before its action to `hold` after it ends; its box is in window
+ * CSS pixels (zero-sized for a point) and its times in Final seconds. `cropAt(t)` is the camera's
+ * viewport crop at Final time `t`.
+ */
+export function cueOnTop(cue, targets, area, camera) {
+  const [x, y, w, h] = area, top = [x, camera.stage.height - y - h, w, h];
+  const covered = targets.map(target => [covers(cue, target, area, camera), covers(cue, target, top, camera)]);
+  return covered.some(([bottom, top]) => bottom && !top) && !covered.some(([bottom, top]) => top && !bottom);
+}
+
+/** Whether `area` covers, on screen, the target while the camera frames it during the cue (cueOnTop). */
+function covers(cue, target, area, { stage, viewport, cropAt, fps, lead, hold }) {
+  const [ax, ay, aw, ah] = area;
+  const covered = (box, t) => {
+    const view = cameraView(cropAt(t), stage, viewport);
+    const screen = (x, y) => onScreen([stage.page.x + x * stage.scale, stage.page.y + y * stage.scale], view, stage);
+    const [x0, y0] = screen(box.x, box.y), [x1, y1] = screen(box.x + box.width, box.y + box.height);
+    return x0 <= ax + aw && x1 >= ax && y0 <= ay + ah && y1 >= ay;
+  };
+  const start = Math.max(cue.start, target.t - lead), end = Math.min(cue.end, (target.until ?? target.t) + hold);
+  if (start > end) return false;
+  const steps = Math.ceil((end - start) * fps);
+  return Array.from({ length: steps + 1 }, (_, i) => Math.min(end, start + i / fps)).some(t => covered(target.box, t));
 }
 
 const hsl = (h, s, l) => {

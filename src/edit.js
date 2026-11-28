@@ -24,7 +24,7 @@ export const DEFAULT_STYLE = {
   // frame over which the camera and the Cursor blur as they move (shutter.js); 0 turns blur off.
   output: { width: 3840, height: 2160, quality: 22, shutter: 0.5 },
   // padding is a fraction of the short side, one number or [top, right, bottom, left]; radius is in 1080p pixels.
-  frame: { padding: 0.05, radius: 12, chrome: { draw: 'browser' }, background: [{ shader: 'fluted' }], effects: [{ shader: 'shadow' }] },
+  frame: { padding: 0.03, radius: 12, chrome: { draw: 'browser' }, background: [{ shader: 'fluted' }], effects: [{ shader: 'shadow' }] },
   // See camera.js. Each target is framed with `padding` CSS px around it, zooming at most `maxZoom`;
   // fits below `minZoom` stay wide. The camera arrives `lead` before an action, holds `hold` after the
   // last one in a segment, settles in about `response`, and returns wide `endWide` before the end.
@@ -34,9 +34,9 @@ export const DEFAULT_STYLE = {
   // Meta shows only with `singleKeys`. `false` shows none.
   keycaps: { draw: 'keycaps', duration: 1.5, singleKeys: false },
   // Drawn over the Final, outside the camera, while a Line is spoken; `burn: false` keeps them to the
-  // subtitle files. While burned in with Lines to show, they add `room` (0.04 of the short side) to the
-  // frame's bottom padding and sit in the space below the window. Rows hold up to `maxChars` (about 16
-  // in Chinese, 42 otherwise), `maxRows` (1) to a cue, each shown at least `minDuration`.
+  // subtitle files. A cue that would cover a target the camera frames, or the point a click lands on, moves
+  // to the top. Rows hold up to `maxChars` (about 16 in Chinese, 42 otherwise), `maxRows` (1) to a cue,
+  // each shown at least `minDuration`.
   subtitles: { draw: 'subtitles', burn: true },
   // Drawn over the Final, outside the camera, while it fast-forwards, such as { draw: 'fast-forward' };
   // `false` shows none.

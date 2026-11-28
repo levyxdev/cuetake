@@ -23,7 +23,7 @@
 import * as MB from '/mediabunny.js';
 import { cameraTrack } from '/camera.js';
 import { cursorTrack, drawnShape, pointerAt, presses, sparksAt } from '/cursor.js';
-import { layout, outputSize, cameraView, previewSheet, brandColor } from '/stage.js';
+import { layout, outputSize, cameraView, onScreen as screenAt, cueOnTop, previewSheet, brandColor } from '/stage.js';
 import { burnsIn, cuesFor, lineProblems } from '/narration.js';
 import { keycapTrack } from '/shortcuts.js';
 import { badgeAt, linesInFinal, retimed, timeMap } from '/time-map.js';
@@ -169,7 +169,7 @@ void main() { color = texture(uSprite, uv) * uAlpha; }`;
 
 // Item keys CueTake reads itself; every other key is a parameter for the item's shader or drawing code.
 const OWN_KEYS = new Set(['shader', 'draw', 'image', 'files', 'ref', 'kind', 'url']);
-const SLOT_KEYS = new Set(['size', 'hotspot', 'press', 'duration', 'singleKeys', 'reach', 'height', 'burn', 'room', 'maxChars', 'maxRows', 'minDuration']);
+const SLOT_KEYS = new Set(['size', 'hotspot', 'press', 'duration', 'singleKeys', 'reach', 'height', 'burn', 'maxChars', 'maxRows', 'minDuration']);
 const paramsOf = item => Object.fromEntries(Object.entries(item).filter(([key]) => !OWN_KEYS.has(key) && (item.kind === 'shader' || !SLOT_KEYS.has(key))));
 const fail = (item, error) => new Error(`${item.ref}: ${error?.message ?? error}`);
 
@@ -523,21 +523,35 @@ async function loadClickEffect(item, cursor) {
 
 /**
  * Drawing code over the whole Final in 1080p pixels, outside the camera, such as Subtitles and keycaps:
- * `draw(ctx, { width, height, below, ...what, params, files })`. `below` is the space under the window
- * with the camera wide, given here in stage pixels and to the drawing in 1080p pixels.
- * `canvas(width, height, what)` rasterizes it at output size.
+ * `draw(ctx, { width, height, ...what, params, files })`. `canvas(width, height, what)` rasterizes it at output size.
  */
-async function loadScreenDrawing(item, name, below) {
+async function loadScreenDrawing(item, name) {
   if (item.kind !== 'draw') throw fail(item, `${name} are drawing code`);
   const module = await loadModule(item), files = await loadFiles(item), params = paramsOf(item);
   return {
     canvas(width, height, what) {
       const unit = Math.min(width, height) / 1080, ctx = canvas2d(width, height);
       ctx.scale(unit, unit);
-      try { module.draw(ctx, { width: width / unit, height: height / unit, below: below / unit, ...what, params, files }); } catch (error) { throw fail(item, error); }
+      try { module.draw(ctx, { width: width / unit, height: height / unit, ...what, params, files }); } catch (error) { throw fail(item, error); }
       return ctx.canvas;
     },
   };
+}
+
+/** The part of a canvas that is drawn on, as [x, y, w, h], or null when nothing is. */
+function drawnArea(canvas) {
+  const { width, height } = canvas, alpha = canvas.getContext('2d').getImageData(0, 0, width, height).data;
+  let top = height, bottom = -1, left = width, right = -1;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0, i = y * width * 4 + 3; x < width; x++, i += 4) {
+      if (!alpha[i]) continue;
+      if (y < top) top = y;
+      bottom = y;
+      if (x < left) left = x;
+      if (x > right) right = x;
+    }
+  }
+  return bottom < 0 ? null : [left, top, right - left + 1, bottom - top + 1];
 }
 
 const SAMPLE_RATE = 48000, AUDIO_BITRATE = 128000;
@@ -706,9 +720,7 @@ async function createScene(edit, viewport, { pointer, shapes, events, tabs, elem
   if (maskIssues.length) throw new Error(`The masks cannot be drawn: ${maskIssues.join('; ')}`);
   const masks = maskTrack(edit.masks, elements, map);
   const chrome = frame.chrome ? await loadChrome(frame.chrome, viewport.width) : null;
-  // Burned-in Subtitles take their room below the window, 0.04 of the short side unless the item says.
-  const subtitled = burnsIn(subtitles) && cues.length > 0;
-  const stage = layout(edit, viewport, chrome?.height ?? 0, subtitled ? subtitles.room ?? 0.04 : 0);
+  const stage = layout(edit, viewport, chrome?.height ?? 0);
   const compositor = createCompositor(stage, brandOf(firstFrame));
   const pages = new Map();
   const upload = (tab, videoFrame) => {
@@ -719,6 +731,11 @@ async function createScene(edit, viewport, { pointer, shapes, events, tabs, elem
   await compositor.drawBackground(frame.background ?? [], pages.get(tabs[0].id));
   await compositor.loadEffects(frame.effects ?? []);
   const maps = windowMaps(tabs, viewport, edit.tabs.placement), placed = inWindow({ pointer, events }, camera.targets, maps);
+  const targets = retimed(placed.targets, map, ['t', 'until']);
+  // What a cue must leave in view (cueOnTop): the camera's targets, and the point each click lands on,
+  // since a click's box is what holds its target and can be larger than the view.
+  const clickPoints = placed.events.filter(event => event.type === 'click').map(event => ({ t: event.t, until: event.end, box: { x: event.x, y: event.y, width: 0, height: 0 } }));
+  const inView = [...targets, ...retimed(clickPoints, map, ['t', 'until'])], framing = { stage, viewport, fps: edit.output.fps, lead: camera.lead, hold: camera.hold };
   const shownTabs = tabTrack({ tabs, events, viewport }, edit.tabs, map), byId = new Map(tabs.map(tab => [tab.id, tab]));
   // Window CSS pixels → stage pixels; sprites are rasterized for the closest zoom and mipmapped below it.
   const at = (x, y) => [stage.page.x + x * stage.scale, stage.page.y + y * stage.scale];
@@ -785,12 +802,12 @@ async function createScene(edit, viewport, { pointer, shapes, events, tabs, elem
   const drawn = new Set(Object.keys(cursorSprites)), track = cursor && cursorTrack({ pointer: placed.pointer, shapes, events: placed.events }, cursor);
   const effect = clickEffect ? await loadClickEffect(clickEffect, cursor ? Object.fromEntries(Object.entries(cursor).filter(([key]) => !['ref', 'kind', 'url', 'files'].includes(key))) : {}) : null;
   const pressList = presses(placed.events);
-  const subtitleDrawing = subtitled ? await loadScreenDrawing(subtitles, 'Subtitles', stage.below) : null;
-  const keys = keycapTrack(retimed(shortcuts, map), keycaps), keycapDrawing = keys.shows.length ? await loadScreenDrawing(keycaps, 'Keycaps', stage.below) : null;
-  const badgeDrawing = fastForwardBadge && map.spans.length ? await loadScreenDrawing(fastForwardBadge, 'Fast-forward badges', stage.below) : null;
+  const subtitleDrawing = burnsIn(subtitles) && cues.length ? await loadScreenDrawing(subtitles, 'Subtitles') : null;
+  const keys = keycapTrack(retimed(shortcuts, map), keycaps), keycapDrawing = keys.shows.length ? await loadScreenDrawing(keycaps, 'Keycaps') : null;
+  const badgeDrawing = fastForwardBadge && map.spans.length ? await loadScreenDrawing(fastForwardBadge, 'Fast-forward badges') : null;
   const unit = Math.min(stage.width, stage.height) / 1080, spacing = 2 * unit; // on-screen pixels between the moments a frame averages
   /** Where stage point `p` shows on screen, in output pixels, under the camera `view`. */
-  const onScreen = (p, view) => [(p[0] - view.x) * view.zoom + stage.width / 2, (p[1] - view.y) * view.zoom + stage.height / 2];
+  const onScreen = (p, view) => screenAt(p, view, stage);
   const apart = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]); // the distance between two points
   const corners = [[0, 0], [stage.width, 0], [0, stage.height], [stage.width, stage.height]];
   /** How far, in output pixels, what the camera shows at view `to` has moved on screen since view `from`: the most at any corner of the Final. */
@@ -810,7 +827,7 @@ async function createScene(edit, viewport, { pointer, shapes, events, tabs, elem
     return [left, top, Math.max(0, Math.min(stage.width, Math.max(...points.map(p => p[0]))) - left), Math.max(0, Math.min(stage.height, Math.max(...points.map(p => p[1]))) - top)];
   };
   const effectTextures = [];
-  let subtitleTexture = null, shown = -1, keycapTexture = null, keycapsShown = null, badgeTexture = null, badgeShown = null;
+  let subtitleTexture = null, shown = -1, top = false, raise = 0, keycapTexture = null, keycapsShown = null, badgeTexture = null, badgeShown = null;
   return {
     stage, compositor, keycapShows: keys.shows,
     /** The Tabs shown at Final time `t`, in drawing order. */
@@ -823,13 +840,13 @@ async function createScene(edit, viewport, { pointer, shapes, events, tabs, elem
      * window shows another tab.
      */
     crops() {
-      const targets = retimed(placed.targets, map, ['t', 'until']), scrolls = retimed(camera.scrolls ?? [], map, ['start', 'end']);
+      const scrolls = retimed(camera.scrolls ?? [], map, ['start', 'end']);
       return cameraTrack({ targets, viewport, camera, duration: map.duration, fps: edit.output.fps, pointerAt: t => pointerAt(placed.pointer, map.sourceAt(t)), cuts: shownTabs.cuts, scrolls });
     },
     /**
      * Draws Final time `t` with the camera showing `camera(time)`, a viewport rectangle in CSS pixels at
-     * any Final time; returns the index of the cue it shows, or -1, the keycap show, or null, the
-     * fast-forward badge, or null, the indexes of the masks it drew, and how many moments the camera
+     * any Final time; returns the index of the cue it shows, or -1, and whether it moved to the top
+     * (`top`), the keycap show, or null, the fast-forward badge, or null, the indexes of the masks it drew, and how many moments the camera
      * and the Cursor averaged (`averaged`).
      *
      * Motion blur: over the frame's exposure (shutter.js) the window and what moves with it are composed
@@ -853,7 +870,13 @@ async function createScene(edit, viewport, { pointer, shapes, events, tabs, elem
         return (windows ? desktopWindows(w, source) : [w]).map(each => masked(each, shownTab.tab, maskedNow));
       });
       const cue = subtitleDrawing ? cues.findIndex(c => t >= c.start && t < c.end) : -1;
-      if (cue >= 0 && cue !== shown) subtitleTexture = compositor.sprite(subtitleDrawing.canvas(stage.width, stage.height, { rows: cues[cue].rows }), subtitleTexture, false);
+      if (cue >= 0 && cue !== shown) {
+        const canvas = subtitleDrawing.canvas(stage.width, stage.height, { rows: cues[cue].rows }), area = inView.length ? drawnArea(canvas) : null;
+        subtitleTexture = compositor.sprite(canvas, subtitleTexture, false);
+        // A cue that would cover what must stay in view while it shows moves up, as far from the top as it was from the bottom.
+        top = Boolean(area) && cueOnTop(cues[cue], inView, area, { ...framing, cropAt: camera });
+        raise = top ? stage.height - 2 * area[1] - area[3] : 0;
+      }
       shown = cue;
       // Each show is drawn once, and again when its count goes up; CueTake fades it and lifts it into place.
       const keycap = keycapDrawing && keys.at(t), drawnAs = keycap && `${keycap.index}×${keycap.count}`;
@@ -872,11 +895,11 @@ async function createScene(edit, viewport, { pointer, shapes, events, tabs, elem
         return [effectTextures[i], [...at(press.x - effect.reach, press.y - effect.reach), 2 * effect.reach * stage.scale, 2 * effect.reach * stage.scale]];
       });
       compositor.frame(views, shownNow, draw => { for (const [texture, rect] of sparks) draw(texture, rect); }, cursors, cursors.length > 1 ? areaOf(cursors) : null, cue >= 0 || keycap || badge ? draw => {
-        if (cue >= 0) draw(subtitleTexture, [0, 0, stage.width, stage.height]);
+        if (cue >= 0) draw(subtitleTexture, [0, raise, stage.width, stage.height]);
         if (keycap) draw(keycapTexture, [0, keycap.rise * unit, stage.width, stage.height], keycap.opacity);
         if (badge) draw(badgeTexture, [0, 0, stage.width, stage.height], badge.opacity);
       } : null);
-      return { cue, keycap, badge, masks: [...new Set(shownNow.flatMap(w => w.masks ?? []))], averaged: { camera: views.length, cursor: cursors.length } };
+      return { cue, top: cue >= 0 && top, keycap, badge, masks: [...new Set(shownNow.flatMap(w => w.masks ?? []))], averaged: { camera: views.length, cursor: cursors.length } };
     },
   };
 }
@@ -974,7 +997,7 @@ window.cuetakeRender = async ({ sources: sourceUrls, finalUrl, duration, viewpor
   });
   encoder.configure(config);
 
-  const cues = voice?.cues ?? [], shownFrames = cues.map(() => null), keycapFrames = [], badgeFrames = [], maskFrames = [];
+  const cues = voice?.cues ?? [], shownFrames = cues.map(() => null), raised = cues.map(() => false), keycapFrames = [], badgeFrames = [], maskFrames = [];
   const sizes = new Map([...sources].map(([tab, source]) => [tab, source.size]));
   const recorded = tabs.filter(tab => sources.has(tab.id)), uploaded = new Map();
   const scene = await createScene(edit, viewport, { pointer, shapes, events, tabs: recorded, elements, windows }, sizes, sources.get(recorded[0].id).first, cues, map), { compositor } = scene;
@@ -988,11 +1011,11 @@ window.cuetakeRender = async ({ sources: sourceUrls, finalUrl, duration, viewpor
         if (frame && uploaded.get(tab) !== frame) { scene.upload(tab, frame); uploaded.set(tab, frame); }
       }
       if (audio && i % fps === 0) await feedAudio(i / fps + 1);
-      const { cue, keycap, badge, masks, averaged } = scene.draw(i / fps, camera);
+      const { cue, top, keycap, badge, masks, averaged } = scene.draw(i / fps, camera);
       for (const index of masks) maskFrames[index] = [maskFrames[index]?.[0] ?? i, i];
       if (averaged.camera > 1) blurred.camera++;
       if (averaged.cursor > 1) blurred.cursor++;
-      if (cue >= 0) shownFrames[cue] = [shownFrames[cue]?.[0] ?? i, i];
+      if (cue >= 0) { shownFrames[cue] = [shownFrames[cue]?.[0] ?? i, i]; raised[cue] = top; }
       if (keycap) keycapFrames[keycap.index] = [keycapFrames[keycap.index]?.[0] ?? i, i];
       if (badge) badgeFrames[badge.index] = [badgeFrames[badge.index]?.[0] ?? i, i];
       const videoFrame = new VideoFrame(compositor.canvas, { timestamp: Math.round(i * 1e6 / fps), duration: Math.round(1e6 / fps) });
@@ -1027,8 +1050,9 @@ window.cuetakeRender = async ({ sources: sourceUrls, finalUrl, duration, viewpor
       // `encoderDelay`: the samples the encoder delays its input by (AAC's priming), which the MP4's edit list skips.
       audio: { codec: audio.codec, sampleRate: SAMPLE_RATE, channels: 1, bitrate: AUDIO_BITRATE, encoderDelay: audio.delay },
       lines: voice.placed.map(({ id, start, duration }) => ({ id, start, duration })),
-      // Each cue with the first and last output frame it was drawn on (null when Subtitles are not burned in).
-      subtitles: cues.map((cue, i) => ({ ...cue, frames: shownFrames[i] })),
+      // Each cue with the first and last output frame it was drawn on (null when Subtitles are not burned in),
+      // and whether it moved to the top so as not to cover a target.
+      subtitles: cues.map((cue, i) => ({ ...cue, frames: shownFrames[i], top: raised[i] })),
     }),
   };
 };
