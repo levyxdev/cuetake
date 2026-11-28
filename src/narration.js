@@ -1,11 +1,12 @@
 /**
  * Narration timing and Subtitles, shared by Node and the render page. Pure functions, no imports.
  *
- * A placed Line is `{ id, text, start, duration, words?, rows }`: `start` is seconds of Source time,
- * `duration` is measured from its audio, each word is `{ text, start, end }` in seconds from the
- * start of the Line's audio, and `rows` is its text as subtitle rows. Node breaks the rows once
- * (`withRows`) and hands them to the render page, since where rows break depends on the runtime's
- * dictionary. Subtitle cues are `{ id, start, end, rows }`, `id` naming their Line.
+ * A placed Line is `{ id, text, start, duration, words?, phrases?, rows }`: `start` is seconds of
+ * Source time, `duration` is measured from its audio, each word is `{ text, start, end }` in seconds
+ * from the start of the Line's audio, `phrases` are its text cut where the agent lets a row break,
+ * and `rows` is its text as subtitle rows. Node breaks the rows once (`withRows`) and hands them to
+ * the render page, so the burned-in Subtitles and the subtitle files agree. Subtitle cues are
+ * `{ id, start, end, rows }`, `id` naming their Line.
  */
 
 const CJK_CHARS = '⺀-鿿豈-﫿＀-￯';
@@ -21,57 +22,62 @@ const OPENING = /[(\[{“‘（《「『【〈]$/u;
 /** The characters that are spoken, which word timings count: no spaces or punctuation. */
 const spoken = text => Array.from(text.replace(/[\s\p{P}\p{S}]/gu, '')).length;
 const length = text => Array.from(text).length;
+/** A row without the clause or sentence punctuation it ends on; `?`, `!`, an ellipsis and closing quotes stay. */
+const trimRowEnd = row => row.replace(/(\.{2,})?[，。、；：,.;:]*$/u, (marks, dots, at) => at && marks ? (dots ?? '') : marks);
 
 /** Whether `text` (or a language tag such as zh-CN) is written without spaces between words. */
 export const isCjk = (text, language) => /^(zh|ja|ko)\b/i.test(language ?? '') || CJK.test(text);
-
-let segmenter;
-/** A run of CJK text as its words, by the dictionary of `Intl.Segmenter`, made once on first use. */
-const cjkWords = run => Array.from((segmenter ??= new Intl.Segmenter('zh', { granularity: 'word' })).segment(run), s => s.segment);
 
 /** Whether `piece` belongs to the atom before it: closing punctuation, or what an opening quote opens. */
 const joinsLast = (last, piece) => CLOSING.test(piece) || OPENING.test(last.text);
 
 /**
- * The text broken into atoms that rows never split: a CJK word or a run of other non-space
- * characters, with any punctuation that clings to it. `space` marks a space before the atom.
+ * The text broken into atoms that rows never split: a CJK character or a run of other non-space
+ * characters, cut where a Phrase ends, with any punctuation that clings to it. `space` marks a space
+ * before the atom, and `phrase` a Phrase ending after it.
  */
-function atoms(text) {
-  const list = [];
-  for (const [run] of text.trim().matchAll(RUNS)) {
-    if (/^\s+$/u.test(run)) { if (list.length) list.at(-1).spaceAfter = true; continue; }
-    const cjk = CJK.test(run);
-    for (const piece of cjk ? cjkWords(run) : [run]) {
+function atoms(text, phrases) {
+  const ends = new Set(), list = [];
+  let at = 0;
+  for (const phrase of phrases ?? []) ends.add(at += phrase.length);
+  const add = (piece, end, cjk) => {
+    const last = list.at(-1);
+    if (last && !last.spaceAfter && joinsLast(last, piece)) Object.assign(last, { text: last.text + piece, phrase: ends.has(end) });
+    else list.push({ text: piece, space: Boolean(last?.spaceAfter), cjk, phrase: ends.has(end) });
+  };
+  for (const { 0: run, index } of text.matchAll(RUNS)) {
+    if (/^\s+$/u.test(run)) {
       const last = list.at(-1);
-      if (last && !last.spaceAfter && joinsLast(last, piece)) last.text += piece;
-      else list.push({ text: piece, space: Boolean(last?.spaceAfter), cjk });
+      if (last) { last.spaceAfter = true; for (let i = index; i <= index + run.length; i++) if (ends.has(i)) last.phrase = true; }
+      continue;
     }
+    const cjk = CJK.test(run);
+    let piece = '', end = index;
+    for (const character of run) {
+      piece += character; end += character.length;
+      if (cjk || ends.has(end)) { add(piece, end, cjk); piece = ''; }
+    }
+    if (piece) add(piece, end, cjk);
   }
   return list;
 }
 /**
- * Whether `atom` is one CJK character. The dictionary leaves on its own a character it cannot place
- * in a word, so two lone characters in a row are often one word it does not know (灾|情, 保|命), and
- * a lone character after a word often ends it (服务|器, 安全|带) and should not start a row (的).
- */
-const isLone = atom => atom.cjk && spoken(atom.text) === 1;
-/**
- * How good a break after `atom` is: sentence end, clause end, between spaced words, between CJK
- * words, before a lone CJK character, and last between two of them.
+ * How good a break after `atom` is: sentence end, clause end, the end of a Phrase, a space, and last
+ * between two characters.
  */
 const breakScore = (atom, next) => SENTENCE_END.test(atom.text) ? 3 : CLAUSE_END.test(atom.text) ? 2
-  : next.space ? 1 : !isLone(next) ? 0.5 : isLone(atom) ? 0 : 0.25;
+  : atom.phrase ? 1 : next.space ? 0.5 : 0;
 const join = list => list.map((atom, i) => (i && atom.space ? ' ' : '') + atom.text).join('');
 
 /**
  * The text as subtitle rows of at most `maxChars` characters, broken at the best place: a sentence
- * end after the first third of an even row, then a clause end after its first half, then the word
- * boundary nearest an even width, so a Line one word too long does not leave that word alone on a
- * row. Rows that do not fit their count between words take one more row, all of them even again. A
- * single word longer than a row gets a row of its own.
+ * end after the first third of an even row, then a clause end or the end of one of its `phrases`
+ * (ADR 0012) after its first half, then a space or two CJK characters nearest an even width, so a
+ * Line one word too long does not leave that word alone on a row. Rows that do not fit their count take one
+ * more row, all of them even again. A single word longer than a row gets a row of its own.
  */
-export function subtitleRows(text, maxChars) {
-  const list = atoms(text), total = length(text.trim());
+export function subtitleRows(text, maxChars, phrases) {
+  const list = atoms(text, phrases), total = length(text.trim());
   for (let count = Math.ceil(total / maxChars); ; count++) {
     const rows = rowsOf(list, maxChars, Math.min(maxChars, Math.ceil(total / count)));
     if (rows.length <= count) return rows;
@@ -83,7 +89,7 @@ export function subtitleRows(text, maxChars) {
  * allows, at the fuller row of two equally near, so the Line keeps to fewer rows.
  */
 function rowsOf(list, maxChars, even) {
-  const least = { 3: even * 0.3, 2: even * 0.5 };
+  const least = { 3: even * 0.3, 2: even * 0.5, 1: even * 0.5 };
   const rows = [];
   let row = [];
   for (const atom of list) {
@@ -135,14 +141,15 @@ export function wordInLine(line, text, from = 0) {
   return { at: clock(line).start(spoken(line.text.slice(0, index))), next: index + match[0].length };
 }
 
-/** Lines with their text broken into subtitle rows of `maxChars`, by default about 16 characters in CJK text and 42 otherwise. */
+/** Lines with their text broken at their Phrases into subtitle rows of `maxChars`, by default about 16 characters in CJK text and 42 otherwise. */
 export const withRows = (lines, language, maxChars) =>
-  lines.map(line => ({ ...line, rows: subtitleRows(line.text, maxChars ?? (isCjk(line.text, language) ? 16 : 42)) }));
+  lines.map(line => ({ ...line, rows: subtitleRows(line.text, maxChars ?? (isCjk(line.text, language) ? 16 : 42), line.phrases) }));
 
 /**
  * Subtitle cues for placed Lines: each Line's `rows`, `maxRows` to a cue (a cue also ends after a
- * sentence), shown while they are spoken. A cue shorter than `minDuration` takes time from the next
- * cue of its Line, or from the silence after its Line, up to `end`, the end of the Final.
+ * sentence), shown while they are spoken, each row without the clause or sentence punctuation it
+ * ends on. A cue shorter than `minDuration` takes time from the next cue of its Line, or from the
+ * silence after its Line, up to `end`, the end of the Final.
  */
 export function subtitleCues(lines, { maxRows = 1, minDuration = 1, end = Infinity } = {}) {
   const cues = [];
@@ -155,7 +162,7 @@ export function subtitleCues(lines, { maxRows = 1, minDuration = 1, end = Infini
     let k = 0;
     const own = groups.map(rows => {
       const n = rows.reduce((sum, row) => sum + spoken(row), 0);
-      const cue = { id: line.id, start: line.start + said.start(k), end: line.start + (k + n >= spoken(line.text) ? line.duration : said.end(k + n)), rows };
+      const cue = { id: line.id, start: line.start + said.start(k), end: line.start + (k + n >= spoken(line.text) ? line.duration : said.end(k + n)), rows: rows.map(trimRowEnd) };
       k += n;
       return cue;
     });
@@ -192,6 +199,15 @@ export function lineProblems(lines, end) {
   return problems;
 }
 
+/** Why a Line's Phrases do not join to its text (ADR 0012), naming the character where they part, or null. */
+export function phraseProblem({ id, text, phrases }) {
+  const said = Array.from(text), joined = Array.from(phrases.join(''));
+  let at = 0;
+  while (at < said.length && said[at] === joined[at]) at++;
+  if (at === said.length && at === joined.length) return null;
+  const from = list => list.slice(at, at + 8).join('') || 'nothing';
+  return `Line '${id}' has Phrases that part from its text at character ${at + 1} (${from(joined)}, not ${from(said)}); write its Phrases again from its text`;
+}
 const stamp = (seconds, separator) => {
   const ms = Math.max(0, Math.round(seconds * 1000)), pad = (n, w = 2) => String(n).padStart(w, '0');
   return `${pad(Math.floor(ms / 3600000))}:${pad(Math.floor(ms / 60000) % 60)}:${pad(Math.floor(ms / 1000) % 60)}${separator}${pad(ms % 1000, 3)}`;

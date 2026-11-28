@@ -1190,27 +1190,40 @@ test('subtitle rows break at sentence and clause ends, then between words, withi
   for (const row of subtitleRows('A very long sentence that keeps going without any punctuation at all for quite a while', 42)) expect(row.length).toBeLessThanOrEqual(42);
 });
 
-test('Chinese subtitle rows break between words, never inside one', () => {
-  expect(subtitleRows('健康上，全是低成本高回报的保命操作。比如绝大部分人坐后排都不系安全带，这其实最危险。', 16))
-    .toEqual(['健康上，全是低成本高回报的保命', '操作。比如绝大部分人坐后排', '都不系安全带，这其实最危险。']);
-  // 32 characters do not fit two rows between words, so they take three even ones, not 15, 15 and 2.
-  const rows = subtitleRows('点击Preview按钮就能看到效果然后再点击保存按钮完成整个流程', 16).map(row => Array.from(row).length);
-  expect(rows).toHaveLength(3);
-  for (const width of rows) { expect(width).toBeGreaterThanOrEqual(8); expect(width).toBeLessThanOrEqual(16); }
-  // A run of lone characters still breaks within the row width, and an opening quote joins what it opens.
-  for (const row of subtitleRows('我'.repeat(32), 16)) expect(Array.from(row).length).toBeLessThanOrEqual(16);
-  expect(subtitleRows('今天我们要给大家详细介绍一下「智能助手」的全部新功能', 16).join('/')).not.toContain('「/');
+test('subtitle rows break at the Phrases the agent marked before a space or between characters', () => {
+  const text = '还有，在群里转发明知是假的灾情消息，可能被拘留五到十天。';
+  expect(subtitleRows(text, 16, ['还有，', '在群里', '转发', '明知', '是假的', '灾情消息，', '可能被', '拘留', '五到十天。']))
+    .toEqual(['还有，在群里转发明知是假的', '灾情消息，可能被拘留五到十天。']);
+  const english = 'Open the settings page and pick a dark theme for the editor';
+  expect(subtitleRows(english, 42)).toEqual(['Open the settings page and pick', 'a dark theme for the editor']);
+  expect(subtitleRows(english, 42, ['Open the settings page ', 'and pick a dark theme ', 'for the editor']))
+    .toEqual(['Open the settings page', 'and pick a dark theme for the editor']);
+  // A Phrase that ends in the first half of an even row is no better a break than a space.
+  expect(subtitleRows(`So ${english}`, 42, ['So ', 'Open the settings page ', 'and pick a dark theme ', 'for the editor']))
+    .toEqual(['So Open the settings page', 'and pick a dark theme for the editor']);
 });
 
-test('Chinese subtitle rows keep a word the dictionary does not know, left as lone characters', () => {
-  // The dictionary splits 灾情 into 灾|情 and leaves 器 after 服务.
-  expect(subtitleRows('还有，在群里转发明知是假的灾情消息，可能被拘留五到十天。', 16).join('/')).not.toContain('灾/情');
-  expect(subtitleRows('我们在这里把文件上传到服务器上然后等待它处理完成', 16).join('/')).not.toContain('服务/器');
+test('Chinese subtitle rows without Phrases, or a Phrase longer than a row, break between characters at an even width', () => {
+  expect(subtitleRows('我们在这里把文件上传到服务器上然后等待它处理完成', 16)).toEqual(['我们在这里把文件上传到服', '务器上然后等待它处理完成']);
+  expect(subtitleRows('先看这里，我们在这里把文件上传到服务器上然后等待它处理完成', 16, ['先看这里，', '我们在这里把文件上传到服务器上然后等待它处理完成']))
+    .toEqual(['先看这里，我们在这里把文件上传', '到服务器上然后等待它处理完成']);
+  // An opening quote joins what it opens, and closing punctuation what it closes.
+  const quoted = subtitleRows('今天我们要给大家详细介绍一下「智能助手」的全部新功能', 16).join('/');
+  expect(quoted).not.toContain('「/');
+  expect(quoted).not.toMatch(/\/[」，。]/);
 });
 
 test('cues show the rows a Line was broken into before Render, so the burned-in Subtitles and the files agree', () => {
   const [cue] = subtitleCues([{ id: 'a', text: '先打开编辑器然后保存', rows: ['先打开编辑器', '然后保存'], start: 0, duration: 2 }], { maxRows: 2 });
   expect(cue.rows).toEqual(['先打开编辑器', '然后保存']);
+});
+
+test('cue rows leave out the clause and sentence punctuation they end on, and keep the rest', () => {
+  const rows = ['先打开编辑器，', '然后保存。', '真的吗？', '他说「好」。', '点击「保存」', 'Wait...', 'Hmm...。', 'and so on.'];
+  const [first, ...rest] = subtitleCues([{ id: 'a', text: rows.join(''), rows, start: 0, duration: 14 }], { maxRows: 2 });
+  // The cue still ends after the sentence, as if its full stop were there.
+  expect(first.rows).toEqual(['先打开编辑器', '然后保存']);
+  expect(rest.flatMap(cue => cue.rows)).toEqual(['真的吗？', '他说「好」', '点击「保存」', 'Wait...', 'Hmm...', 'and so on']);
 });
 
 const sentences = 'Open the editor from the dashboard menu. Then pick a color and press save.';
@@ -1219,7 +1232,7 @@ const wordsOf = (text, from, to) => { const list = text.split(' '), step = (to -
 test('cues share a Line by its spoken characters, or by its word timings when it has them', () => {
   const line = { id: 'intro', text: sentences, start: 2, duration: 4 };
   const even = subtitleCues(withRows([line]));
-  expect(even.map(c => c.rows)).toEqual([['Open the editor from the dashboard menu.'], ['Then pick a color and press save.']]);
+  expect(even.map(c => c.rows)).toEqual([['Open the editor from the dashboard menu'], ['Then pick a color and press save']]);
   expect(even[0]).toMatchObject({ id: 'intro', start: 2, end: expect.closeTo(2 + 4 * 33 / 59, 6) });
   expect(even[1].end).toBe(6);
   const words = [...wordsOf('Open the editor from the dashboard menu', 0.1, 1.5), ...wordsOf('Then pick a color and press save', 2, 3.2)];
@@ -1304,6 +1317,14 @@ test('a Narration file needs unique Line ids, text and audio, and its stated dur
   expect(narrationSchema.safeParse({ language: 'en', lines: [line, line] }).success).toBe(false);
   expect(narrationSchema.safeParse({ language: 'en', lines: [{ ...line, id: '../x' }] }).success).toBe(false);
   expect(narrationSchema.safeParse({ language: 'en', lines: [{ ...line, audio: '' }] }).success).toBe(false);
+});
+
+test('a Narration keeps the Phrases of a Line and refuses Phrases that do not join to its text', () => {
+  const line = { id: 'group', text: '还有，在群里转发', audio: 'group.wav', phrases: ['还有，', '在群里', '转发'] };
+  expect(narrationSchema.parse({ language: 'zh-CN', lines: [line] }).lines[0]).toEqual(line);
+  const edited = narrationSchema.safeParse({ language: 'zh-CN', lines: [{ ...line, text: '还有，在微信群里转发' }] });
+  expect(edited.error.issues.map(issue => issue.message))
+    .toEqual(["Line 'group' has Phrases that part from its text at character 5 (群里转发, not 微信群里转发); write its Phrases again from its text"]);
 });
 
 test('Render and Looks read the built-in Subtitles with their parameters, and bundle a font they name', async () => {

@@ -14,7 +14,9 @@ Then write `narration.json` beside the audio:
   "lines": [
     { "id": "intro", "text": "Invite a teammate by email.", "audio": "intro.wav" },
     { "id": "send", "text": "Then send the invite.", "audio": "send.wav",
-      "words": [{ "text": "Then", "start": 0.08, "end": 0.3 }] }
+      "words": [{ "text": "Then", "start": 0.08, "end": 0.3 }] },
+    { "id": "share", "text": "Copy the link and send it to your team.", "audio": "share.wav",
+      "phrases": ["Copy the link ", "and send it ", "to your team."] }
   ]
 }
 ```
@@ -23,7 +25,10 @@ Then write `narration.json` beside the audio:
 - `text`: what the audio says. Subtitles show it.
 - `audio`: a path relative to the file.
 - `words` (optional): word timings from the speech tool or an aligner, in seconds from the start of the Line's audio. With them Subtitles change exactly as each word is spoken; without them, time is spread across the Line by character count.
+- `phrases` (optional): the text cut into the runs a Subtitle row must not split, such as words and short phrases. Joined, they must be exactly `text`, spaces and punctuation included; `record` and `narrate import` refuse a Line whose `phrases` do not join to its text. Write them for every Chinese or Japanese Line, since those languages have no spaces to break at.
 - `start` (optional): seconds from the start of the Take, for a Line the Scenario does not say.
+
+Write `phrases` with the text, before voicing: the speech tool only adds `audio` and `words`. When you change a Line's text, write its `phrases` again.
 
 CueTake measures each Line's duration from its audio; any duration the file states is ignored.
 
@@ -69,7 +74,7 @@ A Line that overlaps the next one, runs past the end of the Final or is spoken w
 
 ## Subtitles
 
-`render` always writes `subtitles.srt` and `subtitles.vtt` into the Take. By default it also burns them into the Final, drawn outside the camera so they keep their size while it zooms. Rows hold about 16 characters in Chinese, Japanese and Korean and about 42 otherwise, and break at a sentence or clause end where one is near, otherwise between words, which Chinese and Japanese find by a dictionary. By default each cue shows one row, below the window, and stays on screen at least a second.
+`render` always writes `subtitles.srt` and `subtitles.vtt` into the Take. By default it also burns them into the Final, drawn outside the camera so they keep their size while it zooms. Rows hold about 16 characters in Chinese, Japanese and Korean and about 42 otherwise. They break at a sentence or clause end where one is near, otherwise at the end of one of the Line's `phrases`, then at a space, and only then between two Chinese or Japanese characters. A row leaves out the `，。、；：,.;:` it ends on and keeps `？！?!…` and closing quotes. By default each cue shows one row, below the window, and stays on screen at least a second.
 
 Subtitles are an item in the Edit, and a Look can save them like the cursor: see [styling.md](styling.md). Set `"subtitles": { "burn": false }` to keep them to the files.
 

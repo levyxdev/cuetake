@@ -103,8 +103,12 @@ The spoken commentary of a Take: Lines in one language, written by the agent and
 _Avoid_: voiceover, script, audio
 
 **Line**:
-One spoken phrase of a Narration, with its text, its audio and the time it starts.
+One stretch of speech in a Narration, with its text, its audio and the time it starts.
 _Avoid_: cue, segment, utterance
+
+**Phrase**:
+A run of a Line's text, marked by the agent, that a Subtitle row never splits; a Line's Phrases join to its text exactly.
+_Avoid_: chunk, word group, segment
 
 **Subtitles**:
 The text of a Narration shown in time with its Lines, written as subtitle files and optionally drawn into the Final.

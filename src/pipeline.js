@@ -19,7 +19,7 @@ import { createEdit, evenSize, merge, withDefaults } from './edit.js';
 import { loadLook, resolvedLook, applyLook, lookFromEdit, saveLook, summarize } from './look.js';
 import { ensureHome } from './home.js';
 import { absolute, bundle, forRender } from './styles.js';
-import { burnsIn, cuesFor, isCjk, lineProblems, toSrt, toVtt, withRows } from './narration.js';
+import { burnsIn, cuesFor, isCjk, lineProblems, phraseProblem, toSrt, toVtt, withRows } from './narration.js';
 import { linesInFinal, timeMap } from './time-map.js';
 import { maskWarnings } from './masks.js';
 import pkg from '../package.json' with { type: 'json' };
@@ -42,8 +42,8 @@ export const scenarioSchema = z.object({
 }).passthrough().refine(config => !config.url !== !config.app, { message: 'A Scenario names exactly one of url or app', path: ['url'] });
 /**
  * A Narration file: Lines in one language, each with its text, its audio (relative to the file) and
- * optionally word timings from the speech tool and a start in seconds. Any duration it states is
- * ignored: CueTake measures each Line from its audio.
+ * optionally word timings from the speech tool, the Phrases its Subtitle rows break between, and a
+ * start in seconds. Any duration it states is ignored: CueTake measures each Line from its audio.
  */
 export const narrationSchema = z.object({
   language: z.string().min(2),
@@ -53,6 +53,10 @@ export const narrationSchema = z.object({
     audio: z.string().min(1),
     start: z.number().min(0).optional(),
     words: z.array(z.object({ text: z.string(), start: z.number().min(0), end: z.number().min(0) }).refine(word => word.end >= word.start, 'A word ends before it starts')).optional(),
+    phrases: z.array(z.string()).optional(),
+  }).superRefine((line, context) => {
+    const problem = line.phrases && phraseProblem(line);
+    if (problem) context.addIssue({ code: 'custom', path: ['phrases'], message: problem });
   })).min(1).refine(lines => new Set(lines.map(line => line.id)).size === lines.length, 'Line ids must be unique'),
 });
 const SUBTITLE_FILES = [['subtitles.srt', toSrt], ['subtitles.vtt', toVtt]];
@@ -99,7 +103,7 @@ function voicedLines(edit, narration, dir) {
   return edit.narration.lines.map(line => {
     const voiced = byId.get(line.id);
     if (!voiced) throw new Error(`Line '${line.id}' has no audio in the Take's Narration; import one with cuetake narrate import ${dir} <narration.json>`);
-    return { ...line, text: voiced.text, words: voiced.words, path: join(dir, 'narration', voiced.audio) };
+    return { ...line, text: voiced.text, words: voiced.words, phrases: voiced.phrases, path: join(dir, 'narration', voiced.audio) };
   });
 }
 

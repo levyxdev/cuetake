@@ -1219,8 +1219,8 @@ test('Render mixes each Line in at its start, as long as the video, and burns in
     const render = await renderFinal({ sources: [sourcePath], finalPath: outputPath, timeline: { viewport: { width: 320, height: 240 }, duration: 2 }, ...forRender(edit, dir), narration });
     expect(render.lines).toEqual([{ id: 'a', start: 0.3, duration: 0.5 }, { id: 'b', start: 1.4, duration: 0.4 }]);
     expect(render.subtitles.map(({ id, start, end, rows, frames }) => ({ id, start, end, rows, frames }))).toEqual([
-      { id: 'a', start: 0.3, end: expect.closeTo(1.3, 6), rows: ['Open the editor.'], frames: [9, 38] },
-      { id: 'b', start: 1.4, end: 2, rows: ['Done.'], frames: [42, 59] },
+      { id: 'a', start: 0.3, end: expect.closeTo(1.3, 6), rows: ['Open the editor'], frames: [9, 38] },
+      { id: 'b', start: 1.4, end: 2, rows: ['Done'], frames: [42, 59] },
     ]);
     const media = await inspectFinal(outputPath, [{ id: 'a', path: join(dir, 'a.wav') }]);
     expect(media.audio).toMatchObject({ channels: 1, sampleRate: 48000 });
