@@ -1197,9 +1197,15 @@ test('Chinese subtitle rows break between words, never inside one', () => {
   const rows = subtitleRows('点击Preview按钮就能看到效果然后再点击保存按钮完成整个流程', 16).map(row => Array.from(row).length);
   expect(rows).toHaveLength(3);
   for (const width of rows) { expect(width).toBeGreaterThanOrEqual(8); expect(width).toBeLessThanOrEqual(16); }
-  // A lone character joins one word, not a run of them, and an opening quote joins what it opens.
+  // A run of lone characters still breaks within the row width, and an opening quote joins what it opens.
   for (const row of subtitleRows('我'.repeat(32), 16)) expect(Array.from(row).length).toBeLessThanOrEqual(16);
   expect(subtitleRows('今天我们要给大家详细介绍一下「智能助手」的全部新功能', 16).join('/')).not.toContain('「/');
+});
+
+test('Chinese subtitle rows keep a word the dictionary does not know, left as lone characters', () => {
+  // The dictionary splits 灾情 into 灾|情 and leaves 器 after 服务.
+  expect(subtitleRows('还有，在群里转发明知是假的灾情消息，可能被拘留五到十天。', 16).join('/')).not.toContain('灾/情');
+  expect(subtitleRows('我们在这里把文件上传到服务器上然后等待它处理完成', 16).join('/')).not.toContain('服务/器');
 });
 
 test('cues show the rows a Line was broken into before Render, so the burned-in Subtitles and the files agree', () => {

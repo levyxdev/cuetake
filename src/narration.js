@@ -29,14 +29,8 @@ let segmenter;
 /** A run of CJK text as its words, by the dictionary of `Intl.Segmenter`, made once on first use. */
 const cjkWords = run => Array.from((segmenter ??= new Intl.Segmenter('zh', { granularity: 'word' })).segment(run), s => s.segment);
 
-/**
- * Whether `piece` belongs to the atom before it: closing punctuation, what an opening quote opens,
- * or a lone CJK character after a word that has not taken one yet. The dictionary leaves many a
- * word's character on its own (保|命, 安全|带) and a row should not start with a lone 的; taking one
- * character at most keeps a run of lone characters from becoming one atom wider than a row.
- */
-const joinsLast = (last, piece) => CLOSING.test(piece) || OPENING.test(last.text)
-  || (last.cjk && !last.joined && /^\p{L}$/u.test(piece) && /\p{L}$/u.test(last.text));
+/** Whether `piece` belongs to the atom before it: closing punctuation, or what an opening quote opens. */
+const joinsLast = (last, piece) => CLOSING.test(piece) || OPENING.test(last.text);
 
 /**
  * The text broken into atoms that rows never split: a CJK word or a run of other non-space
@@ -49,14 +43,24 @@ function atoms(text) {
     const cjk = CJK.test(run);
     for (const piece of cjk ? cjkWords(run) : [run]) {
       const last = list.at(-1);
-      if (last && !last.spaceAfter && joinsLast(last, piece)) { last.text += piece; last.joined = true; }
+      if (last && !last.spaceAfter && joinsLast(last, piece)) last.text += piece;
       else list.push({ text: piece, space: Boolean(last?.spaceAfter), cjk });
     }
   }
   return list;
 }
-/** How good a break after `atom` is: sentence end, clause end, between spaced words, between CJK words. */
-const breakScore = (atom, next) => SENTENCE_END.test(atom.text) ? 3 : CLAUSE_END.test(atom.text) ? 2 : next?.space ? 1 : 0.5;
+/**
+ * Whether `atom` is one CJK character. The dictionary leaves on its own a character it cannot place
+ * in a word, so two lone characters in a row are often one word it does not know (灾|情, 保|命), and
+ * a lone character after a word often ends it (服务|器, 安全|带) and should not start a row (的).
+ */
+const isLone = atom => atom.cjk && spoken(atom.text) === 1;
+/**
+ * How good a break after `atom` is: sentence end, clause end, between spaced words, between CJK
+ * words, before a lone CJK character, and last between two of them.
+ */
+const breakScore = (atom, next) => SENTENCE_END.test(atom.text) ? 3 : CLAUSE_END.test(atom.text) ? 2
+  : next.space ? 1 : !isLone(next) ? 0.5 : isLone(atom) ? 0 : 0.25;
 const join = list => list.map((atom, i) => (i && atom.space ? ' ' : '') + atom.text).join('');
 
 /**
