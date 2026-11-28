@@ -1,12 +1,12 @@
 # Directing a Scenario
 
-A Take is one continuous film of the outcomes a Brief agreed. What the viewer sees, and for how long, comes from the order of the Scenario's actions, the waits between them and the automatic camera. This file is how to direct them; the calls themselves are in [scenarios.md](scenarios.md).
+A Take is one continuous film of the Outcomes a Brief agreed. What the viewer sees, and for how long, comes from the order of the Scenario's actions, the waits between them and the automatic camera. This file is how to direct them; the calls themselves are in [scenarios.md](scenarios.md).
 
 ## Story
 
-- A Take proves one or more **outcomes**: each a change the viewer should remember, such as "the invite is sent" or "the chart shows this week". A short demo proves one, in 15 to 45 seconds. A longer video proves several in turn within the same Take, about 20 to 40 seconds each, so it plays as one continuous shot: 2 minutes is 3 to 6 outcomes. Past about 3 minutes, a story is better told as several Takes, each with its own Brief and telling its own story.
-- Build each outcome from **beats**. A beat is a few actions in one area of the page that end on a **reveal**, the state that shows they worked. An outcome takes one to five beats, and its last reveal shows the outcome.
-- Check each outcome as its reveal shows: wait for it, read what it says, and throw when it is wrong. The Take then stops at the step that went wrong, and the error names it, instead of recording the rest of the story on a broken page. The evidence `run` returns confirms the end; these checks find the moment.
+- A Take proves one or more **Outcomes**: each a change the viewer should remember, such as "the invite is sent" or "the chart shows this week". A short demo proves one, in 15 to 45 seconds. A longer video proves several in turn within the same Take, about 20 to 40 seconds each, so it plays as one continuous shot: 2 minutes is 3 to 6 Outcomes. Past about 3 minutes, a story is better told as several Takes, each with its own Brief and telling its own story.
+- Build each Outcome from **beats**. A beat is a few actions in one area of the page that end on a **reveal**, the state that shows they worked. An Outcome takes one to five beats, and its last reveal shows the Outcome.
+- Check each Outcome as its reveal shows: wait for it, read what it says, and throw when it is wrong. The Take then stops at the step that went wrong, and the error names it, instead of recording the rest of the story on a broken page. The evidence `run` returns confirms the end; these checks find the moment.
 
   ```js
   await toast.waitFor();
@@ -14,8 +14,8 @@ A Take is one continuous film of the outcomes a Brief agreed. What the viewer se
   if (!text.includes('ada@example.com')) throw new Error(`The invite toast says "${text}"`);
   ```
 
-- Open on the page as the viewer would find it, with everything the story needs loaded in `prepare`: examples, assets, dismissed banners and tours. Every action in `run` serves an outcome.
-- Close on the last outcome, wide, so the viewer sees it in the context of the whole page.
+- Open on the page as the viewer would find it, with everything the story needs loaded in `prepare`: examples, assets, dismissed banners and tours. Every action in `run` serves an Outcome.
+- Close on the last Outcome, wide, so the viewer sees it in the context of the whole page.
 
 ## Pacing
 
@@ -28,7 +28,7 @@ The Director already pauses like a person around each press and key, so consecut
 | Before a decisive action (submit, send, run) | `d.wait(400)`, so the viewer sees what is about to be sent. |
 | A reveal | Wait for it (`await toast.waitFor()`), then hold 1.5 s plus 0.3 s for each word, or 0.15 s for each Chinese, Japanese or Korean character, the viewer must read; 2 to 3 s is typical. |
 | Between beats | The reveal's hold is the gap. |
-| Ending | After the last reveal's hold, `d.wait(2000)`: the camera heads back wide 1.5 s before the end, so the outcome shows in context. |
+| Ending | After the last reveal's hold, `d.wait(2000)`: the camera heads back wide 1.5 s before the end, so the Outcome shows in context. |
 
 `director.speed` scales the Director's moves, pauses and typing, never these waits. When the user finds a Take rushed or slow, change the waits; when the cursor itself feels wrong, change `director.speed`.
 
@@ -105,7 +105,7 @@ export async function run(d) {
   d.focus(box);                                                      // "Invite sent to ada@example.com": a longer read
   await d.wait(1200);
 
-  await d.wait(2000);                                                // ending: the outcome, wide
+  await d.wait(2000);                                                // ending: the Outcome, wide
   return { status: await toast.textContent() };
 }
 ```

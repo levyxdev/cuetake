@@ -32,12 +32,12 @@ Number each question and end it with your recommended answer, worded so that "ye
 
 ## 3. Confirm the Brief
 
-The Brief is done when every question in the tree has an answer the user gave or accepted, and nothing is assumed. Summarize every answer in one paragraph, starting with the audience and where it will be shown, then each outcome in order with its length and beats. Write a Scenario only after the user says yes to it.
+The Brief is done when every question in the tree has an answer the user gave or accepted, and nothing is assumed. Summarize every answer in one paragraph, starting with the audience and where it will be shown, then each Outcome in order with its length and beats. Write a Scenario only after the user says yes to it.
 
 ## 4. Keep it in the files it shapes
 
 The Brief lives on in the files it shapes:
 
-- a comment at the top of the Scenario: the audience, where it will be shown, and the outcomes in order;
+- a comment at the top of the Scenario: the audience, where it will be shown, and the Outcomes in order;
 - the Lines in `narration.json`;
 - the styling in a Look.

@@ -7,8 +7,12 @@ CueTake records product demos of web pages and desktop Apps for AI agents: an ag
 ### Recording
 
 **Brief**:
-What the user agreed a demo will show, before any Scenario is written: who it is for, where it will be shown, and the outcomes it proves, in order.
+What the user agreed a demo will show, before any Scenario is written: who it is for, where it will be shown, and the Outcomes it proves, in order.
 _Avoid_: requirements, spec, plan
+
+**Outcome**:
+A change in the page or App that the viewer should remember, such as an invite sent; a Take proves one or more Outcomes, in order.
+_Avoid_: goal, feature
 
 **Scenario**:
 A trusted script describing one demo: the start page or App, the timed interactions, and the evidence that the demonstrated changes happened.
