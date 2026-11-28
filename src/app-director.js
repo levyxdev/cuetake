@@ -1,4 +1,4 @@
-import { clockOf, effectOf, followMask, options } from './director.js';
+import { clockOf, followMask, maskOptions, options } from './director.js';
 import { appLocators, isAppLocator, isAppWindow, resolveAll, resolveOne, resolveWindow } from './app-locators.js';
 import { titleBarSpot } from './desktop.js';
 import { landing, pauseMs, random, reach, typingDelays } from './motion.js';
@@ -203,9 +203,8 @@ export function createAppDirector({ startedAt, fps = 60, voiced = null, speed = 
    * page: the helper reads their frames at the capture rate, and the locator is resolved again as a
    * page's is, so an element the App replaced is followed.
    */
-  async function mask(locator, opts = {}) {
-    const { effect = 'blur', ...params } = opts;
-    effectOf(effect);
+  async function mask(locator, opts) {
+    const { effect, params } = maskOptions(opts);
     if (!isAppLocator(locator)) throw new Error("d.mask needs a locator of the App, such as d.page.getByRole('button', { name: 'Save' })");
     const t = effect !== 'spotlight' && !clock.state.waited ? 0 : now(), id = elements.length;
     const watch = async () => helper.request({ watch: { id, refs: (await resolveAll(locator)).map(element => element.ref) } });

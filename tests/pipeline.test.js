@@ -1375,6 +1375,8 @@ test('masks Render cannot draw safely are named: unknown effects, missing boxes 
     { effect: 'cover', box, tab: 5 },
     { effect: 'cover', box, element: 0 },
     { effect: 'cover', box, color: '#f00' },
+    { effect: 'cover', box, padding: 'wide' },
+    { effect: 'spotlight', box, dim: 2 },
   ], elements, [0, 1])).toEqual([
     "Mask 0 has effect 'pixelate'; use blur, cover or spotlight",
     'Mask 1 (cover) needs a box { x, y, width, height } in CSS pixels, or the element a Scenario masked',
@@ -1385,6 +1387,8 @@ test('masks Render cannot draw safely are named: unknown effects, missing boxes 
     'Mask 6 (cover) is on Tab 5, which the Take does not show; its Tabs are 0, 1',
     'Mask 7 (cover) names both a box and an element; keep one',
     "Mask 8 (cover) has color '#f00'; use '#rrggbb'",
+    "Mask 9 (cover) has padding 'wide'; use a number",
+    'Mask 10 (spotlight) has dim 2; use a share of the light from 0 to 1',
   ]);
   expect(maskProblems({ effect: 'blur' }, elements)).toEqual(['masks must be a list of masks']);
 });
@@ -1854,6 +1858,17 @@ test('an App\'s Mask follows every element its locator matches, as the helper re
   const edit = createEdit(scenarioSchema.parse({ name: 'notes', app: { path: 'com.apple.TextEdit' } }), timeline, []);
   expect(edit.masks[0]).toEqual({ effect: 'blur', element: 0, start: 0 });
   expect(maskProblems(edit.masks, timeline.elements)).toEqual([]);
+});
+
+test('an App\'s d.mask refuses, at the call, options Render could not draw, and masks nothing', async () => {
+  const notes = { focus: [], wide: [], said: [], forwarded: [], pointer: [], events: [] };
+  const d = createAppDirector({ startedAt: Date.now(), helper: fakeHelper(textEdit()) }, notes);
+  const bold = d.page.getByRole('button', { name: 'Bold' });
+  await expect(d.mask(bold, { effect: 'cover', color: 'red' })).rejects.toThrow("d.mask with effect 'cover' has color 'red'; use '#rrggbb'");
+  await expect(d.mask(bold, { blur: 4 })).rejects.toThrow("d.mask with effect 'blur' blurs 4 CSS px, too little to hide text; use at least 8");
+  await expect(d.mask(bold, { effect: 'blur', color: '#18181b' })).rejects.toThrow("d.mask with effect 'blur' takes blur, padding or radius, not color");
+  await expect(d.mask(bold, 'cover')).rejects.toThrow("d.mask needs its options as an object, such as { effect: 'cover' }, not 'cover'");
+  expect(notes.masks).toEqual([]);
 });
 
 test('a press over another app\'s window fails the Take, naming that app, and presses nothing', async () => {

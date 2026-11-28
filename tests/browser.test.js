@@ -721,6 +721,19 @@ test('the Director refuses a focus on a locator at the call, saying how to pass 
   } finally { await browser.close(); }
 }, 30_000);
 
+test('the Director refuses mask options Render could not draw at the call, as a locator given for a padding', async () => {
+  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
+  try {
+    const page = await browser.newPage({ viewport: { width: 640, height: 480 } });
+    await page.setContent('<button>Save</button><p id="email">ada@example.com</p>');
+    const notes = { focus: [], wide: [], said: [], forwarded: [], pointer: [] };
+    const d = createDirector(followTabs(page), { startedAt: Date.now(), fps: 60, speed: 4 }, notes);
+    await expect(d.mask('#email', { effect: 'spotlight', padding: d.page.getByRole('button') })).rejects.toThrow("d.mask with effect 'spotlight' has padding getByRole('button'); use a number");
+    await expect(d.mask('#email', { effect: 'cover', color: 'red' })).rejects.toThrow("d.mask with effect 'cover' has color 'red'; use '#rrggbb'");
+    expect(notes.masks ?? []).toEqual([]);
+  } finally { await browser.close(); }
+}, 30_000);
+
 test('on Node, a Director failure keeps the line of the Scenario that called it on its stack', async () => {
   // Bun keeps no async frames across these awaits; users run CueTake on Node, which does.
   const dir = await fs.mkdtemp(join(tmpdir(), 'cuetake-stack-'));

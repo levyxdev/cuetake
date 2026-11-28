@@ -2,16 +2,26 @@ import { ease, landing, pauseMs, random, reach, scrollMs, typingDelays } from '.
 import { boxOnPage, onPage, placeOf } from './frames.js';
 import { textField } from './probe.js';
 import { carried, seenBy, windowMaps } from './tabs.js';
-import { EFFECT_NAMES, MASK_EFFECTS } from './masks.js';
+import { EFFECT_NAMES, MASK_EFFECTS, paramProblems } from './masks.js';
 import { wordInLine } from './narration.js';
 import { isAppLocator } from './app-locators.js';
 
 /** Milliseconds between the Director's checks of what a mask's locator matches, so a replaced element is followed. */
 const REWATCH_MS = 100;
 
-/** Refuses a mask effect masks.js does not draw. */
-export function effectOf(effect) {
+/**
+ * d.mask's options as { effect, params }, refused at the call when Render could not draw them: an
+ * effect masks.js does not draw, a parameter the effect does not take, or a value it cannot use.
+ */
+export function maskOptions(opts = {}) {
+  if (opts === null || typeof opts !== 'object') throw new Error(`d.mask needs its options as an object, such as { effect: 'cover' }, not ${typeof opts === 'string' ? `'${opts}'` : opts}`);
+  const { effect = 'blur', ...params } = opts;
   if (!(effect in MASK_EFFECTS)) throw new Error(`d.mask needs effect ${EFFECT_NAMES}, not '${effect}'`);
+  const names = Object.keys(MASK_EFFECTS[effect]), unknown = Object.keys(params).filter(key => !names.includes(key));
+  if (unknown.length) throw new Error(`d.mask with effect '${effect}' takes ${names.join(', ').replace(/, (\w+)$/, ' or $1')}, not ${unknown.join(', ')}`);
+  const [problem] = paramProblems(effect, params);
+  if (problem) throw new Error(`d.mask with effect '${effect}' ${problem}`);
+  return { effect, params };
 }
 
 /**
@@ -427,9 +437,8 @@ export function createDirector(tabs, { startedAt, fps, voiced = null, speed = 1,
    * element's box as it moves; a blur or cover made before the Director first waits or acts covers the
    * Take from its first frame. Other options are the effect's parameters (masks.js).
    */
-  async function mask(locator, opts = {}) {
-    const { effect = 'blur', ...params } = opts;
-    effectOf(effect);
+  async function mask(locator, opts) {
+    const { effect, params } = maskOptions(opts);
     const target = typeof locator === 'string' ? tabs.front.page.locator(locator) : locator, tab = tabs.of(target.page());
     if (!tab) throw new Error('d.mask target is on a page Capture does not follow; mask on d.page, or on a page the demo opened');
     const t = effect !== 'spotlight' && !clock.state.waited ? 0 : time();

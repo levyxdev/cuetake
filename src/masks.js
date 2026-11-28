@@ -34,6 +34,27 @@ const LEAST_BLUR = 8;
 const isColor = value => typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value);
 const isBox = box => box && ['x', 'y', 'width', 'height'].every(key => typeof box[key] === 'number' && Number.isFinite(box[key])) && box.width > 0 && box.height > 0;
 
+const shown = value => typeof value === 'string' ? `'${value}'` : String(value);
+
+/**
+ * What is wrong with an effect's parameters (MASK_EFFECTS), each said after the mask's name: a color
+ * that is not '#rrggbb', a size or time that is not a number, a `dim` outside 0 to 1, or a blur too
+ * weak to hide text. Parameters of other effects are left alone, since the effect never reads them.
+ */
+export function paramProblems(effect, params) {
+  const problems = [];
+  for (const key of Object.keys(MASK_EFFECTS[effect] ?? {})) {
+    const value = params[key];
+    if (value === undefined) continue;
+    if (key === 'color') { if (!isColor(value)) problems.push(`has color ${shown(value)}; use '#rrggbb'`); }
+    else if (!Number.isFinite(value)) problems.push(`has ${key} ${shown(value)}; use a number`);
+    else if (key === 'dim' && !(value >= 0 && value <= 1)) problems.push(`has dim ${value}; use a share of the light from 0 to 1`);
+  }
+  const blur = params.blur ?? MASK_EFFECTS.blur.blur;
+  if (effect === 'blur' && Number.isFinite(blur) && !(blur >= LEAST_BLUR)) problems.push(`blurs ${blur} CSS px, too little to hide text; use at least ${LEAST_BLUR}`);
+  return problems;
+}
+
 /** A mask as messages name it, such as "Mask 2 (blur from 1.20 s)". */
 const nameOf = (mask, i) => `Mask ${i} (${mask.effect}${typeof mask.start === 'number' ? ` from ${mask.start.toFixed(2)} s` : ''})`;
 
@@ -53,12 +74,9 @@ export function maskProblems(masks = [], elements = [], tabs = null) {
     else if (mask.element !== undefined) { if (!ids.has(mask.element)) problems.push(`${name} follows element ${mask.element}, which the Timeline does not record`); }
     else if (!isBox(mask.box)) problems.push(`${name} needs a box { x, y, width, height } in CSS pixels, or the element a Scenario masked`);
     else if (tabs && !tabs.includes(mask.tab ?? 0)) problems.push(`${name} is on Tab ${mask.tab}, which the Take does not show; its Tabs are ${tabs.join(', ')}`);
-    if (mask.color !== undefined && !isColor(mask.color)) problems.push(`${name} has color '${mask.color}'; use '#rrggbb'`);
     const { start = 0, end = Infinity } = mask;
     if (!(typeof start === 'number' && typeof end === 'number' && end > start)) problems.push(`${name} needs a start before its end, in seconds`);
-    const blur = mask.blur ?? MASK_EFFECTS.blur.blur;
-    if (mask.effect === 'blur' && !(blur >= LEAST_BLUR)) problems.push(`${name} blurs ${blur} CSS px, too little to hide text; use at least ${LEAST_BLUR}`);
-    return problems;
+    return [...problems, ...paramProblems(mask.effect, mask).map(problem => `${name} ${problem}`)];
   });
 }
 

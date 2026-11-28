@@ -110,7 +110,7 @@ export async function run(d) {
 }
 ```
 
-- `blur` blurs the region past reading (`blur`, 16 CSS px by default, at least 8); `cover` fills it with `color` (black by default); `spotlight` dims the rest of the frame by `dim` (0.6), the light falling off over `feather` (16 CSS px) across the region's edge, easing in and out over `ease` Final seconds (0.3). Each takes `padding` around the element (4 CSS px, 8 for a spotlight) and a corner `radius`.
+- `blur` blurs the region past reading (`blur`, 16 CSS px by default, at least 8); `cover` fills it with `color` (black by default); `spotlight` dims the rest of the frame by `dim` (0.6), the light falling off over `feather` (16 CSS px) across the region's edge, easing in and out over `ease` Final seconds (0.3). Each takes `padding` around the element (4 CSS px, 8 for a spotlight) and a corner `radius`. `d.mask` refuses, at the call, a parameter its effect does not take, a `color` that is not `'#rrggbb'`, or a size that is not a number.
 - Capture records each element's box as it moves, so the Mask stays on it as the page scrolls, the layout changes or the element is replaced, and inside iframes. A locator matching several elements masks all of them; one that matches nothing masks nothing until it does.
 - A blur or cover made before the Director first waits or acts covers the Take from its first frame. A Mask made later starts when it is made, so mask before the private data shows.
 - While its element moves, a blur or cover also covers where it was for 0.2 s before and 0.25 s after, since the Source shows a change a little after the page makes it and Capture finds a replaced element within a tenth of a second, so it never trails the page.
